@@ -33,6 +33,7 @@ namespace YARG.Core.Song
             Charter = DEFAULT_CHARTER,
             Source = DEFAULT_SOURCE,
             Year = DEFAULT_YEAR,
+            YearSecondary = string.Empty,
             Playlist = string.Empty,
             IsMaster = true,
             VideoLoop = false,
@@ -92,6 +93,7 @@ namespace YARG.Core.Song
         public string Source;
         public string Playlist;
         public string Year;
+        public string YearSecondary;
 
         public long SongLength;
         public long SongOffset;
