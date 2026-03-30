@@ -213,7 +213,7 @@ namespace YARG.Core.Engine.Guitar.Engines
                 WasNoteGhosted = EngineParameters.AntiGhosting && (ghosted || WasNoteGhosted);
 
                 // Add ghost inputs to stats regardless of the setting for anti ghosting
-                if (ghosted)
+                if (ghosted && !IsCodaActive)
                 {
                     EngineStats.GhostInputs++;
                 }
