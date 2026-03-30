@@ -566,6 +566,11 @@ namespace YARG.Core.Engine.Guitar.Engines
             byte changed = (byte) 0;
             byte pressed = (byte) 0;
 
+            for (int i = 0; i < fretMask.Length; i++)
+            {
+                fretMask[i] = (byte) (1 << i);
+            }
+
             // If there was a strum, hit held frets
             if (HasStrummed && !IsBot)
             {
@@ -573,11 +578,6 @@ namespace YARG.Core.Engine.Guitar.Engines
             }
             else if (IsBot || !StandardButtonHeld)
             {
-                for (int i = 0; i < fretMask.Length; i++)
-                {
-                    fretMask[i] = (byte) (1 << i);
-                }
-
                 // If there was a fret press this update, we have to tell the CodaSection about it
                 if (IsFretPress)
                 {
