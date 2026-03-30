@@ -88,16 +88,16 @@ namespace YARG.Core.Engine.Keys.Engines
             var parentNote = Notes[NoteIndex];
 
             // If we're in a coda section, we unconditionally mark the note as hit, but bypass normal hit logic
-            if (IsCodaActive)
-            {
-                foreach (var note in parentNote.AllNotes)
-                {
-                    note.WasHit = true;
-                }
-
-                AdvanceToNextNote(parentNote);
-                return;
-            }
+            // if (IsCodaActive)
+            // {
+            //     foreach (var note in parentNote.AllNotes)
+            //     {
+            //         note.WasHit = true;
+            //     }
+            //
+            //     AdvanceToNextNote(parentNote);
+            //     return;
+            // }
 
             // Miss out the back end
             if (!IsNoteInWindow(parentNote, out bool missed))
