@@ -9,6 +9,7 @@ namespace YARG.Core.Engine.Keys.Engines
     public class YargProKeysEngine : ProKeysEngine
     {
         private KeyPressedTimes[] _keyPressedTimes = new KeyPressedTimes[(int)ProKeysAction.Key25 + 1];
+        private bool              _keyPressedThisUpdate;
 
         public YargProKeysEngine(InstrumentDifficulty<ProKeysNote> chart, SyncTrack syncTrack,
             KeysEngineParameters engineParameters, bool isBot) : base(chart, syncTrack, engineParameters, isBot)
@@ -468,15 +469,14 @@ namespace YARG.Core.Engine.Keys.Engines
 
         private void HandleCodaFretChange(double time)
         {
-            if (!IsCodaActive)
+            if (!IsCodaActive || !KeyHitThisUpdate.HasValue)
             {
                 return;
             }
 
             var coda = Codas[CurrentCodaIndex];
 
-            // Figure out which keys changed
-            var pressed = KeyMask & ~PreviousKeyMask;
+            var pressed = 1 << KeyHitThisUpdate.Value;
 
             // Hit the lane for any that were pressed
             for (int i = 0; i < 25; i++)

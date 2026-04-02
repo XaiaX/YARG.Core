@@ -365,7 +365,7 @@ namespace YARG.Core.Engine
             // Check to see if a coda has started or ended
             if (CurrentCodaIndex < Codas.Count)
             {
-                if (time >= Codas[CurrentCodaIndex].StartTime && !IsCodaActive)
+                if (time >= Codas[CurrentCodaIndex].StartTime && !CodaHasStarted)
                 {
                     YargLogger.LogFormatTrace("Coda {0} activated at time {1}", CurrentCodaIndex, time);
                     StartCoda();

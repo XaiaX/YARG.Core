@@ -179,6 +179,11 @@ namespace YARG.Core.Engine.Keys
 
             UpdateMultiplier();
 
+            if (CodaHasStarted)
+            {
+                Codas[CurrentCodaIndex].MissNote();
+            }
+
             OnNoteMissed?.Invoke(NoteIndex, note);
             base.HitNote(note);
         }

@@ -341,7 +341,7 @@ namespace YARG.Core.Engine.Keys.Engines
 
         private void HandleCodaFretChange(double time)
         {
-            if (!IsCodaActive)
+            if (!IsCodaActive || !KeyHitThisUpdate.HasValue)
             {
                 return;
             }
@@ -349,9 +349,9 @@ namespace YARG.Core.Engine.Keys.Engines
             var coda = Codas[CurrentCodaIndex];
 
             // Figure out which keys changed
-            var pressed = KeyMask & ~PreviousKeyMask;
+            var pressed = 1 << KeyHitThisUpdate.Value;
 
-            var openBit = 1 << 6;
+            const int openBit = 1 << 6;
             // Shift the open bit from bit 6 to bit 5
             pressed = (pressed & ~openBit) | ((pressed & openBit) >> 1);
 
