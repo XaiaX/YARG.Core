@@ -67,6 +67,8 @@ namespace YARG.Core.Engine
         // then we'd have to be a generic for no good reason)
         public void HitLane(double time, int fret)
         {
+            var laneIndex = fret;
+
             if (fret < 0)
             {
                 // How?
@@ -75,20 +77,20 @@ namespace YARG.Core.Engine
 
             if (_indexToLane != null && _indexToLane.TryGetValue(fret, out int lane))
             {
-                fret = lane;
+                laneIndex = lane;
             }
 
             // Remap values that don't correspond to a lane
-            if (fret > Lanes - 1)
+            if (laneIndex > Lanes - 1)
             {
-                fret %= Lanes - 1;
+                laneIndex %= Lanes - 1;
             }
 
             // Collect bonus for this lane
             if (_fretMode)
             {
-                int bonusScore = GetCurrentLaneScore(fret, time);
-                LastCollectedTime[fret] = time;
+                int bonusScore = GetCurrentLaneScore(laneIndex, time);
+                LastCollectedTime[laneIndex] = time;
                 TotalCodaBonus += bonusScore;
             }
             else
@@ -99,7 +101,7 @@ namespace YARG.Core.Engine
                 TotalCodaBonus += bonusScore;
             }
 
-            LastHitTime[fret] = time;
+            LastHitTime[laneIndex] = time;
 
             OnLaneHit?.Invoke(fret);
         }
