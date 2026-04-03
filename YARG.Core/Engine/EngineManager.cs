@@ -105,6 +105,8 @@ namespace YARG.Core.Engine
             _allEngines.Add(engineContainer);
             _allEnginesById.Add(engineContainer.EngineId, engineContainer);
             AddPlayerToUnisons(engineContainer);
+            engine.OnCodaStart += CodaStartHandler;
+            engine.OnCodaEnd += CodaEndHandler;
 
             return engineContainer;
         }

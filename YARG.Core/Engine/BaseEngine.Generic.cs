@@ -365,7 +365,7 @@ namespace YARG.Core.Engine
             // Check to see if a coda has started or ended
             if (CurrentCodaIndex < Codas.Count)
             {
-                if (time >= Codas[CurrentCodaIndex].StartTime && !CodaHasStarted)
+                if (time >= Codas[CurrentCodaIndex].StartTime && !CodaHasStarted && !InhibitCoda)
                 {
                     YargLogger.LogFormatTrace("Coda {0} activated at time {1}", CurrentCodaIndex, time);
                     StartCoda();
@@ -501,8 +501,6 @@ namespace YARG.Core.Engine
             // If this is the last note in the chart and there was a successful coda, award coda bonus
             if (CodaHasStarted && note.IsCodaEnd)
             {
-                var coda = Codas[CurrentCodaIndex];
-                EngineStats.CodaBonuses += coda.TotalCodaBonus;
                 EndCoda();
             }
 
@@ -1097,8 +1095,8 @@ namespace YARG.Core.Engine
 
             IsCodaActive = false;
             CodaHasStarted = false;
+            InhibitCoda = true;
             OnCodaEnd?.Invoke(Codas[CurrentCodaIndex]);
-            CurrentCodaIndex++;
         }
 
         protected override void RebaseSustains(uint baseTick)

@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 
 namespace YARG.Core.Engine
 {
@@ -9,6 +10,14 @@ namespace YARG.Core.Engine
         public float Stars { get; set; }
         public int BandMultiplier => Math.Max(_starpowerCount * 2, 1);
 
+        private int          _activeCodaCount;
+
+        public delegate void CodaStartDelegate(CodaSection codaSection);
+        public delegate void CodaEndDelegate(CodaSection codaSection);
+
+        public event CodaStartDelegate? OnCodaStart;
+        public event CodaEndDelegate? OnCodaEnd;
+
         public int TotalCodaBonus
         {
             get
@@ -16,7 +25,7 @@ namespace YARG.Core.Engine
                 var totalBonus = 0;
                 foreach (var engine in Engines)
                 {
-                    totalBonus += engine.Engine.CodaBonus;
+                    totalBonus += engine.Engine.CurrentCodaBonus;
                 }
 
                 return totalBonus;
@@ -36,6 +45,31 @@ namespace YARG.Core.Engine
                 }
 
                 return true;
+            }
+        }
+
+        private void CodaStartHandler(CodaSection coda)
+        {
+            if (_activeCodaCount == 0)
+            {
+                OnCodaStart?.Invoke(coda);
+            }
+
+            _activeCodaCount++;
+        }
+
+        private void CodaEndHandler(CodaSection coda)
+        {
+            var success = CodaSuccess;
+            _activeCodaCount--;
+            if (_activeCodaCount == 0)
+            {
+                OnCodaEnd?.Invoke(coda);
+
+                foreach (var engine in Engines)
+                {
+                    engine.Engine.AwardCodaBonus(success);
+                }
             }
         }
 

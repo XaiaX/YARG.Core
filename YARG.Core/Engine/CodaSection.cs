@@ -109,7 +109,6 @@ namespace YARG.Core.Engine
         public void MissNote()
         {
             Success = false;
-            TotalCodaBonus = 0;
         }
 
         /// <summary>

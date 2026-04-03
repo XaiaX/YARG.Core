@@ -85,7 +85,7 @@ namespace YARG.Core.Engine
         public bool IsWaitCountdownActive { get; protected set; }
         public bool IsStarPowerInputActive { get; protected set; }
 
-        public int CodaBonus
+        public int CurrentCodaBonus
         {
             get
             {
@@ -94,7 +94,7 @@ namespace YARG.Core.Engine
                     return 0;
                 }
 
-                return CodaHasStarted ? Codas[CurrentCodaIndex].TotalCodaBonus : BaseStats.CodaBonuses;
+                return Codas[CurrentCodaIndex].TotalCodaBonus;
             }
         }
 
@@ -167,6 +167,8 @@ namespace YARG.Core.Engine
             TreatChordAsSeparate = isChordSeparate;
             IsBot = isBot;
         }
+
+        protected bool InhibitCoda = false;
 
         public EngineTimer GetStarPowerWhammyTimer() => StarPowerWhammyTimer;
 
@@ -617,6 +619,17 @@ namespace YARG.Core.Engine
         {
             GainStarPower(TicksPerQuarterSpBar);
             OnUnisonBonusAwarded?.Invoke();
+        }
+
+        public void AwardCodaBonus(bool success)
+        {
+            if (success)
+            {
+                BaseStats.CodaBonuses += CurrentCodaBonus;
+            }
+
+            CurrentCodaIndex++;
+            InhibitCoda = false;
         }
     }
 }
