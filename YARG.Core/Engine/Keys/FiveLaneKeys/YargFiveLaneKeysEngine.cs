@@ -335,6 +335,7 @@ namespace YARG.Core.Engine.Keys.Engines
                 var action = FiveLaneKeysActionToProKeysAction(chordNote.FiveLaneKeysAction);
 
                 MutateStateWithInput(new GameInput(note.Time, (int)action, true));
+                HandleCodaFretChange(time);
                 CheckForNoteHit();
             }
         }

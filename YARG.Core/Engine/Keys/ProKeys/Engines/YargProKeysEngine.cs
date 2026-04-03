@@ -463,6 +463,8 @@ namespace YARG.Core.Engine.Keys.Engines
             foreach (var chordNote in note.AllNotes)
             {
                 MutateStateWithInput(new GameInput(note.Time, chordNote.Key, true));
+                // We have to call HandleCodaFretChange here because KeyHitThisUpdate gets cleared by CheckForNoteHit
+                HandleCodaFretChange(time);
                 CheckForNoteHit();
             }
         }
