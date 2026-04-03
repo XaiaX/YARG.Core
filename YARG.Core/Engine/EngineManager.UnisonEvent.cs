@@ -144,8 +144,6 @@ namespace YARG.Core.Engine
         public delegate void UnisonPhraseSuccessEvent();
 
         public  UnisonPhraseSuccessEvent?                       OnUnisonPhraseSuccess;
-        private bool                                            _unisonsReady      = false;
-        private int                                             _playerCount  = 0;
 
         // Instrument groups whose combination cannot be the source of a unison
         public static readonly List<List<Instrument>> InstrumentGroups = new List<List<Instrument>>()
@@ -267,7 +265,7 @@ namespace YARG.Core.Engine
             {
                 if (fiveFretTrack.TryGetAnyInstrumentDifficulty(out var difficulty))
                 {
-                    sourceSpSections = difficulty.GetStarpowerSections();
+                    sourceSpSections = difficulty!.GetStarpowerSections();
                     foundSelf = true;
                 }
             }
@@ -276,7 +274,7 @@ namespace YARG.Core.Engine
             {
                 if (drumsTrack.TryGetAnyInstrumentDifficulty(out var difficulty))
                 {
-                    sourceSpSections = difficulty.GetStarpowerSections();
+                    sourceSpSections = difficulty!.GetStarpowerSections();
                     foundSelf = true;
                 }
             }
@@ -285,7 +283,7 @@ namespace YARG.Core.Engine
             {
                 if (sixFretTrack.TryGetAnyInstrumentDifficulty(out var difficulty))
                 {
-                    sourceSpSections = difficulty.GetStarpowerSections();
+                    sourceSpSections = difficulty!.GetStarpowerSections();
                     foundSelf = true;
                 }
             }
@@ -294,7 +292,7 @@ namespace YARG.Core.Engine
             {
                 if (proGuitarTrack.TryGetAnyInstrumentDifficulty(out var difficulty))
                 {
-                    sourceSpSections = difficulty.GetStarpowerSections();
+                    sourceSpSections = difficulty!.GetStarpowerSections();
                     foundSelf = true;
                 }
             }
@@ -303,7 +301,7 @@ namespace YARG.Core.Engine
             {
                 if (chart.ProKeys.TryGetAnyInstrumentDifficulty(out var difficulty))
                 {
-                    sourceSpSections = difficulty.GetStarpowerSections();
+                    sourceSpSections = difficulty!.GetStarpowerSections();
                     foundSelf = true;
                 }
             }
@@ -312,7 +310,7 @@ namespace YARG.Core.Engine
             {
                 if (chart.Keys.TryGetAnyInstrumentDifficulty(out var difficulty))
                 {
-                    sourceSpSections = difficulty.GetStarpowerSections();
+                    sourceSpSections = difficulty!.GetStarpowerSections();
                     foundSelf = true;
                 }
             }
@@ -409,7 +407,7 @@ namespace YARG.Core.Engine
                     }
                 }
 
-                instrumentTrack = null;
+                instrumentTrack = null!;
                 return false;
             }
         }

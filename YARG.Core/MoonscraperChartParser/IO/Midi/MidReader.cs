@@ -461,7 +461,6 @@ namespace MoonscraperChartEditor.Song.IO
                 if (MidIOHelper.IsTextEvent(trackEvent, out var text))
                 {
                     string eventText = TextEvents.NormalizeTextEvent(text.Text).ToString();
-                    bool matched = false;
                     foreach (var (regex, (lookup, type, defaultValue)) in MidIOHelper.ANIMATION_EVENT_REGEX_TO_LOOKUP)
                     {
                         if (regex.Match(eventText) is not { Success: true } match) continue;
@@ -474,7 +473,6 @@ namespace MoonscraperChartEditor.Song.IO
 
                         MoonObjectHelper.OrderedInsertFromBack(new MoonAnimation(type, converted, (uint) absoluteTime),
                             animations);
-                        matched = true;
                     }
                 }
             }
