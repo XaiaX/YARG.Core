@@ -396,7 +396,7 @@ namespace YARG.Core.Engine.Drums
             {
                 if (phrase.Type == PhraseType.BigRockEnding)
                 {
-                    codaSections.Add(new CodaSection(lanes, phrase.Time, phrase.TimeEnd, false));
+                    codaSections.Add(new CodaSection(lanes, phrase.Time, phrase.TimeEnd, true));
                 }
             }
 

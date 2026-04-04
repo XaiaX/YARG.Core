@@ -16,8 +16,7 @@ namespace YARG.Core.Engine
         // This is not the number of visible lanes on the track, this is the
         // number of notional lanes used for calculating the bonus score based
         // on fret presses or drum hits.
-        // Could be 5 or 6 for Five/Six fret guitar or 1 for drums
-        public int Lanes { get; private set; }
+        public int ScoringZones { get; private set; }
 
         // Last time bonus was collected for given lane
         private double[] LastCollectedTime { get; set; }
@@ -37,7 +36,7 @@ namespace YARG.Core.Engine
         public bool Success { get; private set; }
 
         private readonly bool                  _fretMode;
-        private          Dictionary<int, int>? _indexToLane;
+        private          Dictionary<int, int>? _actionToScoringZone;
 
         public delegate void LaneHitEvent(int lane);
         public LaneHitEvent? OnLaneHit;
@@ -50,7 +49,7 @@ namespace YARG.Core.Engine
 
         public CodaSection(int lanes, double startTime, double endTime, bool fretMode = true)
         {
-            Lanes = lanes;
+            ScoringZones = lanes;
             LastCollectedTime = new double[lanes];
             LastHitTime = new double[lanes];
             MaxLaneScore = fretMode ? MAX_FRET_SCORE : MAX_DRUM_SCORE;
@@ -67,7 +66,7 @@ namespace YARG.Core.Engine
         // then we'd have to be a generic for no good reason)
         public void HitLane(double time, int fret)
         {
-            var laneIndex = fret;
+            var scoringZoneIndex = fret;
 
             if (fret < 0)
             {
@@ -75,33 +74,34 @@ namespace YARG.Core.Engine
                 return;
             }
 
-            if (_indexToLane != null && _indexToLane.TryGetValue(fret, out int lane))
+            if (_actionToScoringZone != null && _actionToScoringZone.TryGetValue(fret, out int lane))
+
             {
-                laneIndex = lane;
+                scoringZoneIndex = lane;
             }
 
             // Remap values that don't correspond to a lane
-            if (laneIndex > Lanes - 1)
+            if (scoringZoneIndex > ScoringZones - 1)
             {
-                laneIndex %= Lanes - 1;
+                scoringZoneIndex %= ScoringZones - 1;
             }
 
             // Collect bonus for this lane
             if (_fretMode)
             {
-                int bonusScore = GetCurrentLaneScore(laneIndex, time);
-                LastCollectedTime[laneIndex] = time;
+                int bonusScore = GetCurrentScoringZonePayout(scoringZoneIndex, time);
+                LastCollectedTime[scoringZoneIndex] = time;
                 TotalCodaBonus += bonusScore;
             }
             else
             {
                 // Non-fret instruments only have one scoring lane
-                int bonusScore = GetCurrentLaneScore(0, time);
+                int bonusScore = GetCurrentScoringZonePayout(0, time);
                 LastCollectedTime[0] = time;
                 TotalCodaBonus += bonusScore;
             }
 
-            LastHitTime[laneIndex] = time;
+            LastHitTime[scoringZoneIndex] = time;
 
             OnLaneHit?.Invoke(fret);
         }
@@ -131,14 +131,9 @@ namespace YARG.Core.Engine
             }
         }
 
-        private int GetCurrentLaneScore(int fret, double time)
+        private int GetCurrentScoringZonePayout(int scoringZoneIndex, double time)
         {
-            if (_indexToLane != null && _indexToLane.TryGetValue(fret, out int lane))
-            {
-                fret = lane;
-            }
-
-            return (int) Math.Floor((Math.Min(time - LastCollectedTime[fret], BONUS_RECHARGE_TIME) / BONUS_RECHARGE_TIME) * MaxLaneScore);
+            return (int) Math.Floor((Math.Min(time - LastCollectedTime[scoringZoneIndex], BONUS_RECHARGE_TIME) / BONUS_RECHARGE_TIME) * MaxLaneScore);
         }
 
         public double GetTimeSinceLastHit(int fret, double time) => time - LastCollectedTime[fret];
@@ -147,22 +142,17 @@ namespace YARG.Core.Engine
         /// Returns normalized time since last hit<br/>
         /// Reaches 1.0f at BONUS_RECHARGE_TIME
         /// </summary>
-        /// <param name="fret"></param>
+        /// <param name="scoringZoneIndex"></param>
         /// <param name="time"></param>
         /// <returns>float range 0.0f to 1.0f</returns>
-        public float GetNormalizedTimeSinceLastHit(int fret, double time)
+        public float GetNormalizedTimeSinceLastHit(int scoringZoneIndex, double time)
         {
-            if (_indexToLane != null && _indexToLane.TryGetValue(fret, out int lane))
-            {
-                fret = lane;
-            }
-
-            return (float) (Math.Min(time - LastHitTime[fret], BONUS_RECHARGE_TIME) / BONUS_RECHARGE_TIME);
+            return (float) (Math.Min(time - LastHitTime[scoringZoneIndex], BONUS_RECHARGE_TIME) / BONUS_RECHARGE_TIME);
         }
 
         public void SetLaneIndexes(Dictionary<int, int> indexToLane)
         {
-            _indexToLane = indexToLane;
+            _actionToScoringZone = indexToLane;
         }
     }
 }
