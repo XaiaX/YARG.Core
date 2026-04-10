@@ -98,7 +98,7 @@ namespace YARG.Core.Engine
             }
         }
 
-        public bool CodaSuccess => Codas.Count > 0 && CurrentCodaIndex < Codas.Count && Codas[CurrentCodaIndex].Success;
+        public bool CodaSuccess => Codas.Count == 0 || (Codas.Count > 0 && CurrentCodaIndex < Codas.Count && Codas[CurrentCodaIndex].Success);
 
         protected EngineTimer StarPowerWhammyTimer;
 
