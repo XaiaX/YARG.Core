@@ -12,7 +12,7 @@ namespace YARG.Core.Song
         Sensitive_Content,
         Unspecified,
         No_Rating,
-        Any                 // Make sure 'any' is always last in the list
+        None                 // Make sure 'none' is always last in the list
     }
 
     public struct SongMetadata
