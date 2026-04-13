@@ -94,6 +94,12 @@ namespace YARG.Core.Engine.Drums
                 return;
             }
 
+            // Prevent overstrum too close to the expiration of lane behavior
+            if (!IsLaneActive && CurrentTime - LaneExpireTime < LANE_END_LENIENCY)
+            {
+                YargLogger.LogFormatTrace("Overstrum prevented by lane end leniency at {0}", CurrentTime);
+            }
+
             if (NoteIndex < Notes.Count)
             {
                 // Don't remove the phrase if the current note being overstrummed is the start of a phrase

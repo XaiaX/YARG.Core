@@ -45,14 +45,14 @@ namespace YARG.Core.Game
             [SettingRange(0f, 2f)]
             public double FrontToBackRatio = 1.0;
 
-            [SettingType(SettingType.Slider)]
-            [SettingRange(0f, 3f)]
-            public double TremoloFrontEndPercent = 1.5;
+            [SettingType(SettingType.MillisecondInput)]
+            [SettingRange(min: 0f)]
+            public double TremoloWindow = 0.160;
 
             public HitWindowSettings Create()
             {
                 return new HitWindowSettings(MaxWindow, MinWindow, FrontToBackRatio, IsDynamic,
-                    DynamicSlope, DynamicScale, DynamicGamma, TremoloFrontEndPercent);
+                    DynamicSlope, DynamicScale, DynamicGamma, TremoloWindow);
             }
 
             public HitWindowPreset Copy()
@@ -69,7 +69,7 @@ namespace YARG.Core.Game
 
                     FrontToBackRatio = FrontToBackRatio,
 
-                    TremoloFrontEndPercent = TremoloFrontEndPercent
+                    TremoloWindow = TremoloWindow
                 };
             }
         }
@@ -117,7 +117,7 @@ namespace YARG.Core.Game
                 MinWindow = 0.14,
                 IsDynamic = false,
                 FrontToBackRatio = 1.0,
-                TremoloFrontEndPercent = 1.5
+                TremoloWindow = 0.160
             };
 
             public FiveFretGuitarPreset Copy()
@@ -175,7 +175,7 @@ namespace YARG.Core.Game
                 MinWindow = 0.14,
                 IsDynamic = false,
                 FrontToBackRatio = 1.0,
-                TremoloFrontEndPercent = 1.9
+                TremoloWindow = 0.160
             };
 
             public DrumsPreset Copy()
@@ -344,7 +344,7 @@ namespace YARG.Core.Game
                 MinWindow = 0.14,
                 IsDynamic = false,
                 FrontToBackRatio = 1.0,
-                TremoloFrontEndPercent = 1.5
+                TremoloWindow = 0.160
             };
 
             public ProKeysPreset Copy()
