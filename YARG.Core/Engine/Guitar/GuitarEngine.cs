@@ -155,6 +155,12 @@ namespace YARG.Core.Engine.Guitar
                 return;
             }
 
+            if (CodaHasStarted)
+            {
+                YargLogger.LogFormatTrace("Overstrum punished during post-BRE coda section at {0}", CurrentTime);
+                Codas[CurrentCodaIndex].Overhit();
+            }
+
             if (IsLaneActive)
             {
                 YargLogger.LogFormatTrace("Punishing lane overstrum at {0}. Current mask: {1}, RequiredLaneNote: {2}, NextTrillNote: {3}", CurrentTime, laneMask, RequiredLaneNote, NextTrillNote);
@@ -304,9 +310,10 @@ namespace YARG.Core.Engine.Guitar
                 return;
             }
 
-            // Note can't be missed during BRE phrase
-            if (IsCodaActive && note.IsBigRockEnding)
+            // BRE notes can't be missed during coda section
+            if (CodaHasStarted && note.IsBigRockEnding)
             {
+                YargLogger.LogFormatDebug("Tried to miss BRE note at {0}, converting miss to hit", CurrentTime);
                 note.SetHitState(true, true);
                 base.HitNote(note);
                 return;

@@ -98,6 +98,13 @@ namespace YARG.Core.Engine.Drums
             if (!IsLaneActive && CurrentTime - LaneExpireTime < LANE_END_LENIENCY)
             {
                 YargLogger.LogFormatTrace("Overstrum prevented by lane end leniency at {0}", CurrentTime);
+                return;
+            }
+
+            // Fail coda in post-BRE coda section
+            if (CodaHasStarted)
+            {
+                Codas[CurrentCodaIndex].Overhit();
             }
 
             if (NoteIndex < Notes.Count)
