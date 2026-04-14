@@ -61,7 +61,7 @@ namespace YARG.Core.Chart
 
                     difficulties = new Dictionary<Difficulty, InstrumentDifficulty<DrumNote>>()
                     {
-                        { Difficulty.Beginner, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Beginner, beginnerNoteDelegate, HandleTextEvent) },
+                        { Difficulty.Beginner, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, beginnerNoteDelegate, HandleTextEvent) },
                         { Difficulty.Easy, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, createNote, HandleTextEvent)},
                         { Difficulty.Medium, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Medium, createNote, HandleTextEvent)},
                         { Difficulty.Hard, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Hard, createNote, HandleTextEvent)},
