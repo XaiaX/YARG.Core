@@ -24,7 +24,9 @@ namespace YARG.Core.Chart
 
         private MoonSong _moonSong;
         private ParseSettings _settings;
-        private bool _isChartFormat;
+        // .chart format uses inclusive solo phrase boundaries (the note at phrase end tick is inside the solo);
+        // .mid format uses exclusive boundaries. Other formats should set this based on their own spec.
+        private bool _inclusiveSoloBoundary;
 
         private GameMode _currentMode;
         private Instrument _currentInstrument;
@@ -58,7 +60,7 @@ namespace YARG.Core.Chart
                 ? ChartReader.ReadFromFile(ref settings, filePath)
                 : MidReader.ReadMidi(ref settings, filePath);
 
-            return new(song, settings) { _isChartFormat = isChart };
+            return new(song, settings) { _inclusiveSoloBoundary = isChart };
         }
 
         public static MoonSongLoader LoadMidi(ParseSettings settings, MidiFile midi)
@@ -290,16 +292,16 @@ namespace YARG.Core.Chart
             }
 
             // Solos
-            if (currentPhrases.TryGetValue(MoonPhrase.Type.Solo, out var solo) && IsEventInPhrase(moonNote, solo, inclusiveEnd: _isChartFormat))
+            if (currentPhrases.TryGetValue(MoonPhrase.Type.Solo, out var solo) && IsEventInPhrase(moonNote, solo, inclusiveEnd: _inclusiveSoloBoundary))
             {
                 flags |= NoteFlags.Solo;
 
-                if (previous == null || !IsEventInPhrase(previous, solo, inclusiveEnd: _isChartFormat))
+                if (previous == null || !IsEventInPhrase(previous, solo, inclusiveEnd: _inclusiveSoloBoundary))
                 {
                     flags |= NoteFlags.SoloStart;
                 }
 
-                if (next == null || !IsEventInPhrase(next, solo, inclusiveEnd: _isChartFormat))
+                if (next == null || !IsEventInPhrase(next, solo, inclusiveEnd: _inclusiveSoloBoundary))
                 {
                     flags |= NoteFlags.SoloEnd;
                 }
