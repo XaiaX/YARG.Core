@@ -42,7 +42,7 @@ namespace YARG.Core.Chart
             var flags = ProKeysNoteFlags.None;
 
             if (currentPhrases.TryGetValue(MoonPhrase.Type.ProKeys_Glissando, out var glissando) &&
-                IsEventInPhrase(moonNote, glissando))
+                IsEventInPhrase(moonNote, glissando, inclusiveEnd: true))
             {
                 flags |= ProKeysNoteFlags.Glissando;
             }

@@ -435,7 +435,7 @@ namespace YARG.Core.Chart
                 const int CLINCH_THRESHOLD = 5;
                 int highestTotal = 0;
 
-                for (var noteRef = moonNote; noteRef != null && IsEventInPhrase(noteRef, lanePhrase); noteRef = noteRef.next)
+                for (var noteRef = moonNote; noteRef != null && IsEventInPhrase(noteRef, lanePhrase, inclusiveEnd: true); noteRef = noteRef.next)
                 {
                     if (noteRef.drumPad == MoonNote.DrumPad.Kick)
                     {
