@@ -403,13 +403,12 @@ namespace YARG.Core.Engine.Drums
         protected override List<CodaSection> GetCodaSections()
         {
             var codaSections = new List<CodaSection>();
-            var lanes = EngineParameters.Mode == DrumsEngineParameters.DrumMode.FiveLane ? 6 : 5;
 
             foreach (var phrase in Chart.Phrases)
             {
                 if (phrase.Type == PhraseType.BigRockEnding)
                 {
-                    codaSections.Add(new CodaSection(lanes, phrase.Time, phrase.TimeEnd, true));
+                    codaSections.Add(new CodaSection(1, phrase.Time, phrase.TimeEnd));
                 }
             }
 

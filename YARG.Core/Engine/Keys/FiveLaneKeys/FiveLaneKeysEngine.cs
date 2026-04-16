@@ -13,9 +13,9 @@ namespace YARG.Core.Engine.Keys
             YellowKey = 2,
             BlueKey = 3,
             OrangeKey = 4,
-            Wildcard = 5,
-
-            OpenNote = 6
+            // 5 intentionally left blank for symmetry with 6F
+            OpenNote = 6,
+            Wildcard = 7,
         }
 
         public bool IsKeyHeld(FiveLaneKeysAction key)
@@ -23,7 +23,7 @@ namespace YARG.Core.Engine.Keys
             return (KeyMask & (1 << (int)key)) != 0;
         }
 
-        protected override double[] KeyPressTimes { get; } = new double[7];
+        protected override double[] KeyPressTimes { get; } = new double[8];
 
         protected FiveLaneKeysEngine(InstrumentDifficulty<GuitarNote> chart, SyncTrack syncTrack,
             KeysEngineParameters engineParameters, bool isBot)
