@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using YARG.Core.Chart;
 using YARG.Core.Input;
 using YARG.Core.Logging;
@@ -197,12 +198,12 @@ namespace YARG.Core.Engine.Keys
             EngineStats.NoteScore += POINTS_PER_NOTE;
         }
 
-        protected sealed override int CalculateBaseScore()
+        protected sealed override (int baseScore, int noteScore) CalculateChartScores()
         {
-            double score = 0;
+            double baseScore = 0;
+            double noteScore = 0;
             int combo = 0;
             int multiplier;
-            double weight;
             foreach (var note in Notes)
             {
                 // Exclude BRE notes from base score calculation since they can't be scored
@@ -213,22 +214,41 @@ namespace YARG.Core.Engine.Keys
 
                 // Get the current multiplier given the current combo
                 multiplier = Math.Min((combo / 10) + 1, BaseParameters.MaxMultiplier);
-
-                // invert it to calculate leniency
-                weight = 1.0 * multiplier / BaseParameters.MaxMultiplier;
-                score += weight * (POINTS_PER_NOTE * (1 + note.ChildNotes.Count));
+                double scoreForNote = POINTS_PER_NOTE * (1 + note.ChildNotes.Count);
 
                 foreach (var child in note.AllNotes)
                 {
-                    score += weight * (int) Math.Ceiling(child.TickLength / TicksPerSustainPoint);
+                    scoreForNote += (int) Math.Ceiling(child.TickLength / TicksPerSustainPoint);
                 }
+                baseScore += multiplier * scoreForNote;
+                noteScore += scoreForNote;
 
-                // Pro Keys combo increments per chord, not per note.
+                double pointsForSustain = Math.Ceiling(note.TickLength / TicksPerSustainPoint);
+                baseScore += multiplier * pointsForSustain;
+                noteScore += pointsForSustain;
+                combo++;
+                // If a note is disjoint, each sustain is counted separately.
+                if (note.IsDisjoint)
+                {
+                    foreach (var child in note.ChildNotes)
+                    {
+                        HashSet<uint> seenNoteTicks = new();
+                        double pointsForDisjoint = Math.Ceiling(child.TickLength / TicksPerSustainPoint);
+                        baseScore += multiplier * pointsForDisjoint;
+                        noteScore += pointsForDisjoint;
+                        // Only increment combo if we haven't already seen a note in that tick
+                        if (!seenNoteTicks.Contains(child.Tick))
+                        {
+                            combo++;
+                            seenNoteTicks.Add(child.Tick);
+                        }
+                    }
+                }
                 combo++;
             }
 
-            YargLogger.LogDebug($"[Pro Keys] Base score: {score}, Max Combo: {combo}");
-            return (int) Math.Round(score);
+            YargLogger.LogDebug($"[Keys] Base score: {baseScore}, Max Combo: {combo}");
+            return ((int) Math.Round(baseScore), (int) Math.Round(noteScore));
         }
 
         // protected override bool IsKeyInTime(GuitarNote note, double frontEnd) => IsKeyInTime(note, (int)note.FiveLaneKeysAction, frontEnd);
