@@ -50,9 +50,9 @@ namespace YARG.Core.Chart
                 _lipsyncData = lipsyncReader.GetLipsyncData();
 
                 // Dispose of the FixedArray and the reader (which has its own FixedArray)
-                miloData.Dispose();
                 miloReader.Dispose();
                 lipsyncReader.Dispose();
+                miloData.Dispose();
             }
             else
             {
