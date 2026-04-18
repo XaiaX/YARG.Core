@@ -46,14 +46,15 @@ namespace YARG.Core.Engine
 
         public static float GetNormalizedTimeSinceLastHit(double visualTime, double mostRecentTime)
         {
-            return (float)(Math.Min(visualTime - mostRecentTime, BONUS_RECHARGE_TIME) / BONUS_RECHARGE_TIME);
+            // Clamp is unneeded if players reset themselves correctly, but just in case
+            return (float)Math.Clamp(Math.Min(visualTime - mostRecentTime, BONUS_RECHARGE_TIME) / BONUS_RECHARGE_TIME, 0, 1);
         }
 
         public CodaSection(int scoringZones, double startTime, double endTime)
         {
             ScoringZones = scoringZones;
             LastCollectedTime = new double[scoringZones];
-            _fretMode = scoringZones == 1;
+            _fretMode = scoringZones > 1;
             MaxLaneScore = _fretMode ? MAX_FRET_SCORE : MAX_DRUM_SCORE;
             TotalCodaBonus = 0;
             StartTime = startTime;
@@ -76,15 +77,14 @@ namespace YARG.Core.Engine
             }
 
             if (_actionToScoringZone != null && _actionToScoringZone.TryGetValue(fret, out int lane))
-
             {
                 scoringZoneIndex = lane;
             }
 
             // Remap values that don't correspond to a lane
-            if (scoringZoneIndex > ScoringZones - 1)
+            if (scoringZoneIndex > ScoringZones)
             {
-                scoringZoneIndex %= ScoringZones - 1;
+                scoringZoneIndex %= ScoringZones;
             }
 
             // Collect bonus for this lane
