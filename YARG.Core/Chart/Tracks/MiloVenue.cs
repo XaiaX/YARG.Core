@@ -57,6 +57,7 @@ namespace YARG.Core.Chart
             else
             {
                 // We couldn't load the milo data, so we'll just return
+                miloData?.Dispose();
                 return;
             }
 
