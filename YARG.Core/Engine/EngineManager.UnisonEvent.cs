@@ -125,7 +125,7 @@ namespace YARG.Core.Engine
             /// <returns></returns>
             public bool TickAlmostEquals(StarPowerSection other, uint tolerance)
             {
-                return StartTickAlmostEquals(other, tolerance) || EndTickAlmostEquals(other, tolerance);
+                return StartTickAlmostEquals(other, tolerance) && EndTickAlmostEquals(other, tolerance);
             }
 
             public bool StartTickAlmostEquals(StarPowerSection other, uint tolerance)
