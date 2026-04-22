@@ -88,6 +88,9 @@ namespace YARG.Core.Engine.Keys
             // Cancel rest of hit logic during BRE phrase
             if (IsCodaActive && note.IsBigRockEnding)
             {
+                // Be sure to disable the stagger timer so it doesn't run long
+                ChordStaggerTimer.Disable(CurrentTime, early: true);
+
                 base.HitNote(note);
                 return;
             }

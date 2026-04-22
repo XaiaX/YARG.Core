@@ -9,7 +9,6 @@ namespace YARG.Core.Engine.Keys.Engines
     public class YargProKeysEngine : ProKeysEngine
     {
         private KeyPressedTimes[] _keyPressedTimes = new KeyPressedTimes[(int)ProKeysAction.Key25 + 1];
-        private bool              _keyPressedThisUpdate;
 
         public YargProKeysEngine(InstrumentDifficulty<ProKeysNote> chart, SyncTrack syncTrack,
             KeysEngineParameters engineParameters, bool isBot) : base(chart, syncTrack, engineParameters, isBot)

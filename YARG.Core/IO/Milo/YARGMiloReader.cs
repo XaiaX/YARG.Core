@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
@@ -125,7 +125,7 @@ namespace YARG.Core.IO
                         break;
                 }
 
-                blockInfo[i] = new BlockInfo {Compressed = compressed, Size = blockSize };
+                blockInfo[i] = new BlockInfo {Compressed = compressed, Size = blockSize, Type = type };
             }
 
             // Seek to data_offset
