@@ -370,6 +370,14 @@ namespace YARG.Core.Chart
             // Previous parent note (on a different tick)
             var previousParent = notes.Count > 1 ? notes[^2] : null;
 
+            // TODO: Remove this section once we are sure that the LaneEnd handling in ModifyDrumsLaneFlags is sufficient
+            // If we are not a laned note and the previous note is a laned note without a lane end flag
+            // add the lane end flag to that previous note
+            // if (!note.IsLane && currentParent is { IsLane: true, IsLaneEnd: false })
+            // {
+            //     currentParent.ActivateFlag(NoteFlags.LaneEnd);
+            // }
+
             // Determine if this is part of a chord
             if (currentParent != null)
             {

@@ -421,6 +421,14 @@ namespace YARG.Core.Chart
                 flags &= ~NoteFlags.Trill;
                 flags &= ~NoteFlags.LaneStart;
                 flags &= ~NoteFlags.LaneEnd;
+                return flags;
+            }
+
+            // If we got here, we are a valid lane note. If next is not a valid lane note, add LaneEnd flag because
+            // its LaneEnd flag is gonna get nuked
+            if ((moonNote.next != null && !_validLaneNotes.Contains(moonNote.next.rawNote)) || moonNote.next == null)
+            {
+                flags |= NoteFlags.LaneEnd;
             }
 
             return flags;
