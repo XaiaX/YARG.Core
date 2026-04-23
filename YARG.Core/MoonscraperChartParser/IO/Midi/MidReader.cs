@@ -907,24 +907,23 @@ namespace MoonscraperChartEditor.Song.IO
             if (endTick > startTick)
                 --endTick;
 
-            long noteSnapThreshold = eventProcessParams.settings.NoteSnapThreshold;
-
             // Delay the actual processing once all the notes are actually in
             eventProcessParams.forcingProcessList.Add((ref EventProcessParams processParams) =>
             {
-                ProcessNoteOnEventAsFlagTogglePostDelay(ref processParams, startTick, endTick, flags, individualNoteSpecifier, noteSnapThreshold);
+                ProcessNoteOnEventAsFlagTogglePostDelay(ref processParams, startTick, endTick, flags, individualNoteSpecifier);
             });
         }
 
-        private static void ProcessNoteOnEventAsFlagTogglePostDelay(ref EventProcessParams eventProcessParams, uint startTick, uint endTick, MoonNote.Flags flags, int individualNoteSpecifier, long noteSnapThreshold = 0)   // individualNoteSpecifier as -1 to apply to the whole chord
+        private static void ProcessNoteOnEventAsFlagTogglePostDelay(ref EventProcessParams eventProcessParams, uint startTick, uint endTick, MoonNote.Flags flags, int individualNoteSpecifier)   // individualNoteSpecifier as -1 to apply to the whole chord
         {
             var song = eventProcessParams.song;
             var instrument = eventProcessParams.instrument;
 
             // Extend the lookup window backward to catch notes whose note-off would have overlapped
             // the marker start before note lengths were zeroed out during parsing.
-            uint lookbackStart = noteSnapThreshold > 0 && startTick >= (uint)noteSnapThreshold
-                ? startTick - (uint)noteSnapThreshold
+            uint noteSnapThreshold = (uint)eventProcessParams.settings.NoteSnapThreshold;
+            uint lookbackStart = noteSnapThreshold > 0 && startTick >= noteSnapThreshold
+                ? startTick - noteSnapThreshold
                 : startTick;
 
             foreach (var difficulty in EnumExtensions<MoonSong.Difficulty>.Values)
