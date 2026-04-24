@@ -156,7 +156,8 @@ namespace YARG.Core.Song
                 StarPowerNote = _settings.OverdiveMidiNote,
                 TuningOffsetCents = _settings.TuningOffsetCents,
                 DrumsType = DrumsType.FourLane,
-                ChordHopoCancellation = true
+                ChordHopoCancellation = true,
+                NoteSnapThreshold = NOTE_SNAP_THRESHOLD
             };
             return SongChart.FromMidi(in parseSettings, midi);
         }
