@@ -373,7 +373,7 @@ namespace YARG.Core.Engine
             // writer.Write(Stars);
         }
 
-        public abstract ReplayStats ConstructReplayStats(string name);
+        public abstract ReplayStats ConstructReplayStats(string name, bool isReplayPlayer);
 
         public double GetAverageOffset()
         {
