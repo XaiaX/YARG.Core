@@ -46,7 +46,10 @@ namespace YARG.Core.Engine.Keys.Engines
                     KeyHitThisUpdate = fiveLaneKeyIndex;
                     _keyPressedTimes[fiveLaneKeyIndex].NoteIndex = NoteIndex;
                     _keyPressedTimes[fiveLaneKeyIndex].Time = gameInput.Time;
-                    SubmitLaneNote(fiveLaneKeyIndex);
+                    if (GetLaneMask(fiveLaneKeyIndex, out var mask))
+                    {
+                        SubmitLaneNote(mask);
+                    }
                 }
                 else
                 {
@@ -388,6 +391,66 @@ namespace YARG.Core.Engine.Keys.Engines
                     coda.HitLane(time, i);
                 }
             }
+        }
+
+        protected bool GetLaneMask(int fiveLaneKeyIndex, out int mask)
+        {
+            mask = 0;
+
+            if (!IsLaneActive)
+            {
+                return false;
+            }
+
+            // Mask has green = 1, 5LK actions are green = 0
+            var fret = fiveLaneKeyIndex + 1;
+
+            if (MaskIsMultiFret(RequiredLaneNote))
+            {
+                // We don't directly check for mask equaling the current input mask because that would allow cheesing
+                // If the current fret satisfies one of the bits in the lane, we check KeyPressTimes to determine whether
+                // the other frets in the lane's mask have been pressed within ChordStaggerWindow
+                if ((fret & RequiredLaneNote) > 0)
+                {
+                    mask = fret;
+
+                    for (int i = 0; i < KeyPressTimes.Length; i++)
+                    {
+                        // + 1 is for mask/index/action offset
+                        var keyMask = 1 << i + 1;
+                        var pressedTime = KeyPressTimes[i];
+                        if ((keyMask & RequiredLaneNote) > 0 &&
+                            pressedTime >= CurrentTime - EngineParameters.ChordStaggerWindow)
+                        {
+                            mask |= keyMask;
+                        }
+                    }
+                }
+            }
+            else
+            {
+                mask = 1 << fret;
+            }
+
+            return true;
+        }
+
+        protected override bool ActiveLaneIncludesNote(int fiveLaneKeyIndex)
+        {
+            if (!IsLaneActive)
+            {
+                return false;
+            }
+
+            // Mask has green = 1, 5LK actions are green = 0
+            var fret = fiveLaneKeyIndex + 1;
+
+            if ((fret & RequiredLaneNote) > 0 || (NextTrillNote != -1 && fret == NextTrillNote))
+            {
+                return true;
+            }
+
+            return false;
         }
 
         protected override List<CodaSection> GetCodaSections()
