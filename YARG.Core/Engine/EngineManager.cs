@@ -2,12 +2,15 @@
 using System.Collections.Generic;
 using YARG.Core.Chart;
 using YARG.Core.Game;
+using YARG.Core.Logging;
 
 namespace YARG.Core.Engine
 {
     // Tracks and instantiates engines, handles IPC between engines, and events that affect multiple engines
     public partial class EngineManager
     {
+        public const int FREE_HARMONY_INDEX = -1;
+
         private int                      _nextEngineIndex;
         List <EngineContainer>           _allEngines     = new();
         Dictionary<int, EngineContainer> _allEnginesById = new();
@@ -77,10 +80,48 @@ namespace YARG.Core.Engine
             }
         }
 
+        /// <summary>
+        /// Registers an engine with harmony index 0. Requires harmonyIndex >= 0.
+        /// </summary>
         public EngineContainer Register<TEngineType>(TEngineType engine, Instrument instrument, SongChart chart, RockMeterPreset rockMeterPreset)
             where TEngineType : BaseEngine
         {
             return Register(engine, instrument, 0, chart, rockMeterPreset);
+        }
+
+        
+        /// <summary>
+        /// Registers an engine for free vocals, using HarmonyIndex = FREE_HARMONY_INDEX.
+        /// </summary>
+        public EngineContainer Register<TEngineType>(TEngineType engine, Instrument instrument, bool freeVocals, SongChart chart, RockMeterPreset rockMeterPreset)
+            where TEngineType : BaseEngine
+        {
+            if (!freeVocals)
+            {
+                throw new ArgumentException("Use the indexed overload for non-free vocals registration");
+            }
+
+            if (_chart == null)
+            {
+                _chart = chart;
+            }
+            else
+            {
+                if (_chart != chart)
+                {
+                    throw new ArgumentException("Cannot register engine with different chart");
+                }
+            }
+
+            var engineContainer = new EngineContainer(engine, instrument, FREE_HARMONY_INDEX, chart, _nextEngineIndex++, this, rockMeterPreset);
+
+            _allEngines.Add(engineContainer);
+            _allEnginesById.Add(engineContainer.EngineId, engineContainer);
+            AddPlayerToUnisons(engineContainer);
+            engine.OnCodaStart += CodaStartHandler;
+            engine.OnCodaEnd += CodaEndHandler;
+
+            return engineContainer;
         }
 
         public EngineContainer Register<TEngineType>(TEngineType engine, Instrument instrument, int harmonyIndex, SongChart chart, RockMeterPreset rockMeterPreset)
