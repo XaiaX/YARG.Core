@@ -12,7 +12,7 @@ namespace YARG.Core.Game
 {
     public partial class YargProfile
     {
-        private readonly int PROFILE_VERSION = 8;
+        private readonly int PROFILE_VERSION = 9;
 
         public int Version;
 
@@ -93,6 +93,9 @@ namespace YARG.Core.Game
         [JsonProperty("HarmonyIndex")]
         private byte _harmonyIndex;
 
+        [JsonProperty]
+        private bool _freeHarmony;
+
         /// <summary>
         /// The harmony index, used for determining what harmony part the player selected.
         /// Does nothing if <see cref="CurrentInstrument"/> is not a harmony.
@@ -105,6 +108,21 @@ namespace YARG.Core.Game
             get => CurrentInstrument == Instrument.Harmony ? _harmonyIndex : (byte) 0;
             set => _harmonyIndex = value;
         }
+
+        /// <summary>
+        /// Whether free harmony vocals mode is enabled.
+        /// </summary>
+        [JsonIgnore]
+        public bool FreeHarmony
+        {
+            get => _freeHarmony;
+            set => _freeHarmony = value;
+        }
+
+        /// <summary>
+        /// Checks if this profile is currently using free vocals mode.
+        /// </summary>
+        public bool IsFreeVocals => CurrentInstrument == Instrument.Vocals && _freeHarmony;
 
         /// <summary>
         /// The currently selected modifiers as a flag.
@@ -173,6 +191,15 @@ namespace YARG.Core.Game
             CurrentDifficulty = (Difficulty) stream.ReadByte();
             CurrentModifiers = (Modifier) stream.Read<ulong>(Endianness.Little);
             _harmonyIndex = stream.ReadByte();
+
+            if (Version >= 9)
+            {
+                _freeHarmony = stream.ReadBoolean();
+            }
+            else
+            {
+                _freeHarmony = false;
+            }
 
             NoteSpeed = stream.Read<float>(Endianness.Little);
             HighwayLength = stream.Read<float>(Endianness.Little);
@@ -456,6 +483,7 @@ namespace YARG.Core.Game
             writer.Write((byte) CurrentDifficulty);
             writer.Write((ulong) CurrentModifiers);
             writer.Write(_harmonyIndex);
+            writer.Write(_freeHarmony);
 
             writer.Write(NoteSpeed);
             writer.Write(HighwayLength);
