@@ -2,6 +2,7 @@ using NUnit.Framework;
 using YARG.Core.Game;
 using YARG.Core.Replays;
 using YARG.Core.Engine.Vocals;
+using YARG.Core.Engine.Guitar.Engines;
 using YARG.Core.Engine;
 using YARG.Core.Chart;
 using System.IO;
@@ -10,7 +11,7 @@ using YARG.Core.IO;
 namespace YARG.Core.UnitTests.Replays
 {
     [TestFixture]
-    public class ReplayFrameFreeVocalsTests
+    public class ReplayFrameFreeVocalsTests : global::YARG.Core.UnitTests.Engine.EngineTester
     {
         private static readonly VocalsEngineParameters EngineParameters = new(
             new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0),
@@ -24,6 +25,34 @@ namespace YARG.Core.UnitTests.Replays
             true,
             1000);
 
+        /// <summary>
+        /// Helper: round-trip a ReplayFrame through serialize/deserialize.
+        /// Reduces boilerplate across all replay serialization tests.
+        /// </summary>
+        private static ReplayFrame RoundTrip(ReplayFrame original)
+        {
+            using var memoryStream = new MemoryStream();
+            using var writer = new BinaryWriter(memoryStream);
+
+            original.Serialize(writer);
+            writer.Flush();
+
+            memoryStream.Seek(0, SeekOrigin.Begin);
+            var fixedArray = FixedArray<byte>.Alloc((int)memoryStream.Length);
+            memoryStream.Read(fixedArray.Span);
+            var stream = new FixedArrayStream(fixedArray);
+            return new ReplayFrame(ref stream, 1);
+        }
+
+        /// <summary>
+        /// Helper: create a ReplayFrame with the given profile and default empty stats/inputs.
+        /// </summary>
+        private static ReplayFrame CreateFrame(YargProfile profile)
+        {
+            var stats = new VocalsStats();
+            return new ReplayFrame(profile, EngineParameters, stats, Array.Empty<YARG.Core.Input.GameInput>());
+        }
+
         [Test]
         public void FreeVocalsFlag_SurvivesReplaySerializationRoundTrip()
         {
@@ -34,24 +63,10 @@ namespace YARG.Core.UnitTests.Replays
                 FreeHarmony = true
             };
 
-            // Create empty stats (they won't be used in this test)
-            var stats = new VocalsStats();
+            var originalFrame = CreateFrame(profile);
 
-            // Create ReplayFrame
-            var originalFrame = new ReplayFrame(profile, EngineParameters, stats, Array.Empty<YARG.Core.Input.GameInput>());
-
-            // Act: Serialize and deserialize
-            using var memoryStream = new MemoryStream();
-            using var writer = new BinaryWriter(memoryStream);
-
-            originalFrame.Serialize(writer);
-            writer.Flush();
-
-            memoryStream.Seek(0, SeekOrigin.Begin);
-            var fixedArray = FixedArray<byte>.Alloc((int)memoryStream.Length);
-            memoryStream.Read(fixedArray.Span);
-            var stream = new FixedArrayStream(fixedArray);
-            var deserializedFrame = new ReplayFrame(ref stream, 1);
+            // Act
+            var deserializedFrame = RoundTrip(originalFrame);
 
             // Assert: Verify the FreeVocals flag is preserved
             Assert.Multiple(() =>
@@ -78,32 +93,42 @@ namespace YARG.Core.UnitTests.Replays
             {
                 CurrentInstrument = Instrument.Vocals,
                 FreeHarmony = true,
-                Version = 9 // Ensure it's version 9
+                Version = 9
             };
 
-            // Create empty stats (they won't be used in this test)
-            var stats = new VocalsStats();
+            var originalFrame = CreateFrame(profile);
 
-            // Create ReplayFrame
-            var originalFrame = new ReplayFrame(profile, EngineParameters, stats, Array.Empty<YARG.Core.Input.GameInput>());
+            // Act: Serialize and deserialize the replay frame
+            var deserializedFrame = RoundTrip(originalFrame);
 
-            // Act: Serialize and deserialize
-            using var memoryStream = new MemoryStream();
-            using var writer = new BinaryWriter(memoryStream);
-
-            originalFrame.Serialize(writer);
-            writer.Flush();
-
-            memoryStream.Seek(0, SeekOrigin.Begin);
-            var fixedArray = FixedArray<byte>.Alloc((int)memoryStream.Length);
-            memoryStream.Read(fixedArray.Span);
-            var stream = new FixedArrayStream(fixedArray);
-            var deserializedFrame = new ReplayFrame(ref stream, 1);
-
-            // Assert: Verify that the profile would choose the correct engine
-            // This tests AC5.2 - that the deserialized profile would use YargFreeVocalsEngine
+            // Assert: Verify the deserialized profile identifies as free vocals
             Assert.IsTrue(deserializedFrame.Profile.IsFreeVocals,
-                "Profile should be recognized as Free Vocals and choose YargFreeVocalsEngine during playback");
+                "Deserialized profile should be recognized as Free Vocals");
+
+            // Assert: Verify that EngineManager.Register routes correctly when
+            // given the deserialized profile's IsFreeVocals flag. This tests AC5.2 --
+            // the replay playback path reads the deserialized profile and must use the
+            // free-vocals Register overload so that the container gets FREE_HARMONY_INDEX.
+            var manager = new EngineManager();
+            var chart = GetChart();
+            var notes = chart.FiveFretGuitar.GetDifficulty(Difficulty.Expert);
+            var stubEngine = new YargFiveFretGuitarEngine(
+                notes, chart.SyncTrack,
+                EnginePreset.Default.FiveFretGuitar.Create(
+                    StarMultiplierThresholds, SoloBonusStarMultiplierThresholds, false),
+                isBot: false);
+
+            var container = manager.Register(
+                stubEngine,
+                deserializedFrame.Profile.CurrentInstrument,
+                freeVocals: deserializedFrame.Profile.IsFreeVocals,
+                chart,
+                RockMeterPreset.Normal);
+
+            Assert.That(container.HarmonyIndex, Is.EqualTo(EngineManager.FREE_HARMONY_INDEX),
+                "Free vocals replay frame must produce a container with FREE_HARMONY_INDEX");
+            Assert.That(container.Instrument, Is.EqualTo(Instrument.Vocals),
+                "Container instrument should match the deserialized profile");
         }
 
         [Test]
@@ -116,24 +141,10 @@ namespace YARG.Core.UnitTests.Replays
                 FreeHarmony = false
             };
 
-            // Create empty stats (they won't be used in this test)
-            var stats = new VocalsStats();
+            var originalFrame = CreateFrame(profile);
 
-            // Create ReplayFrame
-            var originalFrame = new ReplayFrame(profile, EngineParameters, stats, Array.Empty<YARG.Core.Input.GameInput>());
-
-            // Act: Serialize and deserialize
-            using var memoryStream = new MemoryStream();
-            using var writer = new BinaryWriter(memoryStream);
-
-            originalFrame.Serialize(writer);
-            writer.Flush();
-
-            memoryStream.Seek(0, SeekOrigin.Begin);
-            var fixedArray = FixedArray<byte>.Alloc((int)memoryStream.Length);
-            memoryStream.Read(fixedArray.Span);
-            var stream = new FixedArrayStream(fixedArray);
-            var deserializedFrame = new ReplayFrame(ref stream, 1);
+            // Act
+            var deserializedFrame = RoundTrip(originalFrame);
 
             // Assert: Verify the FreeVocals flag is false
             Assert.Multiple(() =>
