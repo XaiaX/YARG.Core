@@ -21,6 +21,8 @@ namespace YARG.Core.Engine.Vocals.Engines
             _allParts = allParts;
             // Build countdowns from all parts for free vocals
             BuildCountdownsFromAllParts(allParts.ToList());
+
+            // Phase 4 note: Use VocalsPart.CloneAsInstrumentDifficulty() to build primaryChart from allParts[0]
         }
 
         protected override void UpdateBot(double songTime)
@@ -172,28 +174,8 @@ namespace YARG.Core.Engine.Vocals.Engines
             int bestPartIndex = CurrentTargetHarmonyIndex;
             VocalNote? bestNote = null;
 
-            // Get all active notes from all parts
-            var allActiveNotes = new List<VocalNote>();
-
-            // Check current phrase notes
-            foreach (var childNote in phrase.ChildNotes)
-            {
-                if (!childNote.IsPercussion &&
-                    CurrentTick >= childNote.Tick &&
-                    CurrentTick <= childNote.TotalTickEnd)
-                {
-                    allActiveNotes.Add(childNote);
-                }
-            }
-
-            // Check carried note as well
-            if (CarriedVocalNote != null &&
-                CurrentTick >= CarriedVocalNote.Tick &&
-                CurrentTick <= CarriedVocalNote.TotalTickEnd)
-            {
-                allActiveNotes.Add(CarriedVocalNote);
-            }
-
+            // Note: The primary chart (phrase.ChildNotes) is HARM1 from _allParts[0]
+            // We only need to check _allParts to avoid double-counting HARM1 notes
             // For bot mode, only check HARM1 (first part)
             var partsToCheck = IsBot ?
                 _allParts.Take(1).ToList() :
@@ -232,7 +214,8 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             if (hitAnyNote)
             {
-                // Update target harmony index if it changed
+                // Update target harmony index only if it changed (retains last value when no match)
+                // Only update when we actually hit a note to ensure index retains last value when no part matches
                 if (bestPartIndex != CurrentTargetHarmonyIndex && bestNote != null)
                 {
                     CurrentTargetHarmonyIndex = bestPartIndex;
