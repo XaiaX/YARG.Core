@@ -117,6 +117,10 @@ namespace YARG.Core.Chart
             return totalLastTick;
         }
 
+        /// <summary>
+        /// Clones this VocalsPart as an InstrumentDifficulty for use in engine creation.
+        /// Used in Phase 4 when creating the primary chart for YargFreeVocalsEngine.
+        /// </summary>
         public InstrumentDifficulty<VocalNote> CloneAsInstrumentDifficulty()
         {
             var vocalNotes = NotePhrases.Select(i => i.PhraseParentNote).ToList();
