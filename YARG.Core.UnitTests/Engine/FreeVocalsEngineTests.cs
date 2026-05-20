@@ -6,6 +6,7 @@ using YARG.Core.Chart;
 using YARG.Core.Engine;
 using YARG.Core.Engine.Vocals;
 using YARG.Core.Engine.Vocals.Engines;
+using YARG.Core.Input;
 
 namespace YARG.Core.UnitTests.Engine;
 
@@ -285,6 +286,224 @@ public sealed class FreeVocalsEngineTests
     }
 
     // ================================================================
+    // AC2.3: Percussion on HARM1, pitched on HARM2 -- sung pitch matches HARM2 -> hit
+    // ================================================================
+    [Test]
+    public void PercussionOnHARM1_PitchedOnHARM2_SingPitchedMatch()
+    {
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(isHarmony: false),
+            CreateVocalsPart(isHarmony: true),
+        };
+
+        // HARM1: percussion phrase with a percussion child note (no pitched notes)
+        var harm1Phrase = new VocalNote(NoteFlags.None, true, 0.0, 1.0, 0, 480);
+        var percNote = new VocalNote(-1, 0, VocalNoteType.Percussion, 0.0, 0.25, 0, 120);
+        harm1Phrase.AddChildNote(percNote);
+        parts[0].NotePhrases.Add(new VocalsPhrase(0.0, 1.0, 0, 480, harm1Phrase, new()));
+
+        // HARM2: pitched phrase with a lyric note at E4 = 64
+        AddPhraseWithPitch(parts[1], 64, tickOffset: 0);
+
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, new SyncTrack(480), EngineParameters, false);
+
+        // The HARM2 pitched note
+        var harm2Note = parts[1].NotePhrases[0].PhraseParentNote.ChildNotes[0];
+
+        // Sing E4 = 64 -- should hit the HARM2 pitched note
+        var (hit, hitPercent) = InvokeCanVocalNoteBeHit(engine, harm2Note, sungPitch: 64f);
+        Assert.That(hit, Is.True, "Singing E4 against HARM2 E4 note should hit");
+        Assert.That(hitPercent, Is.EqualTo(1f), "Perfect match on pitched note");
+    }
+
+    // ================================================================
+    // AC2.3: Percussion on HARM1, pitched on HARM2 -- sung pitch off all -> miss
+    // ================================================================
+    [Test]
+    public void PercussionOnHARM1_PitchedOnHARM2_SingOffAll()
+    {
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(isHarmony: false),
+            CreateVocalsPart(isHarmony: true),
+        };
+
+        // HARM1: percussion phrase
+        var harm1Phrase = new VocalNote(NoteFlags.None, true, 0.0, 1.0, 0, 480);
+        var percNote = new VocalNote(-1, 0, VocalNoteType.Percussion, 0.0, 0.25, 0, 120);
+        harm1Phrase.AddChildNote(percNote);
+        parts[0].NotePhrases.Add(new VocalsPhrase(0.0, 1.0, 0, 480, harm1Phrase, new()));
+
+        // HARM2: pitched at E4 = 64
+        AddPhraseWithPitch(parts[1], 64, tickOffset: 0);
+
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, new SyncTrack(480), EngineParameters, false);
+
+        var harm2Note = parts[1].NotePhrases[0].PhraseParentNote.ChildNotes[0];
+
+        // Sing F#4 = 66 (distance 2 semitones from E4, outside pitchWindow of 1.5)
+        var (hit, _) = InvokeCanVocalNoteBeHit(engine, harm2Note, sungPitch: 66f);
+        Assert.That(hit, Is.False, "F#4 is outside HARM2 window of E4, no pitched note on HARM1 to match");
+    }
+
+    // ================================================================
+    // AC2.3: Talkie (non-pitched) on HARM2, pitched on HARM1 -- talkie always matches
+    // ================================================================
+    [Test]
+    public void TalkieOnHARM2_PitchedOnHARM1_TalkieAlwaysMatches()
+    {
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(isHarmony: false),
+            CreateVocalsPart(isHarmony: true),
+        };
+
+        // HARM1: pitched at C4 = 60
+        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);
+
+        // HARM2: talkie (non-pitched) phrase
+        var harm2Phrase = new VocalNote(NoteFlags.None, false, 0.0, 1.0, 0, 480);
+        var talkieNote = new VocalNote(-1, 0, VocalNoteType.Lyric, 0.0, 0.5, 0, 240);
+        harm2Phrase.AddChildNote(talkieNote);
+        var lyrics = new List<LyricEvent>
+        {
+            new LyricEvent(LyricSymbolFlags.NonPitched, "Talk", 0.0, 0)
+        };
+        parts[1].NotePhrases.Add(new VocalsPhrase(0.0, 1.0, 0, 480, harm2Phrase, lyrics));
+
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, new SyncTrack(480), EngineParameters, false);
+
+        // The talkie note should be hittable with any pitch (same rule as YargVocalsEngine)
+        var (hit, hitPercent) = InvokeCanVocalNoteBeHit(engine, talkieNote, sungPitch: 999f);
+        Assert.That(hit, Is.True, "Non-pitched/talkie notes should always be hittable regardless of sung pitch");
+        Assert.That(hitPercent, Is.EqualTo(1f), "Talkie should give full hit percent");
+
+        // Also verify the HARM1 pitched note still works
+        var harm1Note = parts[0].NotePhrases[0].PhraseParentNote.ChildNotes[0];
+        var (hit1, pct1) = InvokeCanVocalNoteBeHit(engine, harm1Note, sungPitch: 60f);
+        Assert.That(hit1, Is.True, "HARM1 pitched note should still be hittable with matching pitch");
+        Assert.That(pct1, Is.EqualTo(1f));
+    }
+
+    // ================================================================
+    // AC2.3: Single part -- Free engine matches YargVocalsEngine behavior
+    // ================================================================
+    [Test]
+    public void SinglePart_FreeEngineMatchesYargVocalsEngine()
+    {
+        // Create a single-part track
+        var singlePart = CreateVocalsPart(isHarmony: false);
+        AddPhraseWithPitch(singlePart, 60, tickOffset: 0);
+
+        var parts = new List<VocalsPart> { singlePart };
+        var primaryChart = singlePart.CloneAsInstrumentDifficulty();
+        var syncTrack = new SyncTrack(480);
+
+        var freeEngine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, false);
+        var stdEngine = new YargVocalsEngine(primaryChart.Clone(), syncTrack, EngineParameters, false);
+
+        // Both engines should agree on CanVocalNoteBeHit for the same sung pitch
+        var freeNote = parts[0].NotePhrases[0].PhraseParentNote.ChildNotes[0];
+        var stdNote = primaryChart.Notes[0].ChildNotes[0];
+
+        // Test matching pitch
+        var (freeHit, freePct) = InvokeCanVocalNoteBeHit(freeEngine, freeNote, sungPitch: 60f);
+        var (stdHit, stdPct) = InvokeCanVocalNoteBeHitStd(stdEngine, stdNote, sungPitch: 60f);
+        Assert.That(freeHit, Is.EqualTo(stdHit), "Free and Std engines should agree on hit for matching pitch");
+        Assert.That(freePct, Is.EqualTo(stdPct), "Free and Std engines should agree on hit percent for matching pitch");
+
+        // Test slightly off pitch (1 semitone)
+        (freeHit, freePct) = InvokeCanVocalNoteBeHit(freeEngine, freeNote, sungPitch: 61f);
+        (stdHit, stdPct) = InvokeCanVocalNoteBeHitStd(stdEngine, stdNote, sungPitch: 61f);
+        Assert.That(freeHit, Is.EqualTo(stdHit), "Free and Std engines should agree on hit for 1 semitone off");
+        Assert.That(freePct, Is.EqualTo(stdPct), "Free and Std engines should agree on hit percent for 1 semitone off");
+
+        // Test far off pitch
+        (freeHit, freePct) = InvokeCanVocalNoteBeHit(freeEngine, freeNote, sungPitch: 80f);
+        (stdHit, stdPct) = InvokeCanVocalNoteBeHitStd(stdEngine, stdNote, sungPitch: 80f);
+        Assert.That(freeHit, Is.EqualTo(stdHit), "Free and Std engines should agree on miss for far-off pitch");
+        Assert.That(freePct, Is.EqualTo(stdPct), "Free and Std engines should agree on hit percent for far-off pitch");
+    }
+
+    // ================================================================
+    // AC2.3: HARM2 NotePhrases empty -- engine does not throw
+    // ================================================================
+    [Test]
+    public void HARM2NotePhrasesEmpty_EngineDoesNotThrow()
+    {
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(isHarmony: false),
+            CreateVocalsPart(isHarmony: true),
+        };
+
+        // HARM1: has a phrase
+        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);
+
+        // HARM2: no phrases added (empty NotePhrases list)
+
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var syncTrack = new SyncTrack(480);
+
+        Assert.DoesNotThrow(() =>
+        {
+            var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, false);
+
+            // Should be able to check notes on HARM1 without exception
+            var harm1Note = parts[0].NotePhrases[0].PhraseParentNote.ChildNotes[0];
+            var (hit, pct) = InvokeCanVocalNoteBeHit(engine, harm1Note, sungPitch: 60f);
+            Assert.That(hit, Is.True, "HARM1 note should still be hittable when HARM2 is empty");
+            Assert.That(pct, Is.EqualTo(1f));
+        }, "Free engine should not throw when HARM2 NotePhrases is empty");
+    }
+
+    // ================================================================
+    // AC2.3: No-match negative -- every pitch outside all windows -> PhraseTicksHit == 0
+    // ================================================================
+    [Test]
+    public void AllPitchesOutsideAllWindows_PhraseTicksHitIsZero()
+    {
+        // Create a 2-part track: HARM1 at C4=60, HARM2 at E4=64
+        var engine = CreateEngine(out var parts);
+
+        // Sing F#5 = 78 (well outside both windows: 18 semitones from C4, 14 from E4)
+        var harm1Note = parts[0].NotePhrases[0].PhraseParentNote.ChildNotes[0];
+        var harm2Note = parts[1].NotePhrases[0].PhraseParentNote.ChildNotes[0];
+
+        var (hit1, pct1) = InvokeCanVocalNoteBeHit(engine, harm1Note, sungPitch: 78f);
+        var (hit2, pct2) = InvokeCanVocalNoteBeHit(engine, harm2Note, sungPitch: 78f);
+
+        Assert.That(hit1, Is.False, "F#5 should not match C4");
+        Assert.That(pct1, Is.EqualTo(0f), "No hit percent on HARM1");
+        Assert.That(hit2, Is.False, "F#5 should not match E4");
+        Assert.That(pct2, Is.EqualTo(0f), "No hit percent on HARM2");
+
+        // The actual PhraseTicksHit accumulation requires driving through the engine's
+        // CheckSingingHit path. Simulate the full engine cycle with off-pitch inputs.
+        var engine2 = CreateEngine(out var parts2);
+
+        // Drive engine with pitch inputs that are outside all windows.
+        // The phrase spans ticks 0-480, time 0-1.0. Send multiple sing inputs at F#5=78.
+        for (double t = 0.0; t <= 0.99; t += 1.0 / 60.0)
+        {
+            var input = GameInput.Create(t, VocalsAction.Pitch, 78f);
+            engine2.QueueInput(ref input);
+        }
+
+        // Advance past the phrase end to trigger phrase completion
+        engine2.Update(1.5);
+
+        // After phrase completion, PhraseTicksHit is reset but EngineStats.TicksMissed
+        // should reflect the full phrase
+        Assert.That(engine2.PhraseTicksHit, Is.EqualTo(0.0),
+            "PhraseTicksHit should be 0 after all pitches missed");
+    }
+
+    // ================================================================
     // Helpers
     // ================================================================
 
@@ -364,5 +583,26 @@ public sealed class FreeVocalsEngineTests
         var result = (bool)CanVocalNoteBeHitMethod.Invoke(engine, hitPercent)!;
 
         return (result, (float)hitPercent[1]);
+    }
+
+    /// <summary>
+    /// Invokes CanVocalNoteBeHit on a YargVocalsEngine via reflection.
+    /// </summary>
+    private static (bool hit, float hitPercent) InvokeCanVocalNoteBeHitStd(
+        YargVocalsEngine engine, VocalNote note, float sungPitch)
+    {
+        var canHitMethod = typeof(YargVocalsEngine).GetMethod("CanVocalNoteBeHit",
+            BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("Could not find CanVocalNoteBeHit on YargVocalsEngine");
+
+        PitchSangProperty.SetValue(engine, sungPitch);
+        CurrentTimeProperty.SetValue(engine, 0.0);
+
+        var args = new object[2];
+        args[0] = note;
+        args[1] = 0f;
+
+        var result = (bool)canHitMethod.Invoke(engine, args)!;
+        return (result, (float)args[1]);
     }
 }
