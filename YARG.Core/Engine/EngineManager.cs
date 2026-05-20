@@ -124,9 +124,18 @@ namespace YARG.Core.Engine
             return engineContainer;
         }
 
+        /// <summary>
+        /// Registers an engine with an explicit harmony index. Requires harmonyIndex >= 0.
+        /// For free vocals, use the overload that accepts a boolean freeVocals parameter instead.
+        /// </summary>
         public EngineContainer Register<TEngineType>(TEngineType engine, Instrument instrument, int harmonyIndex, SongChart chart, RockMeterPreset rockMeterPreset)
             where TEngineType : BaseEngine
         {
+            if (harmonyIndex < 0)
+            {
+                YargLogger.FailFormat("Indexed Register requires harmonyIndex >= 0; got {0}", harmonyIndex);
+            }
+
             if (_chart == null)
             {
                 _chart = chart;
