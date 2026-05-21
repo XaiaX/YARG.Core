@@ -13,12 +13,14 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         // Store reference to all parts for hit testing
         private readonly IReadOnlyList<VocalsPart> _allParts;
+        private readonly int _botPartIndex;
 
         public YargFreeVocalsEngine(InstrumentDifficulty<VocalNote> primaryChart, IReadOnlyList<VocalsPart> allParts,
-            SyncTrack syncTrack, VocalsEngineParameters engineParameters, bool isBot)
+            SyncTrack syncTrack, VocalsEngineParameters engineParameters, bool isBot, int botPartIndex = 0)
             : base(primaryChart, syncTrack, engineParameters, isBot)
         {
             _allParts = allParts;
+            _botPartIndex = Math.Max(0, Math.Min(botPartIndex, allParts.Count - 1));
             // Build countdowns from all parts for free vocals
             BuildCountdownsFromAllParts(allParts.ToList());
         }
@@ -34,8 +36,19 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             var phrase = Notes[NoteIndex];
 
-            // Handle singing notes - only hit HARM1 for bot mode
-            var singNote = GetNoteInPhraseAtSongTick(phrase, CurrentTick);
+            // Find the active phrase from the target bot part
+            VocalNote? botPhrase = null;
+            foreach (var partPhrase in _allParts[_botPartIndex].NotePhrases)
+            {
+                var pn = partPhrase.PhraseParentNote;
+                if (CurrentTick >= pn.Tick && CurrentTick <= pn.TotalTickEnd)
+                {
+                    botPhrase = pn;
+                    break;
+                }
+            }
+
+            var singNote = botPhrase is not null ? GetNoteInPhraseAtSongTick(botPhrase, CurrentTick) : null;
             if (singNote is not null)
             {
                 // Bots are queued extra updates to account for in-between "inputs"
@@ -176,7 +189,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             // We only need to check _allParts to avoid double-counting HARM1 notes
             // For bot mode, only check HARM1 (first part)
             var partsToCheck = IsBot ?
-                _allParts.Take(1).ToList() :
+                _allParts.Skip(_botPartIndex).Take(1).ToList() :
                 _allParts;
 
             // Check each part for active notes
