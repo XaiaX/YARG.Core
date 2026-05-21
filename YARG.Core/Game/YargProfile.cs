@@ -122,7 +122,13 @@ namespace YARG.Core.Game
         /// <summary>
         /// Checks if this profile is currently using free vocals mode.
         /// </summary>
-        public bool IsFreeVocals => CurrentInstrument == Instrument.Vocals && _freeHarmony;
+        // Free Vocals applies to either vocals-family instrument: Solo Vocals OR Harmony.
+        // The latter case happens on songs with HARM tracks but no separate Solo chart
+        // (e.g. Bohemian Rhapsody) — the menu forces CurrentInstrument to Harmony there
+        // because Vocals isn't in the song's possible-instruments list.
+        public bool IsFreeVocals =>
+            (CurrentInstrument == Instrument.Vocals || CurrentInstrument == Instrument.Harmony)
+            && _freeHarmony;
 
         /// <summary>
         /// The currently selected modifiers as a flag.
