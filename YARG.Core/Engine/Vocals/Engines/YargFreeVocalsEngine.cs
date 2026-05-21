@@ -21,8 +21,6 @@ namespace YARG.Core.Engine.Vocals.Engines
             _allParts = allParts;
             // Build countdowns from all parts for free vocals
             BuildCountdownsFromAllParts(allParts.ToList());
-
-            // Phase 4 note: Use VocalsPart.CloneAsInstrumentDifficulty() to build primaryChart from allParts[0]
         }
 
         protected override void UpdateBot(double songTime)
@@ -216,10 +214,10 @@ namespace YARG.Core.Engine.Vocals.Engines
             {
                 // Update target harmony index only if it changed (retains last value when no match)
                 // Only update when we actually hit a note to ensure index retains last value when no part matches
-                if (bestPartIndex != CurrentTargetHarmonyIndex && bestNote != null)
+                if (bestPartIndex != CurrentTargetHarmonyIndex)
                 {
                     CurrentTargetHarmonyIndex = bestPartIndex;
-                    OnTargetNoteChanged?.Invoke(bestNote);
+                    OnTargetNoteChanged?.Invoke(bestNote!);
                 }
 
                 // Add the hit percent to the phrase ticks hit
