@@ -103,9 +103,11 @@ namespace YARG.Core.Game
         [JsonIgnore]
         public byte HarmonyIndex
         {
-            // Only expose harmony index when playing harmonies, ensures consistent behavior
-            // while still allowing harmony index to persist between instrument switches
-            get => CurrentInstrument == Instrument.Harmony ? _harmonyIndex : (byte) 0;
+            // Expose the stored index when playing Harmony OR when Free Harmony is active
+            // (the Free Vocals engine uses HarmonyIndex as botPartIndex for bots and as the
+            // starting target index for humans — masking it to 0 means every Free bot
+            // sings HARM1 regardless of their menu selection).
+            get => (CurrentInstrument == Instrument.Harmony || _freeHarmony) ? _harmonyIndex : (byte) 0;
             set => _harmonyIndex = value;
         }
 
