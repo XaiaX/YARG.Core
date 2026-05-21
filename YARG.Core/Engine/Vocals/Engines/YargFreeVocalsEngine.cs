@@ -55,6 +55,15 @@ namespace YARG.Core.Engine.Vocals.Engines
                 PitchSang = singNote.PitchAtSongTime(songTime);
                 HasSang = true;
                 OnSing?.Invoke(true);
+
+                // Drive the visual "on note" state for bots: VocalsPlayer's needle path
+                // anchors to _lastTargetNote when _lastHitTime is recent, otherwise it
+                // applies AnchorPitchToOctave which adds a 12-semitone offset when
+                // _lastTargetNote is null. CheckSingingHit's per-tick gating doesn't
+                // fire OnTargetNoteChanged for bots (bestPartIndex always matches the
+                // initial CurrentTargetHarmonyIndex of 0), so emit here unconditionally.
+                OnTargetNoteChanged?.Invoke(singNote);
+                OnHit?.Invoke(true);
             }
             else
             {
