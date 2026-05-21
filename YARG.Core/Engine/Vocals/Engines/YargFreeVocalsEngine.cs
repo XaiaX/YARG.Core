@@ -15,14 +15,34 @@ namespace YARG.Core.Engine.Vocals.Engines
         private readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
 
+        // Resolved bot part for the current tick after applying the per-phrase fallback:
+        // if the assigned _botPartIndex has no active phrase, fall back to the lowest-numbered
+        // part that does. Updated in UpdateBot, consumed by CheckSingingHit so the bot scores
+        // against whatever line it's actually singing.
+        private int _currentBotEffectivePartIndex;
+
         public YargFreeVocalsEngine(InstrumentDifficulty<VocalNote> primaryChart, IReadOnlyList<VocalsPart> allParts,
             SyncTrack syncTrack, VocalsEngineParameters engineParameters, bool isBot, int botPartIndex = 0)
             : base(primaryChart, syncTrack, engineParameters, isBot)
         {
             _allParts = allParts;
             _botPartIndex = Math.Max(0, Math.Min(botPartIndex, allParts.Count - 1));
+            _currentBotEffectivePartIndex = _botPartIndex;
             // Build countdowns from all parts for free vocals
             BuildCountdownsFromAllParts(allParts.ToList());
+        }
+
+        private VocalNote? FindActivePhraseInPart(int partIndex)
+        {
+            foreach (var partPhrase in _allParts[partIndex].NotePhrases)
+            {
+                var pn = partPhrase.PhraseParentNote;
+                if (CurrentTick >= pn.Tick && CurrentTick <= pn.TotalTickEnd)
+                {
+                    return pn;
+                }
+            }
+            return null;
         }
 
         protected override void UpdateBot(double songTime)
@@ -36,17 +56,28 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             var phrase = Notes[NoteIndex];
 
-            // Find the active phrase from the target bot part
-            VocalNote? botPhrase = null;
-            foreach (var partPhrase in _allParts[_botPartIndex].NotePhrases)
+            // Find the active phrase for the bot. Prefer the assigned _botPartIndex; if no
+            // phrase covers the current tick there, fall back to the lowest-numbered part
+            // that does have an active phrase. This keeps a bot audible on sections where
+            // its assigned HARM line isn't charted (common when a song collapses dual leads
+            // into HARM1/2/3 but leaves gaps on individual parts).
+            VocalNote? botPhrase = FindActivePhraseInPart(_botPartIndex);
+            int effectiveIndex = _botPartIndex;
+            if (botPhrase is null)
             {
-                var pn = partPhrase.PhraseParentNote;
-                if (CurrentTick >= pn.Tick && CurrentTick <= pn.TotalTickEnd)
+                for (int i = 0; i < _allParts.Count; i++)
                 {
-                    botPhrase = pn;
-                    break;
+                    if (i == _botPartIndex) continue;
+                    var fallback = FindActivePhraseInPart(i);
+                    if (fallback is not null)
+                    {
+                        botPhrase = fallback;
+                        effectiveIndex = i;
+                        break;
+                    }
                 }
             }
+            _currentBotEffectivePartIndex = effectiveIndex;
 
             // Search botPhrase directly instead of using GetNoteInPhraseAtSongTick, which
             // short-circuits to the base engine's CarriedVocalNote — that's populated from
@@ -215,8 +246,10 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Note: The primary chart (phrase.ChildNotes) is HARM1 from _allParts[0]
             // We only need to check _allParts to avoid double-counting HARM1 notes
             // For bot mode, only check HARM1 (first part)
+            // Bots score against the part they're currently singing (which may be a
+            // fallback chosen in UpdateBot when the assigned HARM part has no phrase here).
             var partsToCheck = IsBot ?
-                _allParts.Skip(_botPartIndex).Take(1).ToList() :
+                _allParts.Skip(_currentBotEffectivePartIndex).Take(1).ToList() :
                 _allParts;
 
             // Check each part for active notes
@@ -260,8 +293,18 @@ namespace YARG.Core.Engine.Vocals.Engines
                     OnTargetNoteChanged?.Invoke(bestNote!);
                 }
 
-                // Add the hit percent to the phrase ticks hit
-                PhraseTicksHit += bestHitPercent;
+                // Scale the hit by chart ticks elapsed since the last sing, matching
+                // YargVocalsEngine. PhraseTicksTotal is in chart ticks (hundreds to
+                // thousands per phrase); previously we just added bestHitPercent
+                // (a 0-1 value) once per UpdateHitLogic, so PhraseTicksHit could never
+                // approach PhraseTicksTotal and every phrase graded as "messy" no matter
+                // how perfectly the singer hit the notes.
+                var maxLeniency = 1.0 / EngineParameters.ApproximateVocalFps;
+                var lastTick = Math.Max(
+                    SyncTrack.TimeToTick(CurrentTime - maxLeniency),
+                    lastSingTick);
+                var ticksSinceLast = CurrentTick - lastTick;
+                PhraseTicksHit += ticksSinceLast * bestHitPercent;
 
                 // Trigger hit event
                 if (HasHit)
