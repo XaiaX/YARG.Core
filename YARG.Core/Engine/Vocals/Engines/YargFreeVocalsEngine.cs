@@ -48,7 +48,25 @@ namespace YARG.Core.Engine.Vocals.Engines
                 }
             }
 
-            var singNote = botPhrase is not null ? GetNoteInPhraseAtSongTick(botPhrase, CurrentTick) : null;
+            // Search botPhrase directly instead of using GetNoteInPhraseAtSongTick, which
+            // short-circuits to the base engine's CarriedVocalNote — that's populated from
+            // the primary chart (HARM1 for all Free bots), so it would return a HARM1 note
+            // even when botPhrase is HARM2/HARM3. Result: the needle would always sit on
+            // HARM1 regardless of the bot's assigned harmony index.
+            VocalNote? singNote = null;
+            if (botPhrase is not null)
+            {
+                foreach (var childNote in botPhrase.ChildNotes)
+                {
+                    if (!childNote.IsPercussion
+                        && CurrentTick >= childNote.Tick
+                        && CurrentTick <= childNote.TotalTickEnd)
+                    {
+                        singNote = childNote;
+                        break;
+                    }
+                }
+            }
             if (singNote is not null)
             {
                 // Bots are queued extra updates to account for in-between "inputs"
