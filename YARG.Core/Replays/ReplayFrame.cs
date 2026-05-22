@@ -31,7 +31,7 @@ namespace YARG.Core.Replays
         /// for microphone i, sampled at the same cadence as GameInput entries in Inputs.
         /// Null for non-Party-Vocals replays.
         /// </summary>
-        public float[][] MicPitches;
+        public float[][]? MicPitches;
 
         public int InputCount => Inputs.Length;
 
