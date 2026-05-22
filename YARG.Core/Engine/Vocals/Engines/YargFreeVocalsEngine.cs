@@ -82,6 +82,72 @@ namespace YARG.Core.Engine.Vocals.Engines
             BuildCountdownsFromAllParts(allParts.ToList());
         }
 
+        private void UpdateBotMultiMic(double songTime)
+        {
+            int partCount = _allParts.Count;
+            bool anyMicSang = false;
+            VocalNote? representativeNote = null;
+
+            for (int micIdx = 0; micIdx < _micCount; micIdx++)
+            {
+                int targetPart = micIdx % partCount;
+
+                // Prefer the bot mic's assigned part; if no phrase active, fall back to
+                // any other part that does have one (lowest-numbered wins).
+                VocalNote? phrase = FindActivePhraseInPart(targetPart);
+                if (phrase is null)
+                {
+                    for (int j = 0; j < partCount; j++)
+                    {
+                        if (j == targetPart) continue;
+                        var fallback = FindActivePhraseInPart(j);
+                        if (fallback is not null)
+                        {
+                            phrase = fallback;
+                            break;
+                        }
+                    }
+                }
+                if (phrase is null) continue;
+
+                VocalNote? singNote = null;
+                foreach (var childNote in phrase.ChildNotes)
+                {
+                    if (!childNote.IsPercussion
+                        && CurrentTick >= childNote.Tick
+                        && CurrentTick <= childNote.TotalTickEnd)
+                    {
+                        singNote = childNote;
+                        break;
+                    }
+                }
+                if (singNote is null) continue;
+
+                _micPitches[micIdx] = singNote.PitchAtSongTime(songTime);
+                _micHasSang[micIdx] = true;
+                anyMicSang = true;
+                representativeNote ??= singNote;
+            }
+
+            if (anyMicSang)
+            {
+                HasSang = true;
+                // Mirror the single-mic bot path's PitchSang for any legacy single-pitch
+                // consumer (HUD particles, OnSing semantics).
+                PitchSang = _micPitches[0];
+                OnSing?.Invoke(true);
+                // Drive needle anchoring: VocalsPlayer's multi-needle update inspects
+                // _lastTargetNote and IsInThreshold(_lastHitTime). Without these events,
+                // every needle falls through to AnchorPitchToOctave's +12-semitone fallback.
+                OnTargetNoteChanged?.Invoke(representativeNote!);
+                OnHit?.Invoke(true);
+            }
+            else
+            {
+                OnHit?.Invoke(false);
+            }
+        }
+
         private VocalNote? FindActivePhraseInPart(int partIndex)
         {
             foreach (var partPhrase in _allParts[partIndex].NotePhrases)
@@ -103,6 +169,17 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
 
             IsStarPowerInputActive = CanStarPowerActivate && !IsStarPowerInputActive;
+
+            // Party Vocals bot: simulate one vocalist per HARM part (cycling if mic count
+            // exceeds part count). Each simulated mic produces the perfect pitch for its
+            // assigned part. Populates the multi-mic buffers so AccumulateMicPartHits and
+            // the rolling-window assignment run identically to a real multi-mic Party
+            // Vocals player.
+            if (_micCount > 1)
+            {
+                UpdateBotMultiMic(songTime);
+                return;
+            }
 
             var phrase = Notes[NoteIndex];
 
@@ -222,9 +299,10 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             CheckForNoteHit();
 
-            // Multi-mic per-mic-per-part hidden accumulation. Bot path bypasses this — bots use the
-            // existing single-pitch synthetic path via UpdateBot.
-            if (!IsBot && _micCount > 1)
+            // Multi-mic per-mic-per-part hidden accumulation. Runs for both humans (real mic
+            // input) and Party Vocals bots (synthetic pitches populated in UpdateBotMultiMic).
+            // Single-mic bots still use the single-pitch path via UpdateBot.
+            if (_micCount > 1)
             {
                 AccumulateMicPartHits();
 
