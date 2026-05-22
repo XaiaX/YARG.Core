@@ -52,11 +52,6 @@ public sealed class PartyVocalsEngineTests
             BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
         ?? throw new InvalidOperationException("Could not find _micPartHits field");
 
-    private static readonly MethodInfo GetMicPartHitMethod =
-        typeof(YargFreeVocalsEngine).GetMethod("GetMicPartHit",
-            BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
-        ?? throw new InvalidOperationException("Could not find GetMicPartHit method");
-
     // ================================================================
     // AC3.1: Multi-mic engine construction with micCount parameter
     // ================================================================
@@ -299,8 +294,9 @@ public sealed class PartyVocalsEngineTests
         engine.SetMicPitch(1, 60f);
         engine.Update(0.25);
 
-        var mic0Part0 = (double)GetMicPartHitMethod.Invoke(engine, new object[] { 0, 0 })!;
-        var mic1Part0 = (double)GetMicPartHitMethod.Invoke(engine, new object[] { 1, 0 })!;
+        var micPartHits = (double[,])MicPartHitsField.GetValue(engine)!;
+        var mic0Part0 = micPartHits[0, 0];
+        var mic1Part0 = micPartHits[1, 0];
 
         Assert.Multiple(() =>
         {

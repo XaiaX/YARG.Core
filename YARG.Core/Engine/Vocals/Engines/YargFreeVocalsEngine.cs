@@ -37,9 +37,6 @@ namespace YARG.Core.Engine.Vocals.Engines
         private readonly double[] _canonicalMeters;
         private readonly uint[] _phraseTicksTotalPerPart;
 
-        // Solo-only-song max-over-mics state
-        private double _soloOnlyCurrentTickMaxHitPercent;
-
         public YargFreeVocalsEngine(InstrumentDifficulty<VocalNote> primaryChart, IReadOnlyList<VocalsPart> allParts,
             SyncTrack syncTrack, VocalsEngineParameters engineParameters, bool isBot, int botPartIndex = 0)
             : this(primaryChart, allParts, syncTrack, engineParameters, isBot, micCount: 1, botPartIndex)
@@ -75,9 +72,6 @@ namespace YARG.Core.Engine.Vocals.Engines
             _cumulativeAssignedTicks = new double[allParts.Count];
             _canonicalMeters = new double[allParts.Count];
             _phraseTicksTotalPerPart = new uint[allParts.Count];
-
-            // Solo-only-song max-over-mics state
-            _soloOnlyCurrentTickMaxHitPercent = 0;
 
             // Build countdowns from all parts for free vocals
             BuildCountdownsFromAllParts(allParts.ToList());
@@ -600,8 +594,6 @@ namespace YARG.Core.Engine.Vocals.Engines
             _micPitches[micIndex] = pitch;
             _micHasSang[micIndex] = true;
         }
-
-        internal double GetMicPartHit(int micIndex, int partIndex) => _micPartHits[micIndex, partIndex];
 
         /// <summary>
         /// Find the assignment of mics to parts that maximizes (in priority order):
