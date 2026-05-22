@@ -1,145 +1,51 @@
 using NUnit.Framework;
 using System;
-using System.Collections.Generic;
-using YARG.Core.Audio;
-using YARG.Core.Game;
 
 namespace YARG.Core.UnitTests.Input;
 
 [TestFixture]
 public sealed class BindingSerializationTests
 {
-    // Test for party-vocals.AC2.2: Deserialize V3 single mic payload
-    [Test]
-    public void Deserialize_V3SingleMicPayload_MigratesToSingleElementMicList()
-    {
-        // Arrange - Create V3 serialized data with a single microphone
-        var v3Data = new SerializedProfileBindingsV3
-        {
-            Microphone = new SerializedMic("TestDevice")
-        };
+    // NOTE: The actual v3→v4 migration testing cannot be implemented in YARG.Core.UnitTests
+    // because the serialization classes (SerializedProfileBindings, SerializedProfileBindingsV3)
+    // live in the Unity project and cannot be referenced from YARG.Core.UnitTests.
+    //
+    // The v3→v4 migration path can only be tested via Unity Editor integration tests.
+    // This test file has been simplified to only test what can actually be verified:
+    // - The SerializedMic data structure itself (which lives in YARG.Core)
+    // - Basic functionality of the core data structures
 
-        // Act - Deserialize using the migration logic
-        var current = BindingSerializationV3.MigrateToCurrent(v3Data);
+    // Test for SerializedMic basic functionality
+    [Test]
+    public void SerializedMic_Creation_PreservesName()
+    {
+        // Arrange & Act
+        var mic = new YARG.Core.Audio.SerializedMic("TestDevice");
 
         // Assert
-        Assert.That(current.Microphones, Is.Not.Null);
-        Assert.That(current.Microphones.Count, Is.EqualTo(1), "Should have exactly 1 microphone after migration");
-        Assert.That(current.Microphones[0].Name, Is.EqualTo("TestDevice"), "Device name should be preserved");
-        Assert.That(current.Microphone, Is.Not.Null, "Microphone shim should return the migrated device");
-        Assert.That(current.Microphone!.Name, Is.EqualTo("TestDevice"), "Shim should return the correct device");
+        Assert.That(mic.Name, Is.EqualTo("TestDevice"));
     }
 
-    // Test for party-vocals.AC2.2: Deserialize V3 null mic payload
+    // Test for SerializedMic equality (based on name)
     [Test]
-    public void Deserialize_V3NullMicPayload_MigratesToEmptyMicList()
+    public void SerializedMic_Equality_SameName_ReturnsTrue()
     {
-        // Arrange - Create V3 serialized data with null microphone
-        var v3Data = new SerializedProfileBindingsV3
-        {
-            Microphone = null
-        };
+        // Arrange
+        var mic1 = new YARG.Core.Audio.SerializedMic("TestDevice");
+        var mic2 = new YARG.Core.Audio.SerializedMic("TestDevice");
 
-        // Act - Deserialize using the migration logic
-        var current = BindingSerializationV3.MigrateToCurrent(v3Data);
-
-        // Assert
-        Assert.That(current.Microphones, Is.Not.Null);
-        Assert.That(current.Microphones.Count, Is.EqualTo(0), "Should have empty microphone list when migrating from null");
-        Assert.That(current.Microphone, Is.Null, "Microphone shim should return null when no devices");
+        // Act & Assert
+        Assert.That(mic1.Name, Is.EqualTo(mic2.Name));
     }
 
-    // Test for party-vocals.AC2.3: Three mic list behavior
     [Test]
-    public void SerializedProfileBindings_ThreeMicList_PreservesOrder()
+    public void SerializedMic_Equality_DifferentNames_ReturnsFalse()
     {
-        // Arrange - Create current serialized bindings with 3 microphones
-        var original = new SerializedProfileBindings
-        {
-            Microphones =
-            {
-                new SerializedMic("Device1"),
-                new SerializedMic("Device2"),
-                new SerializedMic("Device3")
-            }
-        };
+        // Arrange
+        var mic1 = new YARG.Core.Audio.SerializedMic("Device1");
+        var mic2 = new YARG.Core.Audio.SerializedMic("Device2");
 
-        // Assert - Verify the list is created correctly
-        Assert.That(original.Microphones.Count, Is.EqualTo(3), "Should have 3 microphones");
-
-        // Verify order is preserved
-        Assert.That(original.Microphones[0].Name, Is.EqualTo("Device1"), "First device should be preserved");
-        Assert.That(original.Microphones[1].Name, Is.EqualTo("Device2"), "Second device should be preserved");
-        Assert.That(original.Microphones[2].Name, Is.EqualTo("Device3"), "Third device should be preserved");
-
-        // Verify shim property
-        Assert.That(original.Microphone, Is.Not.Null, "Shim should return first device");
-        Assert.That(original.Microphone!.Name, Is.EqualTo("Device1"), "Shim should return first device");
-    }
-
-    // Test for party-vocals.AC2.3: Empty mic list behavior
-    [Test]
-    public void SerializedProfileBindings_EmptyMicList_ReturnsNullShim()
-    {
-        // Arrange - Create current serialized bindings with empty microphone list
-        var original = new SerializedProfileBindings
-        {
-            Microphones = new()
-        };
-
-        // Assert
-        Assert.That(original.Microphones.Count, Is.EqualTo(0), "Should have empty list");
-        Assert.That(original.Microphone, Is.Null, "Shim should return null when list is empty");
-    }
-
-    // Test for party-vocals.AC2.3: Single mic list behavior
-    [Test]
-    public void SerializedProfileBindings_SingleMicList_ShimReturnsCorrectDevice()
-    {
-        // Arrange - Create current serialized bindings with single microphone
-        var original = new SerializedProfileBindings
-        {
-            Microphones =
-            {
-                new SerializedMic("SingleDevice")
-            }
-        };
-
-        // Assert
-        Assert.That(original.Microphones.Count, Is.EqualTo(1), "Should have 1 microphone");
-        Assert.That(original.Microphones[0].Name, Is.EqualTo("SingleDevice"), "Device name should be preserved");
-        Assert.That(original.Microphone, Is.Not.Null, "Shim should return the device");
-        Assert.That(original.Microphone!.Name, Is.EqualTo("SingleDevice"), "Shim should return the correct device");
-    }
-}
-
-// V3 serialization types (simplified for testing - focusing only on mic data)
-public class SerializedProfileBindingsV3
-{
-    public SerializedMic? Microphone;
-}
-
-// Current serialization types (simplified for testing - focusing only on mic data)
-public class SerializedProfileBindings
-{
-    public List<SerializedMic> Microphones { get; set; } = new();
-
-    public SerializedMic? Microphone => Microphones.Count > 0 ? Microphones[0] : null;
-}
-
-// Migration method (matching what was created in Task 1)
-public static class BindingSerializationV3
-{
-    public static SerializedProfileBindings MigrateToCurrent(SerializedProfileBindingsV3 from)
-    {
-        var current = new SerializedProfileBindings();
-
-        // Migrate microphone to list
-        if (from.Microphone is not null)
-        {
-            current.Microphones.Add(from.Microphone);
-        }
-
-        return current;
+        // Act & Assert
+        Assert.That(mic1.Name, Is.Not.EqualTo(mic2.Name));
     }
 }
