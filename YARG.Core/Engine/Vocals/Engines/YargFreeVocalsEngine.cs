@@ -295,7 +295,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                         IncrementCombo();
                     }
 
-                    OnPartyVocalsPhrase?.Invoke(grade, _canonicalMeters, isLastPhrase);
+                    OnPartyVocalsPhrase?.Invoke(grade, _canonicalMeters.ToArray(), isLastPhrase);
 
                     // Reset all window state for next phrase
                     Array.Clear(_micPartHits, 0, _micPartHits.Length);
