@@ -46,8 +46,8 @@ public sealed class YargProfileSerializationTests
             "IsFreeVocals should be true when FreeHarmony + Vocals");
         Assert.That(deserialized.Name, Is.EqualTo("TestProfile"),
             "Name should survive serialization round-trip");
-        Assert.That(deserialized.Version, Is.EqualTo(9),
-            "Profile version should be 9 after round-trip serialization");
+        Assert.That(deserialized.Version, Is.EqualTo(10),
+            "Profile version should be 10 after round-trip serialization");
     }
 
     // Round-trip with FreeHarmony=false should also work
