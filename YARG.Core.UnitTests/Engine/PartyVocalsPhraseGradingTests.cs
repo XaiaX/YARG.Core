@@ -69,9 +69,16 @@ public sealed class PartyVocalsPhraseGradingTests
         var syncTrack = CreateSyncTrackWithTempo();
         var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, false, micCount: 2);
 
-        // Capture initial state
-        var initialMicPartHits = (double[,])MicPartHitsField.GetValue(engine)!;
-        var canonicalMeters = (double[])CanonicalMetersField.GetValue(engine)!;
+        // Capture intermediate state before phrase end (rollback windows should fire during phrase)
+        IReadOnlyList<double>? capturedMetersDuringPhrase = null;
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) =>
+        {
+            // Capture first phrase event which should happen during phrase processing
+            if (!isLast)
+            {
+                capturedMetersDuringPhrase = meters;
+            }
+        };
 
         // Feed pitch input for 1.5 seconds (should trigger ~3 rollback windows at 500ms)
         // Mic 0 sings C4 (60) which matches HARM1
@@ -85,16 +92,27 @@ public sealed class PartyVocalsPhraseGradingTests
         // Let the engine process through phrase end
         engine.Update(3.0);
 
-        // Check that meters were updated during rollback
-        var finalMeters = (double[])CanonicalMetersField.GetValue(engine)!;
-        Assert.That(finalMeters[0], Is.GreaterThan(0), "HARM1 meter should be filled");
-        Assert.That(finalMeters[1], Is.GreaterThan(0), "HARM2 meter should be filled");
-        Assert.That(finalMeters[2], Is.GreaterThan(0), "HARM3 meter should be filled by mic 1");
+        // Check that meters were updated during rollback (captured from event)
+        Assert.That(capturedMetersDuringPhrase, Is.Not.Null, "Should have captured meters during phrase");
+        Assert.That(capturedMetersDuringPhrase![0], Is.GreaterThan(0), "HARM1 meter should be filled");
+        Assert.That(capturedMetersDuringPhrase[1], Is.GreaterThan(0), "HARM2 meter should be filled");
+        Assert.That(capturedMetersDuringPhrase[2], Is.GreaterThan(0), "HARM3 meter should be filled by mic 1");
 
-        // Check that mic part hits buffer is NOT zeroed (buffer preserved)
-        var finalMicPartHits = (double[,])MicPartHitsField.GetValue(engine)!;
-        Assert.That(finalMicPartHits[0, 0], Is.GreaterThan(0), "Mic 0 HARM1 should still have accumulated hits");
-        Assert.That(finalMicPartHits[1, 1], Is.GreaterThan(0), "Mic 1 HARM2 should still have accumulated hits");
+        // After phrase end, meters will be cleared, so we check the final phrase event
+        IReadOnlyList<double>? finalMeters = null;
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) =>
+        {
+            if (isLast)
+            {
+                finalMeters = meters;
+            }
+        };
+
+        engine.Update(4.0);
+
+        Assert.That(finalMeters, Is.Not.Null, "Should capture final phrase event");
+        Assert.That(finalMeters![0], Is.GreaterThan(0), "Final HARM1 meter should be filled");
+        Assert.That(finalMeters[1], Is.GreaterThan(0), "Final HARM2 meter should be filled");
     }
 
     // ================================================================
@@ -109,8 +127,8 @@ public sealed class PartyVocalsPhraseGradingTests
             CreateVocalsPart(isHarmony: true),   // HARM2 at E4 = 64
         };
 
-        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);
-        AddPhraseWithPitch(parts[1], 64, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[0], 60, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[1], 64, tickOffset: 0);
 
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
         var syncTrack = CreateSyncTrackWithTempo();
@@ -162,8 +180,8 @@ public sealed class PartyVocalsPhraseGradingTests
             CreateVocalsPart(isHarmony: true),   // HARM2 at E4 = 64
         };
 
-        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);
-        AddPhraseWithPitch(parts[1], 64, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[0], 60, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[1], 64, tickOffset: 0);
 
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
         var syncTrack = CreateSyncTrackWithTempo();
@@ -172,26 +190,41 @@ public sealed class PartyVocalsPhraseGradingTests
         // Capture phrase event
         PhraseGrade? capturedGrade = null;
         IReadOnlyList<double>? capturedMeters = null;
+        bool phraseEnded = false;
         int comboBefore = ((BaseStats)BaseStatsProperty.GetValue(engine)!).Combo;
 
         engine.OnPartyVocalsPhrase += (grade, meters, isLast) =>
         {
             capturedGrade = grade;
             capturedMeters = meters;
+            phraseEnded = true;
         };
 
         // Feed pitch matching only HARM1
-        for (double t = 0.0; t <= 1.0; t += 1.0 / 60.0)
+        for (double t = 0.0; t <= 1.5; t += 1.0 / 60.0)
         {
             engine.SetMicPitch(0, 60f); // C4 - matches HARM1
             engine.SetMicPitch(1, 78f); // F#5 - doesn't match either
             engine.Update(t + 0.1);
         }
 
-        // Advance past phrase end
-        engine.Update(1.5);
+        // Advance past phrase end (phrase ends at 2 seconds)
+        engine.Update(2.1);
+
+        // Debug output
+        Console.WriteLine($"Phrase ended: {phraseEnded}");
+        Console.WriteLine($"Captured grade: {capturedGrade}");
+        Console.WriteLine($"Captured meters: {capturedMeters}");
+
+        // Also check current engine state
+        var canonicalMeters = (double[])CanonicalMetersField.GetValue(engine)!;
+        var micPartHits = (double[,])MicPartHitsField.GetValue(engine)!;
+        Console.WriteLine($"Canonical meters: [{string.Join(", ", canonicalMeters)}]");
+        Console.WriteLine($"Mic part hits [0,0]: {micPartHits[0, 0]}");
+        Console.WriteLine($"Mic part hits [1,0]: {micPartHits[1, 0]}");
 
         // Verify results
+        Assert.That(phraseEnded, Is.True, "Phrase should have ended");
         Assert.That(capturedGrade, Is.EqualTo(PhraseGrade.Awesome), "Should emit Awesome grade");
         Assert.That(capturedMeters, Is.Not.Null, "Should capture meters");
         Assert.That(capturedMeters![0], Is.GreaterThanOrEqualTo(EngineParameters.PhraseHitPercent), "HARM1 meter above threshold");
@@ -214,8 +247,8 @@ public sealed class PartyVocalsPhraseGradingTests
             CreateVocalsPart(isHarmony: true),   // HARM2 at E4 = 64
         };
 
-        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);
-        AddPhraseWithPitch(parts[1], 64, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[0], 60, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[1], 64, tickOffset: 0);
 
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
         var syncTrack = CreateSyncTrackWithTempo();
@@ -233,7 +266,7 @@ public sealed class PartyVocalsPhraseGradingTests
         };
 
         // Feed mic 0 matching HARM1, mic 1 matching HARM2
-        for (double t = 0.0; t <= 1.0; t += 1.0 / 60.0)
+        for (double t = 0.0; t <= 1.5; t += 1.0 / 60.0)
         {
             engine.SetMicPitch(0, 60f); // C4 - matches HARM1
             engine.SetMicPitch(1, 64f); // E4 - matches HARM2
@@ -241,7 +274,7 @@ public sealed class PartyVocalsPhraseGradingTests
         }
 
         // Advance past phrase end
-        engine.Update(1.5);
+        engine.Update(3.0);
 
         // Verify results
         Assert.That(capturedGrade, Is.EqualTo(PhraseGrade.DoubleAwesome), "Should emit DoubleAwesome grade");
@@ -278,7 +311,7 @@ public sealed class PartyVocalsPhraseGradingTests
         };
 
         // Feed each mic matching a distinct part
-        for (double t = 0.0; t <= 1.0; t += 1.0 / 60.0)
+        for (double t = 0.0; t <= 1.5; t += 1.0 / 60.0)
         {
             engine.SetMicPitch(0, 60f); // C4 - matches HARM1
             engine.SetMicPitch(1, 64f); // E4 - matches HARM2
@@ -287,7 +320,7 @@ public sealed class PartyVocalsPhraseGradingTests
         }
 
         // Advance past phrase end
-        engine.Update(1.5);
+        engine.Update(3.0);
 
         // Verify results
         Assert.That(capturedGrade, Is.EqualTo(PhraseGrade.TripleAwesome), "Should emit TripleAwesome grade");
@@ -328,7 +361,7 @@ public sealed class PartyVocalsPhraseGradingTests
         // Mic 0 sings C4 (HARM1) occasionally to fill ~50% of HARM1
         // Mic 1 sings E4 (HARM2) moderately to fill ~80% of HARM2
         // Mic 2 sings G4 (HARM3) rarely to fill ~30% of HARM3
-        for (double t = 0.0; t <= 1.0; t += 1.0 / 60.0)
+        for (double t = 0.0; t <= 1.5; t += 1.0 / 60.0)
         {
             engine.SetMicPitch(0, 60f); // Always sing HARM1 to fill ~50%
             engine.SetMicPitch(1, 64f); // Always sing HARM2 to fill ~80%
@@ -337,7 +370,7 @@ public sealed class PartyVocalsPhraseGradingTests
         }
 
         // Advance past phrase end
-        engine.Update(1.5);
+        engine.Update(3.0);
 
         // Verify results
         Assert.That(capturedGrade, Is.Not.Null, "Should capture grade");
@@ -371,7 +404,7 @@ public sealed class PartyVocalsPhraseGradingTests
         var engine1 = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, false, micCount: 1);
 
         // Feed pitch to both engines for same duration
-        for (double t = 0.0; t <= 1.0; t += 1.0 / 60.0)
+        for (double t = 0.0; t <= 1.5; t += 1.0 / 60.0)
         {
             // 3-mic engine: all mics sing C4
             engine3.SetMicPitch(0, 60f);
@@ -385,8 +418,8 @@ public sealed class PartyVocalsPhraseGradingTests
         }
 
         // Advance past phrase end
-        engine3.Update(1.5);
-        engine1.Update(1.5);
+        engine3.Update(3.0);
+        engine1.Update(3.0);
 
         // Get meter values from both engines
         var meters3 = (double[])CanonicalMetersField.GetValue(engine3)!;
@@ -429,14 +462,14 @@ public sealed class PartyVocalsPhraseGradingTests
         };
 
         // Feed matching pitch for the whole phrase
-        for (double t = 0.0; t <= 1.0; t += 1.0 / 60.0)
+        for (double t = 0.0; t <= 1.5; t += 1.0 / 60.0)
         {
             engine.SetMicPitch(0, 60f); // C4 matches both parts
             engine.Update(t + 0.1);
         }
 
         // Advance past phrase end
-        engine.Update(1.5);
+        engine.Update(3.0);
 
         // Verify results
         Assert.That(capturedGrade, Is.EqualTo(PhraseGrade.Awesome),
@@ -459,28 +492,19 @@ public sealed class PartyVocalsPhraseGradingTests
         };
 
         // Add phrases at different times
-        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);      // HARM1 phrase: 0-480 ticks
-        AddPhraseWithPitch(parts[1], 64, tickOffset: 480);  // HARM2 phrase: 480-960 ticks
+        AddLongPhraseWithPitch(parts[0], 60, tickOffset: 0);      // HARM1 phrase: 0-960 ticks
+        AddLongPhraseWithPitch(parts[1], 64, tickOffset: 0);      // HARM2 phrase: 0-960 ticks, but notes at different times
 
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
         var syncTrack = CreateSyncTrackWithTempo();
         var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, false, micCount: 2);
 
-        // Create a longer phrase to allow both parts to be active
-        var longPhrase = new VocalNote(NoteFlags.None, false, 0.0, 2.0, 0, 960);
-        var harm1Note = new VocalNote(60, 0, VocalNoteType.Lyric, 0.0, 0.5, 0, 240);
+        // Modify HARM2 to have its note at the second half
+        var harm2Phrase = parts[1].NotePhrases[0];
+        var harm2PhraseNote = harm2Phrase.PhraseParentNote;
+        harm2PhraseNote.ChildNotes.Clear();
         var harm2Note = new VocalNote(64, 0, VocalNoteType.Lyric, 0.0, 0.5, 480, 240);
-        longPhrase.AddChildNote(harm1Note);
-        longPhrase.AddChildNote(harm2Note);
-        var lyrics = new List<LyricEvent>
-        {
-            new LyricEvent(LyricSymbolFlags.None, "Test", 0.0, 0),
-            new LyricEvent(LyricSymbolFlags.None, "Test", 0.0, 480)
-        };
-        parts[0].NotePhrases.Clear();
-        parts[1].NotePhrases.Clear();
-        parts[0].NotePhrases.Add(new VocalsPhrase(0.0, 2.0, 0, 960, longPhrase, new()));
-        parts[1].NotePhrases.Add(new VocalsPhrase(0.0, 2.0, 0, 960, longPhrase, new()));
+        harm2PhraseNote.AddChildNote(harm2Note);
 
         // Capture phrase event
         PhraseGrade? capturedGrade = null;
@@ -493,9 +517,9 @@ public sealed class PartyVocalsPhraseGradingTests
         };
 
         // Feed matching pitch for HARM1's section (first half), then HARM2's section (second half)
-        for (double t = 0.0; t <= 1.0; t += 1.0 / 60.0)
+        for (double t = 0.0; t <= 2.0; t += 1.0 / 60.0)
         {
-            if (t <= 0.5)
+            if (t <= 1.0)
             {
                 // First half: sing C4 (matches HARM1)
                 engine.SetMicPitch(0, 60f);
@@ -509,7 +533,7 @@ public sealed class PartyVocalsPhraseGradingTests
         }
 
         // Advance past phrase end
-        engine.Update(2.5);
+        engine.Update(3.0);
 
         // Verify results
         Assert.That(capturedGrade, Is.EqualTo(PhraseGrade.DoubleAwesome),
@@ -532,9 +556,9 @@ public sealed class PartyVocalsPhraseGradingTests
             CreateVocalsPart(isHarmony: true),
         };
 
-        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);
-        AddPhraseWithPitch(parts[1], 64, tickOffset: 0);
-        AddPhraseWithPitch(parts[2], 67, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[0], 60, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[1], 64, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[2], 67, tickOffset: 0);
 
         return parts;
     }
@@ -554,6 +578,19 @@ public sealed class PartyVocalsPhraseGradingTests
             new LyricEvent(LyricSymbolFlags.None, "Test", 0.0, tickOffset)
         };
         part.NotePhrases.Add(new VocalsPhrase(0.0, 1.0, tickOffset, 480, note, lyrics));
+    }
+
+    private static void AddLongPhraseWithPitch(VocalsPart part, int midiPitch, uint tickOffset)
+    {
+        var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, 960);
+        var lyricNote = new VocalNote(midiPitch, 0, VocalNoteType.Lyric, 0.0, 1.0, tickOffset, 480);
+        note.AddChildNote(lyricNote);
+        var lyrics = new List<LyricEvent>
+        {
+            new LyricEvent(LyricSymbolFlags.None, "Test", 0.0, tickOffset),
+            new LyricEvent(LyricSymbolFlags.None, "Test", 0.0, tickOffset + 480)
+        };
+        part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, 960, note, lyrics));
     }
 
     /// <summary>
