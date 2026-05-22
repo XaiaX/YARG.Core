@@ -25,10 +25,7 @@ public sealed class PartyVocalsScenarioTests
         VocalsEngineTests.SoloBonusStarMultiplierThresholds,
         1.5f, 0.5f, 0.75, 60.0, true, 1000);
 
-    private static readonly PropertyInfo BaseStatsProperty =
-        typeof(YargFreeVocalsEngine).BaseType.BaseType.GetProperty("BaseStats",
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not find BaseStats property");
+    private const int ApproximateVocalFps = 60;
 
     private static VocalsPart CreateVocalsPart(bool isHarmony = false) =>
         new(isHarmony, new(), new(), new(), new());
@@ -68,17 +65,20 @@ public sealed class PartyVocalsScenarioTests
         engine.Update(0.1);
         feedAction(engine);
         engine.Update(endTime);
-        var stats = (BaseStats)BaseStatsProperty.GetValue(engine)!;
+        var stats = engine.BaseStats;
         return (grades, stats.CommittedScore);
     }
 
     private static void FeedPitches(YargFreeVocalsEngine engine, int micCount,
         float[][] micPitchArrays, double startTime, double duration)
     {
-        int totalFrames = (int)(duration * 60);
+        if (micPitchArrays.Length < micCount)
+            throw new ArgumentException($"Expected {micCount} pitch arrays, got {micPitchArrays.Length}");
+
+        int totalFrames = (int)(duration * ApproximateVocalFps);
         for (int f = 0; f < totalFrames; f++)
         {
-            double time = startTime + (f + 1) / 60.0;
+            double time = startTime + (f + 1) / ApproximateVocalFps;
             for (int m = 0; m < micCount; m++)
             {
                 int idx = Math.Min(f, micPitchArrays[m].Length - 1);

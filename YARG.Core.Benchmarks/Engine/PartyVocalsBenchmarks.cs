@@ -56,12 +56,13 @@ public class PartyVocalsBenchmarks
         YargFreeVocalsEngine.ComputeBestAssignment(hits, totals, 0.6);
     }
 
-    private static void RunSingleTick(YargFreeVocalsEngine engine, int micCount)
+    private static void RunSingleTick(YargFreeVocalsEngine engine, int micCount, double time = 1.0)
     {
         for (int i = 0; i < micCount; i++)
         {
             engine.SetMicPitch(i, 60f + i);
         }
+        engine.Update(time);
     }
 
     private static List<VocalsPart> Create3PartChart()
