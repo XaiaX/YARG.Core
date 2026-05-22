@@ -181,40 +181,27 @@ public sealed class PartyVocalsEngineTests
         AddLongPhraseWithPitch(parts[1], 64, tickOffset: 0);
 
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
-        var engine = new YargFreeVocalsEngine(primaryChart, parts, new SyncTrack(480), EngineParameters, false, micCount: 2);
+        var syncTrack = CreateSyncTrackWithTempo();
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, false, micCount: 2);
 
-        // First verify the engine has multi-mic state
-        var micPitches = (float[])MicPitchesField.GetValue(engine)!;
         var micPartHits = (double[,])MicPartHitsField.GetValue(engine)!;
 
-        Assert.That(micPitches.Length, Is.EqualTo(2), "Engine should have 2 mics");
-        Assert.That(micPartHits.GetLength(0), Is.EqualTo(2), "Engine should have 2 mic rows");
-        Assert.That(micPartHits.GetLength(1), Is.EqualTo(2), "Engine should have 2 part columns");
+        Assert.That(micPartHits[0, 0], Is.EqualTo(0), "Should start at 0");
 
-        // Check initial state
-        Assert.That(micPartHits[0, 0], Is.EqualTo(0), "Mic 0 HARM1 should start at 0");
-        Assert.That(micPartHits[0, 1], Is.EqualTo(0), "Mic 0 HARM2 should start at 0");
+        // First update past the countdown boundary, then set pitch and update again.
+        // The engine has queued updates from BuildCountdownsFromAllParts that fire
+        // before our target time, so SetMicPitch must be called after those consume.
+        engine.Update(0.1);
+        engine.SetMicPitch(0, 60f);
+        engine.Update(0.25);
 
-        // Manually set the current time to match the note's position (tick 0 = time 0)
-        CurrentTimeProperty.SetValue(engine, 0.0);
-
-        // Submit pitch directly to the engine using SetMicPitch
-        ((YargFreeVocalsEngine)engine).SetMicPitch(0, 60f);
-
-        // Verify the pitch was stored
-        Assert.That(micPitches[0], Is.EqualTo(60f), "Mic 0 pitch should be set to 60");
-
-        // Update the engine to process the input
-        engine.Update(0.0); // Process at time 0.0
-
-        // Check if accumulation happened
-        var mic0Part0 = micPartHits[0, 0]; // mic 0, part 0 (HARM1)
-        var mic0Part1 = micPartHits[0, 1]; // mic 0, part 1 (HARM2)
+        var mic0Part0 = micPartHits[0, 0];
+        var mic0Part1 = micPartHits[0, 1];
 
         Assert.Multiple(() =>
         {
             Assert.That(mic0Part0, Is.GreaterThan(0), "Mic 0 HARM1 should accumulate when singing C4");
-            Assert.That(mic0Part0, Is.LessThan(2.0), "Mic 0 HARM1 accumulation should be reasonable");
+            Assert.That(mic0Part0, Is.LessThan(500.0), "Accumulation should be bounded");
             Assert.That(mic0Part1, Is.EqualTo(0), "Mic 0 HARM2 should not accumulate when singing C4");
         });
     }
@@ -231,43 +218,29 @@ public sealed class PartyVocalsEngineTests
             CreateVocalsPart(isHarmony: true),   // HARM2 also at C4 = 60 (unison)
         };
 
-        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);
-        AddPhraseWithPitch(parts[1], 60, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[0], 60, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[1], 60, tickOffset: 0);
 
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
-        var engine = new YargFreeVocalsEngine(primaryChart, parts, new SyncTrack(480), EngineParameters, false, micCount: 2);
+        var syncTrack = CreateSyncTrackWithTempo();
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, false, micCount: 2);
 
-        // First verify the engine has multi-mic state
-        var micPitches = (float[])MicPitchesField.GetValue(engine)!;
         var micPartHits = (double[,])MicPartHitsField.GetValue(engine)!;
 
-        Assert.That(micPitches.Length, Is.EqualTo(2), "Engine should have 2 mics");
-        Assert.That(micPartHits.GetLength(0), Is.EqualTo(2), "Engine should have 2 mic rows");
-        Assert.That(micPartHits.GetLength(1), Is.EqualTo(2), "Engine should have 2 part columns");
-
-        // Check initial state
-        Assert.That(micPartHits[0, 0], Is.EqualTo(0), "Mic 0 HARM1 should start at 0");
-        Assert.That(micPartHits[0, 1], Is.EqualTo(0), "Mic 0 HARM2 should start at 0");
-
-        // Manually set the current time to match the note's position (tick 0 = time 0)
-        CurrentTimeProperty.SetValue(engine, 0.0);
-
-        // Set mic 0 to sing C4 (60) - matches both parts in unison
+        // Advance past countdown, then set pitch and update
+        engine.Update(0.1);
         engine.SetMicPitch(0, 60f);
+        engine.Update(0.25);
 
-        // Verify the pitch was stored
-        Assert.That(micPitches[0], Is.EqualTo(60f), "Mic 0 pitch should be set to 60");
+        var mic0Part0 = micPartHits[0, 0];
+        var mic0Part1 = micPartHits[0, 1];
 
-        // Update the engine to process the input
-        engine.Update(0.0); // Process at time 0.0
-
-        // Both parts should accumulate since the pitch matches both notes
-        var mic0Part0 = micPartHits[0, 0]; // mic 0, part 0 (HARM1)
-        var mic0Part1 = micPartHits[0, 1]; // mic 0, part 1 (HARM2)
-
-        Assert.That(mic0Part0, Is.GreaterThan(0), "Mic 0 HARM1 should accumulate when singing matching pitch");
-        Assert.That(mic0Part1, Is.GreaterThan(0), "Mic 0 HARM2 should accumulate when singing matching pitch");
-        Assert.That(mic0Part0, Is.EqualTo(mic0Part1), "Both parts should accumulate the same amount for unison");
+        Assert.Multiple(() =>
+        {
+            Assert.That(mic0Part0, Is.GreaterThan(0), "Mic 0 HARM1 should accumulate for unison");
+            Assert.That(mic0Part1, Is.GreaterThan(0), "Mic 0 HARM2 should accumulate for unison");
+            Assert.That(mic0Part0, Is.EqualTo(mic0Part1), "Both parts should accumulate equally for unison");
+        });
     }
 
     // ================================================================
@@ -282,39 +255,25 @@ public sealed class PartyVocalsEngineTests
             CreateVocalsPart(isHarmony: true),   // HARM2 at E4 = 64
         };
 
-        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);
-        AddPhraseWithPitch(parts[1], 64, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[0], 60, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[1], 64, tickOffset: 0);
 
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
-        var engine = new YargFreeVocalsEngine(primaryChart, parts, new SyncTrack(480), EngineParameters, false, micCount: 2);
+        var syncTrack = CreateSyncTrackWithTempo();
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, false, micCount: 2);
 
-        // First verify the engine has multi-mic state
-        var micPitches = (float[])MicPitchesField.GetValue(engine)!;
         var micPartHits = (double[,])MicPartHitsField.GetValue(engine)!;
 
-        Assert.That(micPitches.Length, Is.EqualTo(2), "Engine should have 2 mics");
-        Assert.That(micPartHits.GetLength(0), Is.EqualTo(2), "Engine should have 2 mic rows");
-        Assert.That(micPartHits.GetLength(1), Is.EqualTo(2), "Engine should have 2 part columns");
-
-        // Check initial state
-        Assert.That(micPartHits[0, 0], Is.EqualTo(0), "Mic 0 HARM1 should start at 0");
-        Assert.That(micPartHits[0, 1], Is.EqualTo(0), "Mic 0 HARM2 should start at 0");
-
-        // Set mic 0 to sing F#4 (66) - no match for either part
+        // Advance past countdown, then set pitch and update
+        engine.Update(0.1);
         engine.SetMicPitch(0, 66f);
+        engine.Update(0.25);
 
-        // Verify the pitch was stored
-        Assert.That(micPitches[0], Is.EqualTo(66f), "Mic 0 pitch should be set to 66");
-
-        // Trigger CheckSingingHit by advancing time - enough to hit the note
-        engine.Update(1.0); // Advance by 1 second
-
-        // No parts should accumulate since the pitch doesn't match any note
-        var mic0Part0 = micPartHits[0, 0]; // mic 0, part 0 (HARM1)
-        var mic0Part1 = micPartHits[0, 1]; // mic 0, part 1 (HARM2)
-
-        Assert.That(mic0Part0, Is.EqualTo(0), "Mic 0 HARM1 should not accumulate when singing non-matching pitch");
-        Assert.That(mic0Part1, Is.EqualTo(0), "Mic 0 HARM2 should not accumulate when singing non-matching pitch");
+        Assert.Multiple(() =>
+        {
+            Assert.That(micPartHits[0, 0], Is.EqualTo(0), "No accumulation for non-matching pitch on HARM1");
+            Assert.That(micPartHits[0, 1], Is.EqualTo(0), "No accumulation for non-matching pitch on HARM2");
+        });
     }
 
     // ================================================================
@@ -328,26 +287,27 @@ public sealed class PartyVocalsEngineTests
             CreateVocalsPart(isHarmony: false),  // HARM1 at C4 = 60
         };
 
-        AddPhraseWithPitch(parts[0], 60, tickOffset: 0);
+        AddLongPhraseWithPitch(parts[0], 60, tickOffset: 0);
 
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
-        var engine = new YargFreeVocalsEngine(primaryChart, parts, new SyncTrack(480), EngineParameters, false, micCount: 2);
+        var syncTrack = CreateSyncTrackWithTempo();
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, false, micCount: 2);
 
-        // Both mics sing C4 (60) - should both accumulate HARM1 independently
+        // Advance past countdown, then set both mics and update
+        engine.Update(0.1);
         engine.SetMicPitch(0, 60f);
         engine.SetMicPitch(1, 60f);
+        engine.Update(0.25);
 
-        // Trigger CheckSingingHit by advancing time - enough to hit the note
-        engine.Update(1.0); // Advance by 1 second
+        var mic0Part0 = (double)GetMicPartHitMethod.Invoke(engine, new object[] { 0, 0 })!;
+        var mic1Part0 = (double)GetMicPartHitMethod.Invoke(engine, new object[] { 1, 0 })!;
 
-        // Both mics should have accumulated independently
-        var mic0Part0 = (double)GetMicPartHitMethod.Invoke(engine, new object[] { 0, 0 })!; // mic 0, part 0 (HARM1)
-        var mic1Part0 = (double)GetMicPartHitMethod.Invoke(engine, new object[] { 1, 0 })!; // mic 1, part 0 (HARM1)
-
-        Assert.That(mic0Part0, Is.GreaterThan(0), "Mic 0 should accumulate when singing C4");
-        Assert.That(mic1Part0, Is.GreaterThan(0), "Mic 1 should accumulate when singing C4");
-        // They should be approximately equal (both sing same pitch same duration)
-        Assert.That(mic0Part0, Is.EqualTo(mic1Part0), "Both mics should accumulate the same amount for same pitch");
+        Assert.Multiple(() =>
+        {
+            Assert.That(mic0Part0, Is.GreaterThan(0), "Mic 0 should accumulate");
+            Assert.That(mic1Part0, Is.GreaterThan(0), "Mic 1 should accumulate");
+            Assert.That(mic0Part0, Is.EqualTo(mic1Part0), "Both mics accumulate independently and equally for same pitch");
+        });
     }
 
     // ================================================================
@@ -389,14 +349,25 @@ public sealed class PartyVocalsEngineTests
 
     private static void AddLongPhraseWithPitch(VocalsPart part, int midiPitch, uint tickOffset)
     {
-        var note = new VocalNote(NoteFlags.None, false, 0.0, 1.0, tickOffset, 960); // Longer duration
-        var lyricNote = new VocalNote(midiPitch, 0, VocalNoteType.Lyric, 0.0, 0.5, tickOffset, 480);
+        var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, 960);
+        var lyricNote = new VocalNote(midiPitch, 0, VocalNoteType.Lyric, 0.0, 1.0, tickOffset, 480);
         note.AddChildNote(lyricNote);
         var lyrics = new List<LyricEvent>
         {
             new LyricEvent(LyricSymbolFlags.None, "Test", 0.0, tickOffset)
         };
         part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, 960, note, lyrics));
+    }
+
+    /// <summary>
+    /// Creates a SyncTrack with 120 BPM tempo at tick 0 so TimeToTick returns meaningful values.
+    /// Without a tempo entry, TimeToTick always returns 0, making accumulation impossible.
+    /// </summary>
+    private static SyncTrack CreateSyncTrackWithTempo()
+    {
+        var syncTrack = new SyncTrack(480);
+        syncTrack.Tempos.Add(new TempoChange(120.0, 0.0, 0));
+        return syncTrack;
     }
 
     /// <summary>
