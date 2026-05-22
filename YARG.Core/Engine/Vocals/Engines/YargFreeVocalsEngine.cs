@@ -11,6 +11,11 @@ namespace YARG.Core.Engine.Vocals.Engines
     {
         public int CurrentTargetHarmonyIndex { get; private set; }
 
+        /// <summary>
+        /// Live canonical meter values per HARM part. Updated at rollback cadence and phrase end.
+        /// </summary>
+        public IReadOnlyList<double> CanonicalMeters => _canonicalMeters;
+
         // Store reference to all parts for hit testing
         private readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
@@ -594,6 +599,11 @@ namespace YARG.Core.Engine.Vocals.Engines
             _micPitches[micIndex] = pitch;
             _micHasSang[micIndex] = true;
         }
+
+        /// <summary>
+        /// Read the last pitch submitted by a specific microphone.
+        /// </summary>
+        public float GetMicPitch(int micIndex) => _micPitches[micIndex];
 
         /// <summary>
         /// Find the assignment of mics to parts that maximizes (in priority order):
