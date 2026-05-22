@@ -28,6 +28,18 @@ namespace YARG.Core.Engine.Vocals.Engines
         private readonly uint[] _micLastSingTicks;
         private readonly double[,] _micPartHits;
 
+        private const double ROLLBACK_WINDOW_SECONDS = 0.5; // 500 ms MVP default per design
+
+        // Window state for per-window assignment and N-awesome grading
+        private double _lastRollbackTime;
+        private readonly double[,] _lastWindowSnapshot;
+        private readonly double[] _cumulativeAssignedTicks;
+        private readonly double[] _canonicalMeters;
+        private readonly uint[] _phraseTicksTotalPerPart;
+
+        // Solo-only-song max-over-mics state
+        private double _soloOnlyCurrentTickMaxHitPercent;
+
         public YargFreeVocalsEngine(InstrumentDifficulty<VocalNote> primaryChart, IReadOnlyList<VocalsPart> allParts,
             SyncTrack syncTrack, VocalsEngineParameters engineParameters, bool isBot, int botPartIndex = 0)
             : this(primaryChart, allParts, syncTrack, engineParameters, isBot, micCount: 1, botPartIndex)
@@ -56,6 +68,16 @@ namespace YARG.Core.Engine.Vocals.Engines
             _micHasSang = new bool[micCount];
             _micLastSingTicks = new uint[micCount];
             _micPartHits = new double[micCount, allParts.Count];
+
+            // Window state for per-window assignment and N-awesome grading
+            _lastRollbackTime = 0;
+            _lastWindowSnapshot = new double[micCount, allParts.Count];
+            _cumulativeAssignedTicks = new double[allParts.Count];
+            _canonicalMeters = new double[allParts.Count];
+            _phraseTicksTotalPerPart = new uint[allParts.Count];
+
+            // Solo-only-song max-over-mics state
+            _soloOnlyCurrentTickMaxHitPercent = 0;
 
             // Build countdowns from all parts for free vocals
             BuildCountdownsFromAllParts(allParts.ToList());
@@ -192,6 +214,13 @@ namespace YARG.Core.Engine.Vocals.Engines
             var phrase = Notes[NoteIndex];
             PhraseTicksTotal ??= GetTicksInPhrase(phrase);
 
+            // Populate per-part tick totals for the current phrase
+            for (int j = 0; j < _allParts.Count; j++)
+            {
+                _phraseTicksTotalPerPart[j] = GetTicksInPhraseForPart(_allParts[j]);
+                // If part j has no active phrase, set to 0 (assignment will skip it).
+            }
+
             CheckForNoteHit();
 
             // Multi-mic per-mic-per-part hidden accumulation. Bot path bypasses this — bots use the
@@ -199,6 +228,13 @@ namespace YARG.Core.Engine.Vocals.Engines
             if (!IsBot && _micCount > 1)
             {
                 AccumulateMicPartHits();
+
+                // Per-window visual rollback cadence. Does not consume the hidden buffer.
+                if (CurrentTime - _lastRollbackTime >= ROLLBACK_WINDOW_SECONDS)
+                {
+                    CommitWindowAssignment();
+                    _lastRollbackTime = CurrentTime;
+                }
             }
 
             // Check for the end of a phrase
@@ -207,34 +243,105 @@ namespace YARG.Core.Engine.Vocals.Engines
                 bool hasNotes = PhraseTicksTotal.Value != 0;
                 bool isLastPhrase = NoteIndex == Notes.Count - 1;
 
-                var percentHit = PhraseTicksHit / PhraseTicksTotal.Value;
-                if (!hasNotes)
+                if (_micCount > 1)
                 {
-                    percentHit = 1.0;
-                }
+                    // Final window commit
+                    CommitWindowAssignment();
 
-                bool hit = percentHit >= EngineParameters.PhraseHitPercent;
-                if (hit)
-                {
-                    EngineStats.TicksHit += PhraseTicksTotal.Value;
-                    HitNote(phrase);
+                    // Derive grade
+                    int awesomeCount = 0;
+                    double awesomeThreshold = EngineParameters.PhraseHitPercent;
+                    for (int j = 0; j < _canonicalMeters.Length; j++)
+                    {
+                        if (_phraseTicksTotalPerPart[j] == 0) continue;
+                        if (_canonicalMeters[j] >= awesomeThreshold) awesomeCount++;
+                    }
+
+                    PhraseGrade grade = awesomeCount switch
+                    {
+                        0 => PhraseGrade.Miss,
+                        1 => PhraseGrade.Awesome,
+                        2 => PhraseGrade.DoubleAwesome,
+                        _ => PhraseGrade.TripleAwesome,
+                    };
+
+                    // Score: sum over j of M[j] × PointsPerPhrase for parts present in this phrase.
+                    int totalPoints = 0;
+                    uint totalTicksHit = 0;
+                    uint totalTicksMissed = 0;
+
+                    for (int j = 0; j < _canonicalMeters.Length; j++)
+                    {
+                        if (_phraseTicksTotalPerPart[j] == 0) continue;
+                        totalPoints += (int) Math.Round(_canonicalMeters[j] * EngineParameters.PointsPerPhrase);
+
+                        // Track hit/miss stats for EngineStats
+                        totalTicksHit += (uint) Math.Round(_canonicalMeters[j] * _phraseTicksTotalPerPart[j]);
+                        totalTicksMissed += (uint) Math.Round((1.0 - _canonicalMeters[j]) * _phraseTicksTotalPerPart[j]);
+                    }
+
+                    EngineStats.TicksHit += totalTicksHit;
+                    EngineStats.TicksMissed += totalTicksMissed;
+
+                    if (totalPoints > 0) AddScore(totalPoints);
+
+                    // Combo: continue iff at least one meter crossed threshold.
+                    if (grade == PhraseGrade.Miss)
+                    {
+                        ResetCombo();
+                    }
+                    else
+                    {
+                        IncrementCombo();
+                    }
+
+                    OnPartyVocalsPhrase?.Invoke(grade, _canonicalMeters, isLastPhrase);
+
+                    // Reset all window state for next phrase
+                    Array.Clear(_micPartHits, 0, _micPartHits.Length);
+                    Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
+                    Array.Clear(_cumulativeAssignedTicks, 0, _cumulativeAssignedTicks.Length);
+                    Array.Clear(_canonicalMeters, 0, _canonicalMeters.Length);
+                    Array.Clear(_phraseTicksTotalPerPart, 0, _phraseTicksTotalPerPart.Length);
+                    _lastRollbackTime = CurrentTime;
+
+                    // Reset phrase state and advance to next phrase
+                    PhraseTicksHit = 0;
+                    PhraseTicksTotal = null;
+                    NoteIndex++;
                 }
                 else
                 {
-                    var ticksHit = (uint) Math.Round(PhraseTicksHit);
+                    // Single-mic path: existing HitNote/MissNote/OnPhraseHit flow unchanged.
+                    var percentHit = PhraseTicksHit / PhraseTicksTotal.Value;
+                    if (!hasNotes)
+                    {
+                        percentHit = 1.0;
+                    }
 
-                    EngineStats.TicksHit += ticksHit;
-                    EngineStats.TicksMissed += PhraseTicksTotal.Value - ticksHit;
+                    bool hit = percentHit >= EngineParameters.PhraseHitPercent;
+                    if (hit)
+                    {
+                        EngineStats.TicksHit += PhraseTicksTotal.Value;
+                        HitNote(phrase);
+                    }
+                    else
+                    {
+                        var ticksHit = (uint) Math.Round(PhraseTicksHit);
 
-                    MissNote(phrase, percentHit);
-                }
+                        EngineStats.TicksHit += ticksHit;
+                        EngineStats.TicksMissed += PhraseTicksTotal.Value - ticksHit;
 
-                PhraseTicksHit = 0;
-                PhraseTicksTotal = null;
+                        MissNote(phrase, percentHit);
+                    }
 
-                if (hasNotes)
-                {
-                    OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
+                    PhraseTicksHit = 0;
+                    PhraseTicksTotal = null;
+
+                    if (hasNotes)
+                    {
+                        OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
+                    }
                 }
 
                 UpdateCarriedNote(phrase);
@@ -495,6 +602,181 @@ namespace YARG.Core.Engine.Vocals.Engines
         }
 
         internal double GetMicPartHit(int micIndex, int partIndex) => _micPartHits[micIndex, partIndex];
+
+        /// <summary>
+        /// Find the assignment of mics to parts that maximizes (in priority order):
+        /// 1. Number of canonical meters >= awesomeThreshold (the N-awesome count)
+        /// 2. Total sum of canonical meters
+        /// 3. Lexicographic tiebreak: mic[0] prefers lowest-numbered part it contributes to,
+        ///    then mic[1], etc.
+        /// Enumerates all (M+1)^N possibilities where M = parts.Count and N = mic count.
+        /// For the supported range (N <= 7, M <= 3), worst case is 16384 enumerations — fine.
+        /// </summary>
+        internal static (int[] assignment, double[] meters) ComputeBestAssignment(
+            double[,] micPartHits,
+            uint[] phraseTicksTotal,
+            double awesomeThreshold)
+        {
+            int micCount = micPartHits.GetLength(0);
+            int partCount = micPartHits.GetLength(1);
+
+            int choices = partCount + 1; // M parts + "unassigned"
+            int totalCombos = 1;
+            for (int i = 0; i < micCount; i++) totalCombos *= choices;
+
+            int[] bestAssignment = new int[micCount];
+            for (int i = 0; i < micCount; i++) bestAssignment[i] = -1;
+            double[] bestMeters = new double[partCount];
+            int bestN = -1;
+            double bestSum = -1;
+
+            int[] currentAssignment = new int[micCount];
+            double[] currentMeters = new double[partCount];
+
+            for (int combo = 0; combo < totalCombos; combo++)
+            {
+                // Decode combo into per-mic choice (base-`choices` decomposition).
+                int rem = combo;
+                for (int i = 0; i < micCount; i++)
+                {
+                    int choice = rem % choices;
+                    rem /= choices;
+                    currentAssignment[i] = choice == partCount ? -1 : choice;
+                }
+
+                // Compute meters under this assignment.
+                for (int j = 0; j < partCount; j++) currentMeters[j] = 0;
+                for (int i = 0; i < micCount; i++)
+                {
+                    int assignedPart = currentAssignment[i];
+                    if (assignedPart < 0) continue;
+                    if (phraseTicksTotal[assignedPart] == 0) continue;
+                    currentMeters[assignedPart] += micPartHits[i, assignedPart] / phraseTicksTotal[assignedPart];
+                }
+                for (int j = 0; j < partCount; j++)
+                {
+                    if (currentMeters[j] > 1.0) currentMeters[j] = 1.0;
+                }
+
+                // Score this assignment.
+                int n = 0;
+                double sum = 0;
+                for (int j = 0; j < partCount; j++)
+                {
+                    if (currentMeters[j] >= awesomeThreshold) n++;
+                    sum += currentMeters[j];
+                }
+
+                // Compare: maximize n, then sum, then lexicographic preference.
+                bool better = false;
+                if (n > bestN) better = true;
+                else if (n == bestN && sum > bestSum + 1e-9) better = true;
+                else if (n == bestN && Math.Abs(sum - bestSum) < 1e-9)
+                {
+                    for (int i = 0; i < micCount; i++)
+                    {
+                        int curr = currentAssignment[i] < 0 ? int.MaxValue : currentAssignment[i];
+                        int best = bestAssignment[i] < 0 ? int.MaxValue : bestAssignment[i];
+                        if (curr < best) { better = true; break; }
+                        if (curr > best) break;
+                    }
+                }
+
+                if (better)
+                {
+                    bestN = n;
+                    bestSum = sum;
+                    Array.Copy(currentAssignment, bestAssignment, micCount);
+                    Array.Copy(currentMeters, bestMeters, partCount);
+                }
+            }
+
+            return (bestAssignment, bestMeters);
+        }
+
+        /// <summary>
+        /// Get the total ticks for a specific part in the current phrase.
+        /// </summary>
+        private uint GetTicksInPhraseForPart(VocalsPart part)
+        {
+            uint totalTime = 0;
+            foreach (var partPhrase in part.NotePhrases)
+            {
+                var phraseNote = partPhrase.PhraseParentNote;
+                foreach (var noteInPhrase in phraseNote.ChildNotes)
+                {
+                    if (noteInPhrase.IsPercussion)
+                    {
+                        continue;
+                    }
+
+                    // If the note continues past the end of the current phrase, clamp it to the end of the phrase instead.
+                    totalTime += phraseNote.GetTicksForNote(noteInPhrase);
+                }
+            }
+            return totalTime;
+        }
+
+        /// <summary>
+        /// Snapshot the hidden buffer, compute delta since last snapshot, run assignment on the
+        /// window's delta, and accumulate assigned contributions into canonical meters.
+        /// </summary>
+        private void CommitWindowAssignment()
+        {
+            int micCount = _micPartHits.GetLength(0);
+            int partCount = _micPartHits.GetLength(1);
+
+            // Solo-only: max over mics for the single part
+            if (partCount == 1 && micCount > 1)
+            {
+                double maxDelta = 0;
+                for (int i = 0; i < micCount; i++)
+                {
+                    double delta = _micPartHits[i, 0] - _lastWindowSnapshot[i, 0];
+                    if (delta > maxDelta) maxDelta = delta;
+                }
+                if (_phraseTicksTotalPerPart[0] > 0)
+                {
+                    _cumulativeAssignedTicks[0] += maxDelta;
+                    _canonicalMeters[0] = Math.Min(1.0, _cumulativeAssignedTicks[0] / _phraseTicksTotalPerPart[0]);
+                }
+                Array.Copy(_micPartHits, _lastWindowSnapshot, _micPartHits.Length);
+                return;
+            }
+
+            // Compute per-window delta
+            double[,] windowHits = new double[micCount, partCount];
+            for (int i = 0; i < micCount; i++)
+                for (int j = 0; j < partCount; j++)
+                    windowHits[i, j] = _micPartHits[i, j] - _lastWindowSnapshot[i, j];
+
+            // Run assignment on the window's contributions
+            var (assignment, _) = ComputeBestAssignment(
+                windowHits, _phraseTicksTotalPerPart, EngineParameters.PhraseHitPercent);
+
+            // Accumulate assigned ticks into cumulative totals
+            for (int i = 0; i < micCount; i++)
+            {
+                int part = assignment[i];
+                if (part < 0) continue;
+                if (_phraseTicksTotalPerPart[part] == 0) continue;
+                _cumulativeAssignedTicks[part] += windowHits[i, part];
+            }
+
+            // Recompute canonical meters from cumulative totals
+            for (int j = 0; j < partCount; j++)
+            {
+                if (_phraseTicksTotalPerPart[j] == 0)
+                {
+                    _canonicalMeters[j] = 0;
+                    continue;
+                }
+                _canonicalMeters[j] = Math.Min(1.0, _cumulativeAssignedTicks[j] / _phraseTicksTotalPerPart[j]);
+            }
+
+            // Advance snapshot to current state
+            Array.Copy(_micPartHits, _lastWindowSnapshot, _micPartHits.Length);
+        }
 
         // Positive remainder
         private static float Mod(float a, float b)
