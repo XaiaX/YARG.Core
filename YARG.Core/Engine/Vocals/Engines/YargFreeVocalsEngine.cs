@@ -21,13 +21,42 @@ namespace YARG.Core.Engine.Vocals.Engines
         // against whatever line it's actually singing.
         private int _currentBotEffectivePartIndex;
 
+        // Multi-mic state. Empty/zero-length when micCount == 1 (single-mic path uses PitchSang).
+        private readonly int _micCount;
+        private readonly float[] _micPitches;
+        private readonly bool[] _micHasSang;
+        private readonly uint[] _micLastSingTicks;
+        private readonly double[,] _micPartHits;
+
         public YargFreeVocalsEngine(InstrumentDifficulty<VocalNote> primaryChart, IReadOnlyList<VocalsPart> allParts,
             SyncTrack syncTrack, VocalsEngineParameters engineParameters, bool isBot, int botPartIndex = 0)
+            : this(primaryChart, allParts, syncTrack, engineParameters, isBot, micCount: 1, botPartIndex)
+        {
+        }
+
+        public YargFreeVocalsEngine(
+            InstrumentDifficulty<VocalNote> primaryChart,
+            IReadOnlyList<VocalsPart> allParts,
+            SyncTrack syncTrack,
+            VocalsEngineParameters engineParameters,
+            bool isBot,
+            int micCount,
+            int botPartIndex = 0)
             : base(primaryChart, syncTrack, engineParameters, isBot)
         {
+            if (micCount < 1 || micCount > 7)
+                throw new ArgumentOutOfRangeException(nameof(micCount), "micCount must be between 1 and 7.");
+
             _allParts = allParts;
             _botPartIndex = Math.Max(0, Math.Min(botPartIndex, allParts.Count - 1));
             _currentBotEffectivePartIndex = _botPartIndex;
+
+            _micCount = micCount;
+            _micPitches = new float[micCount];
+            _micHasSang = new bool[micCount];
+            _micLastSingTicks = new uint[micCount];
+            _micPartHits = new double[micCount, allParts.Count];
+
             // Build countdowns from all parts for free vocals
             BuildCountdownsFromAllParts(allParts.ToList());
         }
