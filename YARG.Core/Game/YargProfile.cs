@@ -12,7 +12,7 @@ namespace YARG.Core.Game
 {
     public partial class YargProfile
     {
-        private readonly int PROFILE_VERSION = 9;
+        private readonly int PROFILE_VERSION = 10;
 
         public int Version;
 
