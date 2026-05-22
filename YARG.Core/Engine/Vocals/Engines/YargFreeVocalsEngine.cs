@@ -194,6 +194,13 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             CheckForNoteHit();
 
+            // Multi-mic per-mic-per-part hidden accumulation. Bot path bypasses this — bots use the
+            // existing single-pitch synthetic path via UpdateBot.
+            if (!IsBot && _micCount > 1)
+            {
+                AccumulateMicPartHits();
+            }
+
             // Check for the end of a phrase
             if (CurrentTick > phrase.TickEnd)
             {
@@ -238,6 +245,52 @@ namespace YARG.Core.Engine.Vocals.Engines
         {
             CheckSingingHit();
             CheckPercussionHit();
+        }
+
+        private void AccumulateMicPartHits()
+        {
+            var maxLeniency = 1.0 / EngineParameters.ApproximateVocalFps;
+
+            for (int micIndex = 0; micIndex < _micCount; micIndex++)
+            {
+                if (!_micHasSang[micIndex])
+                    continue;
+
+                var lastTick = Math.Max(
+                    SyncTrack.TimeToTick(CurrentTime - maxLeniency),
+                    _micLastSingTicks[micIndex]);
+                var ticksSinceLast = CurrentTick - lastTick;
+                _micLastSingTicks[micIndex] = CurrentTick;
+                _micHasSang[micIndex] = false;
+
+                if (ticksSinceLast == 0)
+                    continue;
+
+                // Snapshot this mic's pitch into PitchSang for the duration of the per-part scan
+                // (CanVocalNoteBeHit reads PitchSang internally). Restore afterwards so the
+                // single-mic / bot path isn't disturbed if it ran first in this tick.
+                var savedPitchSang = PitchSang;
+                PitchSang = _micPitches[micIndex];
+
+                for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
+                {
+                    foreach (var partPhrase in _allParts[partIndex].NotePhrases)
+                    {
+                        foreach (var note in partPhrase.PhraseParentNote.ChildNotes)
+                        {
+                            if (note.IsPercussion) continue;
+                            if (CurrentTick < note.Tick || CurrentTick > note.TotalTickEnd) continue;
+
+                            if (CanVocalNoteBeHit(note, out float hitPercent))
+                            {
+                                _micPartHits[micIndex, partIndex] += ticksSinceLast * hitPercent;
+                            }
+                        }
+                    }
+                }
+
+                PitchSang = savedPitchSang;
+            }
         }
 
         private void CheckSingingHit()
@@ -426,6 +479,22 @@ namespace YARG.Core.Engine.Vocals.Engines
         }
 
         protected override bool CanNoteBeHit(VocalNote note) => throw new NotImplementedException();
+
+        /// <summary>
+        /// Submit a pitch reading for a specific microphone. Multi-mic Party Vocals path.
+        /// micIndex must be in [0, micCount). For single-mic profiles (micCount == 1), prefer the
+        /// existing PitchSang / QueueInput path — both work, but the legacy path is what existing
+        /// tests exercise.
+        /// </summary>
+        public void SetMicPitch(int micIndex, float pitch)
+        {
+            if (micIndex < 0 || micIndex >= _micCount)
+                throw new ArgumentOutOfRangeException(nameof(micIndex));
+            _micPitches[micIndex] = pitch;
+            _micHasSang[micIndex] = true;
+        }
+
+        internal double GetMicPartHit(int micIndex, int partIndex) => _micPartHits[micIndex, partIndex];
 
         // Positive remainder
         private static float Mod(float a, float b)
