@@ -1,7 +1,6 @@
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
 using YARG.Core.Engine.Vocals;
@@ -25,7 +24,7 @@ public sealed class PartyVocalsScenarioTests
         VocalsEngineTests.SoloBonusStarMultiplierThresholds,
         1.5f, 0.5f, 0.75, 60.0, true, 1000);
 
-    private const int ApproximateVocalFps = 60;
+    private const double ApproximateVocalFps = 60.0;
 
     private static VocalsPart CreateVocalsPart(bool isHarmony = false) =>
         new(isHarmony, new(), new(), new(), new());
