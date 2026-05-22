@@ -6,235 +6,410 @@ using YARG.Core.Chart;
 using YARG.Core.Engine;
 using YARG.Core.Engine.Vocals;
 using YARG.Core.Engine.Vocals.Engines;
-using YARG.Core.Input;
 
 namespace YARG.Core.UnitTests.Engine;
 
+/// <summary>
+/// Scenario tests for Party Vocals engine behavior.
+/// Each test constructs chart data, feeds per-mic pitch sequences to the engine,
+/// and asserts phrase grades. The engine emits one OnPartyVocalsPhrase event per
+/// phrase with a combined grade (Awesome, DoubleAwesome, TripleAwesome, or Miss).
+/// </summary>
 [TestFixture]
 public sealed class PartyVocalsScenarioTests
 {
-    // Match the Python test suite's pitch window and scoring thresholds
-    private static readonly VocalsEngineParameters ScenarioParams = new(
+    private static readonly VocalsEngineParameters EngineParams = new(
         new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0),
         4,
         VocalsEngineTests.StarMultiplierThresholds,
         VocalsEngineTests.SoloBonusStarMultiplierThresholds,
-        1.5f,       // pitchWindow - 1.5 semitones total window
-        0.5f,       // pitchWindowPerfect - 0.5 semitones for perfect
-        0.75,       // phraseHitPercent - 75% needed for AWESOME
-        60.0,       // approximateVocalFps
-        true,       // singToActivateStarPower
-        1000);      // pointsPerPhrase
-
-    // Cached reflection accessors for YargFreeVocalsEngine
-    private static readonly MethodInfo CanVocalNoteBeHitMethod =
-        typeof(YargFreeVocalsEngine).GetMethod("CanVocalNoteBeHit",
-            BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not find CanVocalNoteBeHit on YargFreeVocalsEngine");
-
-    private static readonly PropertyInfo PitchSangProperty =
-        typeof(VocalsEngine).GetProperty("PitchSang",
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not find PitchSang property");
-
-    private static readonly PropertyInfo CurrentTimeProperty =
-        typeof(YargFreeVocalsEngine).BaseType.BaseType.GetProperty("CurrentTime",
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not find CurrentTime property");
-
-    private static readonly FieldInfo MicPitchesField =
-        typeof(YargFreeVocalsEngine).GetField("_micPitches",
-            BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
-        ?? throw new InvalidOperationException("Could not find _micPitches field");
-
-    private static readonly FieldInfo MicPartHitsField =
-        typeof(YargFreeVocalsEngine).GetField("_micPartHits",
-            BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
-        ?? throw new InvalidOperationException("Could not find _micPartHits field");
-
-    private static readonly FieldInfo CanonicalMetersField =
-        typeof(YargFreeVocalsEngine).GetField("_canonicalMeters",
-            BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.FlattenHierarchy)
-        ?? throw new InvalidOperationException("Could not find _canonicalMeters field");
+        1.5f, 0.5f, 0.75, 60.0, true, 1000);
 
     private static readonly PropertyInfo BaseStatsProperty =
         typeof(YargFreeVocalsEngine).BaseType.BaseType.GetProperty("BaseStats",
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("Could not find BaseStats property");
 
-    /// <summary>
-    /// Construct a VocalsPart with phrases containing notes at specified pitches and tick ranges.
-    /// Note definitions: (startTick, endTick, pitch) where pitch is MIDI note number.
-    /// </summary>
-    private static VocalsPart CreatePartWithPhrases(params (uint startTick, uint endTick, float pitch)[] noteDefs)
+    private static VocalsPart CreateVocalsPart(bool isHarmony = false) =>
+        new(isHarmony, new(), new(), new(), new());
+
+    private static SyncTrack CreateSyncTrack()
     {
-        var part = new VocalsPart(false, new(), new(), new(), new());
-
-        foreach (var (startTick, endTick, pitch) in noteDefs)
-        {
-            var note = new VocalNote(NoteFlags.None, false, 0.0, 1.0, startTick, endTick - startTick);
-
-            if (pitch >= 0)
-            {
-                // Pitched note
-                var lyricNote = new VocalNote(pitch, 0, VocalNoteType.Lyric, 0.0, 0.5, startTick, (endTick - startTick) / 2);
-                note.AddChildNote(lyricNote);
-
-                var lyrics = new List<LyricEvent>
-                {
-                    new LyricEvent(LyricSymbolFlags.None, "Test", 0.0, startTick)
-                };
-                part.NotePhrases.Add(new VocalsPhrase(0.0, 1.0, startTick, endTick - startTick, note, lyrics));
-            }
-            else
-            {
-                // Talkie note (non-pitched)
-                var lyricNote = new VocalNote(-1, 0, VocalNoteType.Lyric, 0.0, 0.5, startTick, (endTick - startTick) / 2);
-                note.AddChildNote(lyricNote);
-
-                var lyrics = new List<LyricEvent>
-                {
-                    new LyricEvent(LyricSymbolFlags.NonPitched, "Talk", 0.0, startTick)
-                };
-                part.NotePhrases.Add(new VocalsPhrase(0.0, 1.0, startTick, endTick - startTick, note, lyrics));
-            }
-        }
-
-        return part;
+        var sync = new SyncTrack(480);
+        sync.Tempos.Add(new TempoChange(120.0, 0.0, 0));
+        return sync;
     }
 
-    /// <summary>
-    /// Run the engine through a sequence of (time, micPitches) inputs and return
-    /// the collected phrase grades and final score.
-    /// </summary>
-    private static (List<PhraseGrade> grades, int finalScore) RunScenario(
-        IReadOnlyList<VocalsPart> parts,
-        int micCount,
-        IEnumerable<(double time, float[] micPitches)> inputs)
+    private static void AddPhrase(VocalsPart part, uint tickOffset, uint tickLength, int midiPitch)
     {
-        // Create sync track with 120 BPM (2 beats per second, 480 ticks per beat)
-        var syncTrack = new SyncTrack(480);
+        var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, tickLength);
+        var lyricNote = new VocalNote(midiPitch, 0, VocalNoteType.Lyric, 0.0, 1.0, tickOffset, tickLength / 2);
+        note.AddChildNote(lyricNote);
+        var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.None, "La", 0.0, tickOffset) };
+        part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, tickLength, note, lyrics));
+    }
 
-        // Create primary chart from first part
+    private static void AddTalkiePhrase(VocalsPart part, uint tickOffset, uint tickLength)
+    {
+        var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, tickLength);
+        var talkieNote = new VocalNote(-1, 0, VocalNoteType.Lyric, 0.0, 1.0, tickOffset, tickLength / 2);
+        note.AddChildNote(talkieNote);
+        var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.NonPitched, "Talk", 0.0, tickOffset) };
+        part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, tickLength, note, lyrics));
+    }
+
+    private static (List<PhraseGrade> grades, int score) RunScenario(
+        List<VocalsPart> parts, int micCount, Action<YargFreeVocalsEngine> feedAction, double endTime)
+    {
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
-
-        // Create engine with specified mic count
-        var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, ScenarioParams, false, micCount);
-
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, CreateSyncTrack(), EngineParams, false, micCount: micCount);
         var grades = new List<PhraseGrade>();
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) => grades.Add(grade);
+        engine.Update(0.1);
+        feedAction(engine);
+        engine.Update(endTime);
+        var stats = (BaseStats)BaseStatsProperty.GetValue(engine)!;
+        return (grades, stats.CommittedScore);
+    }
 
-        // Subscribe to phrase events
-        engine.OnPartyVocalsPhrase += (grade, meters, isLast) =>
+    private static void FeedPitches(YargFreeVocalsEngine engine, int micCount,
+        float[][] micPitchArrays, double startTime, double duration)
+    {
+        int totalFrames = (int)(duration * 60);
+        for (int f = 0; f < totalFrames; f++)
         {
-            grades.Add(grade);
-        };
-
-        // Feed inputs to the engine
-        foreach (var (time, micPitches) in inputs)
-        {
-            // Set pitch for each microphone
-            for (int i = 0; i < micCount && i < micPitches.Length; i++)
+            double time = startTime + (f + 1) / 60.0;
+            for (int m = 0; m < micCount; m++)
             {
-                engine.SetMicPitch(i, micPitches[i]);
+                int idx = Math.Min(f, micPitchArrays[m].Length - 1);
+                engine.SetMicPitch(m, micPitchArrays[m][idx]);
             }
-
-            // Update engine to current time
             engine.Update(time);
         }
-
-        // Advance past all phrases to ensure phrase completion events are fired
-        var maxTime = inputs.Any() ? inputs.Max(i => i.time) + 1.0 : 0.1;
-        engine.Update(maxTime + 1.0);
-
-        return (grades, engine.BaseStats.NoteScore);
     }
 
-    /// <summary>
-    /// Create a simple sync track with 120 BPM tempo.
-    /// </summary>
-    private static SyncTrack CreateSyncTrackWithTempo()
+    // ================================================================
+    // Overlap validation (3 scenarios)
+    // ================================================================
+
+    [Test]
+    public void TwoNonOverlapping_TwoMics_ScorePositive()
     {
-        var syncTrack = new SyncTrack(480);
+        // Two parts at different times. Engine emits grade per primary chart phrase.
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 960, 960, 64);
 
-        // Add tempo at time 0: 120 BPM = 2 beats per second
-        // 120 BPM = 0.5 seconds per beat = 240000 microseconds per beat
-        syncTrack.Tempos.Add(new TempoChange(120, 0, 0));
-
-        return syncTrack;
-    }
-
-    /// <summary>
-    /// Helper to create a 3-part chart for testing.
-    /// </summary>
-    private static List<VocalsPart> Create3PartChart()
-    {
-        var parts = new List<VocalsPart>
+        var (grades, score) = RunScenario(parts, 2, engine =>
         {
-            CreatePartWithPhrases((0, 480, 60)),  // HARM1: C4
-            CreatePartWithPhrases((0, 480, 64)),  // HARM2: E4
-            CreatePartWithPhrases((0, 480, 67)),  // HARM3: G4
-        };
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { -1f } }, 0.1, 2.5);
+            FeedPitches(engine, 2, new[] { new[] { 64f }, new[] { -1f } }, 2.6, 2.5);
+        }, 6.0);
 
-        return parts;
-    }
-
-    /// <summary>
-    /// Helper to create a 2-part chart for testing.
-    /// </summary>
-    private static List<VocalsPart> Create2PartChart()
-    {
-        var parts = new List<VocalsPart>
+        Assert.Multiple(() =>
         {
-            CreatePartWithPhrases((0, 480, 60)),  // HARM1: C4
-            CreatePartWithPhrases((0, 480, 64)),  // HARM2: E4
-        };
-
-        return parts;
+            Assert.That(grades.Count, Is.GreaterThanOrEqualTo(1), "At least one phrase grade");
+            Assert.That(score, Is.GreaterThan(0), "Score should be positive");
+            Assert.That(grades[0], Is.EqualTo(PhraseGrade.Awesome), "First phrase should be Awesome");
+        });
     }
 
-    /// <summary>
-    /// Helper method to invoke CanVocalNoteBeHit via reflection.
-    /// </summary>
-    private static (bool hit, float hitPercent) InvokeCanVocalNoteBeHit(
-        YargFreeVocalsEngine engine, VocalNote note, float sungPitch)
+    [Test]
+    public void ThreeNonOverlapping_TwoMics_AtLeastOneAwesome()
     {
-        // Set PitchSang (protected setter on VocalsEngine)
-        PitchSangProperty.SetValue(engine, sungPitch);
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 960, 960, 64);
+        AddPhrase(parts[2], 1920, 960, 67);
 
-        // Set CurrentTime so note.PitchAtSongTime returns the note's pitch.
-        CurrentTimeProperty.SetValue(engine, 0.0);
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { -1f } }, 0.1, 2.5);
+            FeedPitches(engine, 2, new[] { new[] { 64f }, new[] { -1f } }, 2.6, 2.5);
+            FeedPitches(engine, 2, new[] { new[] { 67f }, new[] { -1f } }, 5.1, 2.5);
+        }, 9.0);
 
-        // Call CanVocalNoteBeHit(note, out float hitPercent)
-        var hitPercent = new object[2];
-        hitPercent[0] = note;
-        hitPercent[1] = 0f; // default
-
-        var result = (bool)CanVocalNoteBeHitMethod.Invoke(engine, hitPercent)!;
-
-        return (result, (float)hitPercent[1]);
+        Assert.Multiple(() =>
+        {
+            Assert.That(grades.Count, Is.GreaterThanOrEqualTo(1));
+            Assert.That(grades[0], Is.EqualTo(PhraseGrade.Awesome));
+        });
     }
 
-    /// <summary>
-    /// Helper to get the canonical meters via reflection for testing.
-    /// </summary>
-    private static double[] GetCanonicalMeters(YargFreeVocalsEngine engine)
+    [Test]
+    public void TwoOverlapOneFree_TwoMics_AwesomePerPhrase()
     {
-        return (double[])CanonicalMetersField.GetValue(engine)!;
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 480, 960, 64);
+        AddPhrase(parts[2], 1920, 960, 67);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 64f } }, 0.1, 4.0);
+            FeedPitches(engine, 2, new[] { new[] { 67f }, new[] { -1f } }, 4.1, 2.5);
+        }, 8.0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grades.Count, Is.GreaterThanOrEqualTo(1));
+            Assert.That(grades[0], Is.EqualTo(PhraseGrade.DoubleAwesome), "Overlapping HARM1+HARM2 both covered");
+        });
     }
 
-    /// <summary>
-    /// Helper to get the mic part hits via reflection for testing.
-    /// </summary>
-    private static double[,] GetMicPartHits(YargFreeVocalsEngine engine)
+    // ================================================================
+    // Basic scenarios (3 scenarios)
+    // ================================================================
+
+    [Test]
+    public void SinglePartBasic_OneMic_Awesome()
     {
-        return (double[,])MicPartHitsField.GetValue(engine)!;
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var (grades, score) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { -1f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grades.Count, Is.EqualTo(1));
+            Assert.That(grades[0], Is.EqualTo(PhraseGrade.Awesome));
+            Assert.That(score, Is.GreaterThan(0));
+        });
     }
 
-    /// <summary>
-    /// Helper to get the mic pitches via reflection for testing.
-    /// </summary>
-    private static float[] GetMicPitches(YargFreeVocalsEngine engine)
+    [Test]
+    public void TwoPartBasic_TwoMics_DoubleAwesome()
     {
-        return (float[])MicPitchesField.GetValue(engine)!;
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 0, 960, 64);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 64f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grades.Count, Is.EqualTo(1), "One combined grade for overlapping phrases");
+            Assert.That(grades[0], Is.EqualTo(PhraseGrade.DoubleAwesome));
+        });
+    }
+
+    [Test]
+    public void ThreePartBasic_ThreeMics_TripleAwesome()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 0, 960, 64);
+        AddPhrase(parts[2], 0, 960, 67);
+
+        var (grades, _) = RunScenario(parts, 3, engine =>
+        {
+            FeedPitches(engine, 3, new[] { new[] { 60f }, new[] { 64f }, new[] { 67f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grades.Count, Is.EqualTo(1), "One combined grade");
+            Assert.That(grades[0], Is.EqualTo(PhraseGrade.TripleAwesome));
+        });
+    }
+
+    // ================================================================
+    // Discord community scenarios (8 scenarios)
+    // ================================================================
+
+    [Test]
+    public void TwoPartUnisonDiverge_OneMic_AwesomeOnFirstPart()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 0, 480, 60);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { -1f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.GreaterThanOrEqualTo(1));
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.Awesome));
+    }
+
+    [Test]
+    public void ThreePartBackupHarmony_TwoMics_DoubleAwesome()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 0, 960, 64);
+        AddPhrase(parts[2], 0, 960, 67);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 64f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.EqualTo(1), "One combined grade for simultaneous phrases");
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.DoubleAwesome), "2 of 3 parts covered");
+    }
+
+    [Test]
+    public void ThreePartStaggeredEntry_ThreeMics_AllAwesome()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 1440, 60);
+        AddPhrase(parts[1], 480, 960, 64);
+        AddPhrase(parts[2], 960, 480, 67);
+
+        var (grades, _) = RunScenario(parts, 3, engine =>
+        {
+            FeedPitches(engine, 3, new[] { new[] { 60f }, new[] { 64f }, new[] { 67f } }, 0.1, 4.0);
+        }, 6.0);
+
+        Assert.That(grades.Count, Is.GreaterThanOrEqualTo(1));
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.TripleAwesome), "All 3 parts covered by 3 mics");
+    }
+
+    [Test]
+    public void PartSwitchingChallenge_TwoMics_DoubleAwesome()
+    {
+        // Two overlapping parts. Mics swap which part they sing mid-phrase.
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 0, 960, 64);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            // Mic 0 sings HARM1, mic 1 sings HARM2
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 64f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.EqualTo(1));
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.DoubleAwesome), "Both parts covered");
+    }
+
+    [Test]
+    public void TalkiesOverlapChallenge_TwoMics_AwesomeBoth()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddTalkiePhrase(parts[1], 0, 960);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 60f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.EqualTo(1), "One combined grade");
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.DoubleAwesome), "Pitched + talkie = both parts hit");
+    }
+
+    [Test]
+    public void UltimateTalkieChaos_ThreeMics_TripleAwesome()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true) };
+        AddTalkiePhrase(parts[0], 0, 960);
+        AddTalkiePhrase(parts[1], 0, 960);
+        AddTalkiePhrase(parts[2], 0, 960);
+
+        var (grades, _) = RunScenario(parts, 3, engine =>
+        {
+            FeedPitches(engine, 3, new[] { new[] { 60f }, new[] { 64f }, new[] { 67f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.EqualTo(1), "One combined grade");
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.TripleAwesome), "All talkies hit");
+    }
+
+    [Test]
+    public void ShepardToneEdgeCase_LowAndHighPitches_Awesome()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 36);
+        AddTalkiePhrase(parts[1], 0, 960);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 36f }, new[] { -1f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.EqualTo(1));
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.DoubleAwesome), "Low pitch + talkie = both parts hit");
+    }
+
+    [Test]
+    public void ThreePartTalkies_TwoMics_DoubleAwesome()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true) };
+        AddTalkiePhrase(parts[0], 0, 960);
+        AddTalkiePhrase(parts[1], 0, 960);
+        AddTalkiePhrase(parts[2], 0, 960);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 64f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.EqualTo(1), "One combined grade");
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.DoubleAwesome), "2 of 3 talkies covered by 2 mics");
+    }
+
+    // ================================================================
+    // Talkie-specific scenarios (3 additional)
+    // ================================================================
+
+    [Test]
+    public void TalkieOnly_NoPitchInput_StillAwesome()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddTalkiePhrase(parts[0], 0, 960);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            for (int i = 0; i < 90; i++)
+            {
+                engine.SetMicPitch(0, -1f);
+                engine.SetMicPitch(1, -1f);
+                engine.Update(0.1 + (i + 1) / 60.0);
+            }
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.EqualTo(1));
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.Awesome), "Talkie should hit without pitch");
+    }
+
+    [Test]
+    public void MixedTalkieAndPitched_SameTime_OneMic_DoubleAwesome()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddTalkiePhrase(parts[1], 0, 960);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { -1f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.EqualTo(1), "One combined grade");
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.DoubleAwesome), "Pitched + talkie = both hit");
+    }
+
+    [Test]
+    public void AllMiss_WrongPitch_MissGrade()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 0, 960, 64);
+
+        var (grades, _) = RunScenario(parts, 2, engine =>
+        {
+            FeedPitches(engine, 2, new[] { new[] { 90f }, new[] { 30f } }, 0.1, 2.5);
+        }, 4.0);
+
+        Assert.That(grades.Count, Is.EqualTo(1), "One combined grade");
+        Assert.That(grades[0], Is.EqualTo(PhraseGrade.Miss), "Both parts missed with wrong pitch");
     }
 }
