@@ -72,7 +72,7 @@ namespace YARG.Core.UnitTests.Replays
             Assert.Multiple(() =>
             {
                 // Check that PROFILE_VERSION is correct (should be 9 from Phase 1 Task 1)
-                Assert.AreEqual(9, deserializedFrame.Profile.Version, "Profile version should be 9");
+                Assert.AreEqual(10, deserializedFrame.Profile.Version, "Profile version should be 10");
 
                 // Check that FreeHarmony flag is preserved
                 Assert.IsTrue(deserializedFrame.Profile.FreeHarmony, "FreeHarmony flag should be true after round-trip");
@@ -93,7 +93,7 @@ namespace YARG.Core.UnitTests.Replays
             {
                 CurrentInstrument = Instrument.Vocals,
                 FreeHarmony = true,
-                Version = 9
+                Version = 10
             };
 
             var originalFrame = CreateFrame(profile);
@@ -150,7 +150,7 @@ namespace YARG.Core.UnitTests.Replays
             Assert.Multiple(() =>
             {
                 // Check that PROFILE_VERSION is correct
-                Assert.AreEqual(9, deserializedFrame.Profile.Version, "Profile version should be 9");
+                Assert.AreEqual(10, deserializedFrame.Profile.Version, "Profile version should be 10");
 
                 // Check that FreeHarmony flag is preserved as false
                 Assert.IsFalse(deserializedFrame.Profile.FreeHarmony, "FreeHarmony flag should be false after round-trip");
