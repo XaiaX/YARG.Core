@@ -16,6 +16,13 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// </summary>
         public IReadOnlyList<double> CanonicalMeters => _canonicalMeters;
 
+        /// <summary>
+        /// Per-difficulty raw hit ratio at which a HARM line counts as "Awesome".
+        /// Display meters should be normalized against this so the bar fills to
+        /// 100% when the threshold is reached.
+        /// </summary>
+        public double AwesomeThreshold => EngineParameters.PhraseHitPercent;
+
         // Store reference to all parts for hit testing
         private readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
