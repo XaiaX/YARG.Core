@@ -684,16 +684,33 @@ namespace YARG.Core.Engine.Vocals.Engines
         public float GetMicPitch(int micIndex) => _micPitches[micIndex];
 
         /// <summary>
-        /// Is the given mic currently sitting on a sing note within its assigned part?
-        /// Visual gate: prevents needles/trails from appearing on mics whose assigned
-        /// HARM line is silent (the engine's pitch fallback covers audio/scoring but
-        /// shouldn't make a silent mic look like it's hitting).
+        /// Is the given mic currently sitting on a sing note within its effective part?
+        /// The "effective part" is the mic's assigned part if that part has an active
+        /// phrase at the current tick; otherwise the lowest-numbered part that does
+        /// (mirrors UpdateBotMultiMic's fallback so the mic still has somewhere to sing
+        /// during solo/lead-only sections).
+        ///
+        /// Returns false in two visually distinct cases:
+        /// 1. Effective part has no active phrase at all (the mic is genuinely silent —
+        ///    holds last position, no trail).
+        /// 2. Effective part has a phrase but no sing note covering CurrentTick (gap
+        ///    between notes within a phrase — also silent, holds last position).
         /// </summary>
-        public bool IsMicOnAssignedNote(int micIndex)
+        public bool IsMicOnNote(int micIndex)
         {
             if (micIndex < 0 || micIndex >= _micCount) return false;
-            int targetPart = micIndex % _allParts.Count;
+            int partCount = _allParts.Count;
+            int targetPart = micIndex % partCount;
             var phrase = FindActivePhraseInPart(targetPart);
+            if (phrase is null)
+            {
+                for (int j = 0; j < partCount; j++)
+                {
+                    if (j == targetPart) continue;
+                    var fallback = FindActivePhraseInPart(j);
+                    if (fallback is not null) { phrase = fallback; break; }
+                }
+            }
             if (phrase is null) return false;
             foreach (var childNote in phrase.ChildNotes)
             {
