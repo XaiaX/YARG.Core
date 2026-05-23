@@ -684,6 +684,30 @@ namespace YARG.Core.Engine.Vocals.Engines
         public float GetMicPitch(int micIndex) => _micPitches[micIndex];
 
         /// <summary>
+        /// Is the given mic currently sitting on a sing note within its assigned part?
+        /// Visual gate: prevents needles/trails from appearing on mics whose assigned
+        /// HARM line is silent (the engine's pitch fallback covers audio/scoring but
+        /// shouldn't make a silent mic look like it's hitting).
+        /// </summary>
+        public bool IsMicOnAssignedNote(int micIndex)
+        {
+            if (micIndex < 0 || micIndex >= _micCount) return false;
+            int targetPart = micIndex % _allParts.Count;
+            var phrase = FindActivePhraseInPart(targetPart);
+            if (phrase is null) return false;
+            foreach (var childNote in phrase.ChildNotes)
+            {
+                if (!childNote.IsPercussion
+                    && CurrentTick >= childNote.Tick
+                    && CurrentTick <= childNote.TotalTickEnd)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Find the assignment of mics to parts that maximizes (in priority order):
         /// 1. Number of canonical meters >= awesomeThreshold (the N-awesome count)
         /// 2. Total sum of canonical meters
