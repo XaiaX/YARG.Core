@@ -820,20 +820,26 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// </summary>
         private uint GetTicksInPhraseForPart(VocalsPart part)
         {
+            // Scope to the part-phrase that overlaps the current master phrase.
+            // HARM1/2/3 are separate MIDI tracks each carrying their own phrase
+            // events; well-charted songs align them by tick, but we match by
+            // overlap so a slightly-off chart still produces sane meters.
+            var masterPhrase = Notes[NoteIndex];
+            uint masterStart = masterPhrase.Tick;
+            uint masterEnd = masterPhrase.TickEnd;
+
             uint totalTime = 0;
             foreach (var partPhrase in part.NotePhrases)
             {
                 var phraseNote = partPhrase.PhraseParentNote;
+                if (phraseNote.Tick >= masterEnd || phraseNote.TickEnd <= masterStart) continue;
+
                 foreach (var noteInPhrase in phraseNote.ChildNotes)
                 {
-                    if (noteInPhrase.IsPercussion)
-                    {
-                        continue;
-                    }
-
-                    // If the note continues past the end of the current phrase, clamp it to the end of the phrase instead.
+                    if (noteInPhrase.IsPercussion) continue;
                     totalTime += phraseNote.GetTicksForNote(noteInPhrase);
                 }
+                break;
             }
             return totalTime;
         }
