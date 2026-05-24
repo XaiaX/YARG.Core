@@ -85,8 +85,10 @@ namespace YARG.Core.Engine.Vocals.Engines
             _canonicalMeters = new double[allParts.Count];
             _phraseTicksTotalPerPart = new uint[allParts.Count];
 
-            // Build countdowns from all parts for free vocals
-            BuildCountdownsFromAllParts(allParts.ToList());
+            // Build countdowns from all parts for free vocals; exclude percussion so
+            // percussion-only stretches show the countdown wheel instead of being
+            // hidden as a continuous note stream.
+            BuildCountdownsFromAllParts(allParts.ToList(), excludePercussion: true);
         }
 
         private void UpdateBotMultiMic(double songTime)
