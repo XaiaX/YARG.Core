@@ -47,8 +47,8 @@ namespace YARG.Core.Engine.Vocals.Engines
         // current behavior, mics 4-7 randomize" since the user-facing slots are
         // 1-indexed.
         private const int RANDOM_BEHAVIOR_MIN_MIC_INDEX = 3;
-        private const double RANDOM_REASSIGN_INTERVAL_SECONDS = 0.5;
-        private const double RANDOM_SILENCE_CHANCE = 0.25;
+        private const double RANDOM_REASSIGN_INTERVAL_SECONDS = 0.2;
+        private const double RANDOM_SILENCE_CHANCE = 0.10;
         private readonly int[] _micRandomTarget;
         private readonly double[] _micRandomNextReassignTime;
         private readonly Random _micRandom;
