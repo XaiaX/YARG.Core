@@ -734,6 +734,27 @@ namespace YARG.Core.Engine.Vocals.Engines
         }
 
         /// <summary>
+        /// Which HARM part this mic is effectively singing this tick — its
+        /// assigned part if that part has an active phrase, otherwise the lowest-
+        /// numbered part with one. Returns -1 if no part has an active phrase
+        /// (the mic is silent). Used by visualization to color the needle and
+        /// particle trail by the lane being hit, not by the mic's slot index.
+        /// </summary>
+        public int GetEffectivePartForMic(int micIndex)
+        {
+            if (micIndex < 0 || micIndex >= _micCount) return -1;
+            int partCount = _allParts.Count;
+            int targetPart = micIndex % partCount;
+            if (FindActivePhraseInPart(targetPart) is not null) return targetPart;
+            for (int j = 0; j < partCount; j++)
+            {
+                if (j == targetPart) continue;
+                if (FindActivePhraseInPart(j) is not null) return j;
+            }
+            return -1;
+        }
+
+        /// <summary>
         /// Find the assignment of mics to parts that maximizes (in priority order):
         /// 1. Number of canonical meters >= awesomeThreshold (the N-awesome count)
         /// 2. Total sum of canonical meters
