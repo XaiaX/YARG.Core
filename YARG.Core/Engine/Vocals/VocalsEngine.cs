@@ -118,7 +118,17 @@ namespace YARG.Core.Engine.Vocals
                 allNotes.Sort((a, b) => (int) (a.Tick - b.Tick));
             }
 
+            YargLogger.LogFormatInfo(
+                "[countdown-build] parts={0} excludePerc={1} totalPhrases={2} firstFew={3}",
+                allParts.Count, excludePercussion, allNotes.Count,
+                string.Join(", ", allNotes.Take(8).Select(n =>
+                    $"({n.Time:F1}->{n.TimeEnd:F1} children={n.ChildNotes.Count} perc={n.ChildNotes.Count(c => c.IsPercussion)})")));
+
             GetWaitCountdowns(allNotes);
+
+            YargLogger.LogFormatInfo("[countdown-build] WaitCountdowns.Count={0} firstFew={1}",
+                WaitCountdowns.Count,
+                string.Join(", ", WaitCountdowns.Take(5).Select(w => $"({w.Time:F1}+{w.TimeLength:F1}s)")));
         }
 
         protected override void GenerateQueuedUpdates(double nextTime)
