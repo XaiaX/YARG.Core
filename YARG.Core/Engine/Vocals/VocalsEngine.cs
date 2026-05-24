@@ -118,14 +118,7 @@ namespace YARG.Core.Engine.Vocals
                 allNotes.Sort((a, b) => (int) (a.Tick - b.Tick));
             }
 
-            string phrasePreview = string.Join(", ", allNotes.Take(8).Select(n =>
-                $"({n.Time:F1}->{n.TimeEnd:F1} children={n.ChildNotes.Count} perc={n.ChildNotes.Count(c => c.IsPercussion)})"));
-            YargLogger.LogInfo($"[countdown-build] parts={allParts.Count} excludePerc={excludePercussion} totalPhrases={allNotes.Count} firstFew={phrasePreview}");
-
             GetWaitCountdowns(allNotes);
-
-            string countdownPreview = string.Join(", ", WaitCountdowns.Take(5).Select(w => $"({w.Time:F1}+{w.TimeLength:F1}s)"));
-            YargLogger.LogInfo($"[countdown-build] WaitCountdowns.Count={WaitCountdowns.Count} firstFew={countdownPreview}");
         }
 
         protected override void GenerateQueuedUpdates(double nextTime)
