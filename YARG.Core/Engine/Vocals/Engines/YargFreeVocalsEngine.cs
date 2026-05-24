@@ -42,6 +42,17 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         private const double ROLLBACK_WINDOW_SECONDS = 0.5; // 500 ms MVP default per design
 
+        // Smoke-test: mics with index >= RANDOM_BEHAVIOR_MIN_MIC_INDEX use random
+        // part reassignment (or silence). Threshold matches "mics 1-3 keep their
+        // current behavior, mics 4-7 randomize" since the user-facing slots are
+        // 1-indexed.
+        private const int RANDOM_BEHAVIOR_MIN_MIC_INDEX = 3;
+        private const double RANDOM_REASSIGN_INTERVAL_SECONDS = 0.5;
+        private const double RANDOM_SILENCE_CHANCE = 0.25;
+        private readonly int[] _micRandomTarget;
+        private readonly double[] _micRandomNextReassignTime;
+        private readonly Random _micRandom;
+
         // Window state for per-window assignment and N-awesome grading
         private double _lastRollbackTime;
         private readonly double[,] _lastWindowSnapshot;
@@ -85,38 +96,64 @@ namespace YARG.Core.Engine.Vocals.Engines
             _canonicalMeters = new double[allParts.Count];
             _phraseTicksTotalPerPart = new uint[allParts.Count];
 
+            // Smoke-test state for mics 4-7: each picks a random target part (or
+            // -1 = silent) every RANDOM_REASSIGN_INTERVAL_SECONDS. Lets us visually
+            // confirm that extra mics actually move between HARM lines instead of
+            // stacking invisibly on top of the first 3. Replace once the per-bot
+            // behavior dropdowns land.
+            _micRandomTarget = new int[micCount];
+            _micRandomNextReassignTime = new double[micCount];
+            for (int i = 0; i < micCount; i++)
+            {
+                _micRandomTarget[i] = i % Math.Max(1, allParts.Count);
+                _micRandomNextReassignTime[i] = 0;
+            }
+            _micRandom = new Random(1234);
+
             // Build countdowns from all parts for free vocals; exclude percussion so
             // percussion-only stretches show the countdown wheel instead of being
             // hidden as a continuous note stream.
             BuildCountdownsFromAllParts(allParts.ToList(), excludePercussion: true);
         }
 
-        private void UpdateBotMultiMic(double songTime)
+        private int ResolveMicTargetPart(int micIdx, double songTime)
         {
             int partCount = _allParts.Count;
+
+            if (micIdx >= RANDOM_BEHAVIOR_MIN_MIC_INDEX)
+            {
+                if (songTime >= _micRandomNextReassignTime[micIdx])
+                {
+                    double roll = _micRandom.NextDouble();
+                    _micRandomTarget[micIdx] = roll < RANDOM_SILENCE_CHANCE
+                        ? -1
+                        : _micRandom.Next(0, partCount);
+                    _micRandomNextReassignTime[micIdx] = songTime + RANDOM_REASSIGN_INTERVAL_SECONDS;
+                }
+                return _micRandomTarget[micIdx];
+            }
+
+            int assigned = micIdx % partCount;
+            if (FindActivePhraseInPart(assigned) is not null) return assigned;
+            for (int j = 0; j < partCount; j++)
+            {
+                if (j == assigned) continue;
+                if (FindActivePhraseInPart(j) is not null) return j;
+            }
+            return -1;
+        }
+
+        private void UpdateBotMultiMic(double songTime)
+        {
             bool anyMicSang = false;
             VocalNote? representativeNote = null;
 
             for (int micIdx = 0; micIdx < _micCount; micIdx++)
             {
-                int targetPart = micIdx % partCount;
+                int targetPart = ResolveMicTargetPart(micIdx, songTime);
+                if (targetPart < 0) continue;
 
-                // Prefer the bot mic's assigned part; if no phrase active, fall back to
-                // any other part that does have one (lowest-numbered wins).
                 VocalNote? phrase = FindActivePhraseInPart(targetPart);
-                if (phrase is null)
-                {
-                    for (int j = 0; j < partCount; j++)
-                    {
-                        if (j == targetPart) continue;
-                        var fallback = FindActivePhraseInPart(j);
-                        if (fallback is not null)
-                        {
-                            phrase = fallback;
-                            break;
-                        }
-                    }
-                }
                 if (phrase is null) continue;
 
                 VocalNote? singNote = null;
@@ -708,18 +745,9 @@ namespace YARG.Core.Engine.Vocals.Engines
         public bool IsMicOnNote(int micIndex)
         {
             if (micIndex < 0 || micIndex >= _micCount) return false;
-            int partCount = _allParts.Count;
-            int targetPart = micIndex % partCount;
-            var phrase = FindActivePhraseInPart(targetPart);
-            if (phrase is null)
-            {
-                for (int j = 0; j < partCount; j++)
-                {
-                    if (j == targetPart) continue;
-                    var fallback = FindActivePhraseInPart(j);
-                    if (fallback is not null) { phrase = fallback; break; }
-                }
-            }
+            int effectivePart = GetEffectivePartForMic(micIndex);
+            if (effectivePart < 0) return false;
+            var phrase = FindActivePhraseInPart(effectivePart);
             if (phrase is null) return false;
             foreach (var childNote in phrase.ChildNotes)
             {
@@ -744,11 +772,20 @@ namespace YARG.Core.Engine.Vocals.Engines
         {
             if (micIndex < 0 || micIndex >= _micCount) return -1;
             int partCount = _allParts.Count;
-            int targetPart = micIndex % partCount;
-            if (FindActivePhraseInPart(targetPart) is not null) return targetPart;
+
+            if (micIndex >= RANDOM_BEHAVIOR_MIN_MIC_INDEX)
+            {
+                // Random-target state is refreshed in UpdateBotMultiMic; just read it.
+                int target = _micRandomTarget[micIndex];
+                if (target < 0 || target >= partCount) return -1;
+                return FindActivePhraseInPart(target) is not null ? target : -1;
+            }
+
+            int assigned = micIndex % partCount;
+            if (FindActivePhraseInPart(assigned) is not null) return assigned;
             for (int j = 0; j < partCount; j++)
             {
-                if (j == targetPart) continue;
+                if (j == assigned) continue;
                 if (FindActivePhraseInPart(j) is not null) return j;
             }
             return -1;
