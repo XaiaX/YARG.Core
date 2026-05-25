@@ -204,4 +204,28 @@ public sealed class PartyVocalsAssignmentTests
         Assert.AreEqual(0.5, cumulativeMeters[0], Epsilon);
         Assert.AreEqual(0.5, cumulativeMeters[1], Epsilon);
     }
+
+    // Sub-threshold equal hits across two mics on two parts: prefer spreading
+    // across distinct parts so both meters move, rather than collapsing both
+    // mics onto part 0 (which the prior pure-sum tiebreak chose lexically).
+    [Test]
+    public void BestAssignment_SubThreshold_PrefersDistinctParts()
+    {
+        // Both mics hit both parts equally; neither sum can cross threshold this window.
+        double[,] micPartHits =
+        {
+            { 20, 20 },
+            { 20, 20 }
+        };
+        uint[] phraseTicksTotal = { 100, 100 };
+        double awesomeThreshold = 0.6;
+
+        var (assignment, meters) = YargFreeVocalsEngine.ComputeBestAssignment(
+            micPartHits, phraseTicksTotal, awesomeThreshold);
+
+        // Distinct-parts tiebreak should pick [0, 1] over [0, 0]; both meters get filled.
+        Assert.AreEqual(new int[] { 0, 1 }, assignment);
+        Assert.AreEqual(0.2, meters[0], Epsilon);
+        Assert.AreEqual(0.2, meters[1], Epsilon);
+    }
 }
