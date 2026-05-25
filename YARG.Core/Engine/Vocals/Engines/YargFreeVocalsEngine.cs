@@ -402,6 +402,21 @@ namespace YARG.Core.Engine.Vocals.Engines
                 _lastRollbackTime = CurrentTime;
             }
 
+            // Mirror the best canonical meter into PhraseTicksHit so the HUD's per-phrase
+            // fill bar tracks progress for multi-mic too. CheckSingingHit is the only
+            // other writer and it bails when HasSang is false (multi-mic input bypasses
+            // it via SetMicPitch), so without this the fill bar stays empty all phrase.
+            if (_micCount > 1 && PhraseTicksTotal is { } total && total > 0)
+            {
+                double bestMeter = 0;
+                for (int j = 0; j < _canonicalMeters.Length; j++)
+                {
+                    if (_phraseTicksTotalPerPart[j] == 0) continue;
+                    if (_canonicalMeters[j] > bestMeter) bestMeter = _canonicalMeters[j];
+                }
+                PhraseTicksHit = bestMeter * total;
+            }
+
             // Check for the end of a phrase
             if (CurrentTick > phrase.TickEnd)
             {
