@@ -378,14 +378,20 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Per-mic-per-part hidden accumulation. Runs for all free vocals (incl. single
             // real-mic and single-mic bot) so the HARM1/2/3 % HUD has data. Multi-mic
             // scoring still gates on _micCount > 1 at phrase-end below.
-            bool anyMicHit = AccumulateMicPartHits();
+            bool anyMicHit = AccumulateMicPartHits(out VocalNote? repNote);
 
             // Drive the "on note" visual state for real-mic multi-mic players. Single-mic
             // real-mic uses CheckSingingHit's OnHit, and bots fire OnHit from UpdateBot/
             // UpdateBotMultiMic. Without this, multi-mic real-mic players never set
-            // _lastHitTime, so VocalsPlayer's multi-needle gate hides the needles.
+            // _lastHitTime, so VocalsPlayer's multi-needle gate hides the needles. The
+            // gate also requires _lastTargetNote — drive that via OnTargetNoteChanged
+            // using whichever note a mic actually landed on this tick.
             if (!IsBot && _micCount > 1)
             {
+                if (anyMicHit && repNote is not null)
+                {
+                    OnTargetNoteChanged?.Invoke(repNote);
+                }
                 OnHit?.Invoke(anyMicHit);
             }
 
@@ -525,8 +531,14 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         private bool AccumulateMicPartHits()
         {
+            return AccumulateMicPartHits(out _);
+        }
+
+        private bool AccumulateMicPartHits(out VocalNote? representativeHitNote)
+        {
             var maxLeniency = 1.0 / EngineParameters.ApproximateVocalFps;
             bool anyMicHit = false;
+            representativeHitNote = null;
 
             for (int micIndex = 0; micIndex < _micCount; micIndex++)
             {
@@ -561,7 +573,11 @@ namespace YARG.Core.Engine.Vocals.Engines
                             if (CanVocalNoteBeHit(note, out float hitPercent))
                             {
                                 _micPartHits[micIndex, partIndex] += ticksSinceLast * hitPercent;
-                                if (hitPercent > 0f) anyMicHit = true;
+                                if (hitPercent > 0f)
+                                {
+                                    anyMicHit = true;
+                                    representativeHitNote ??= note;
+                                }
                             }
                         }
                     }
@@ -851,8 +867,11 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// <summary>
         /// Find the assignment of mics to parts that maximizes (in priority order):
         /// 1. Number of canonical meters >= awesomeThreshold (the N-awesome count)
-        /// 2. Total sum of canonical meters
-        /// 3. Lexicographic tiebreak: mic[0] prefers lowest-numbered part it contributes to,
+        /// 2. Number of distinct parts that any mic is assigned to (spreads mics across
+        ///    HARMs so two singers don't collapse onto the same lane before either
+        ///    crosses the awesome threshold)
+        /// 3. Total sum of canonical meters
+        /// 4. Lexicographic tiebreak: mic[0] prefers lowest-numbered part it contributes to,
         ///    then mic[1], etc.
         /// Enumerates all (M+1)^N possibilities where M = parts.Count and N = mic count.
         /// For the supported range (N <= 7, M <= 3), worst case is 16384 enumerations — fine.
@@ -873,6 +892,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             for (int i = 0; i < micCount; i++) bestAssignment[i] = -1;
             double[] bestMeters = new double[partCount];
             int bestN = -1;
+            int bestDistinct = -1;
             double bestSum = -1;
 
             int[] currentAssignment = new int[micCount];
@@ -912,11 +932,21 @@ namespace YARG.Core.Engine.Vocals.Engines
                     sum += currentMeters[j];
                 }
 
-                // Compare: maximize n, then sum, then lexicographic preference.
+                // Count distinct parts that any mic was assigned to, but only count parts
+                // that actually received hits — assigning a silent mic to an unused part
+                // shouldn't game this tiebreak.
+                int distinct = 0;
+                for (int j = 0; j < partCount; j++)
+                {
+                    if (currentMeters[j] > 0) distinct++;
+                }
+
+                // Compare: maximize n, then distinct-parts-hit, then sum, then lex.
                 bool better = false;
                 if (n > bestN) better = true;
-                else if (n == bestN && sum > bestSum + 1e-9) better = true;
-                else if (n == bestN && Math.Abs(sum - bestSum) < 1e-9)
+                else if (n == bestN && distinct > bestDistinct) better = true;
+                else if (n == bestN && distinct == bestDistinct && sum > bestSum + 1e-9) better = true;
+                else if (n == bestN && distinct == bestDistinct && Math.Abs(sum - bestSum) < 1e-9)
                 {
                     for (int i = 0; i < micCount; i++)
                     {
@@ -930,6 +960,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                 if (better)
                 {
                     bestN = n;
+                    bestDistinct = distinct;
                     bestSum = sum;
                     Array.Copy(currentAssignment, bestAssignment, micCount);
                     Array.Copy(currentMeters, bestMeters, partCount);
