@@ -276,6 +276,15 @@ namespace YARG.Core.Engine.Vocals.Engines
                 // Bots are queued extra updates to account for in-between "inputs"
                 PitchSang = singNote.PitchAtSongTime(songTime);
                 HasSang = true;
+
+                // Mirror into mic[0] for single-mic bot free vocals so the per-part
+                // canonical-meter accumulation (HARM1/2/3 % HUD) gets data.
+                if (_micCount == 1)
+                {
+                    _micPitches[0] = PitchSang;
+                    _micHasSang[0] = true;
+                }
+
                 OnSing?.Invoke(true);
 
                 // Drive the visual "on note" state for bots: VocalsPlayer's needle path
@@ -314,6 +323,14 @@ namespace YARG.Core.Engine.Vocals.Engines
                 HasSang = true;
                 PitchSang = gameInput.Axis;
 
+                // Mirror into mic[0] so single-mic free vocals also feeds the per-part
+                // canonical-meter accumulation (used to show HARM1/2/3 % in the HUD).
+                if (_micCount == 1)
+                {
+                    _micPitches[0] = gameInput.Axis;
+                    _micHasSang[0] = true;
+                }
+
                 OnSing?.Invoke(true);
             }
             else if (action is VocalsAction.StarPower)
@@ -345,19 +362,16 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             CheckForNoteHit();
 
-            // Multi-mic per-mic-per-part hidden accumulation. Runs for both humans (real mic
-            // input) and Party Vocals bots (synthetic pitches populated in UpdateBotMultiMic).
-            // Single-mic bots still use the single-pitch path via UpdateBot.
-            if (_micCount > 1)
-            {
-                AccumulateMicPartHits();
+            // Per-mic-per-part hidden accumulation. Runs for all free vocals (incl. single
+            // real-mic and single-mic bot) so the HARM1/2/3 % HUD has data. Multi-mic
+            // scoring still gates on _micCount > 1 at phrase-end below.
+            AccumulateMicPartHits();
 
-                // Per-window visual rollback cadence. Does not consume the hidden buffer.
-                if (CurrentTime - _lastRollbackTime >= ROLLBACK_WINDOW_SECONDS)
-                {
-                    CommitWindowAssignment();
-                    _lastRollbackTime = CurrentTime;
-                }
+            // Per-window visual rollback cadence. Does not consume the hidden buffer.
+            if (CurrentTime - _lastRollbackTime >= ROLLBACK_WINDOW_SECONDS)
+            {
+                CommitWindowAssignment();
+                _lastRollbackTime = CurrentTime;
             }
 
             // Check for the end of a phrase
@@ -435,6 +449,16 @@ namespace YARG.Core.Engine.Vocals.Engines
                 }
                 else
                 {
+                    // Final per-part commit so the HUD's HARM% reflects the phrase tail
+                    // before we clear the meter state for the next phrase.
+                    CommitWindowAssignment();
+                    Array.Clear(_micPartHits, 0, _micPartHits.Length);
+                    Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
+                    Array.Clear(_cumulativeAssignedTicks, 0, _cumulativeAssignedTicks.Length);
+                    Array.Clear(_canonicalMeters, 0, _canonicalMeters.Length);
+                    Array.Clear(_phraseTicksTotalPerPart, 0, _phraseTicksTotalPerPart.Length);
+                    _lastRollbackTime = CurrentTime;
+
                     // Single-mic path: existing HitNote/MissNote/OnPhraseHit flow unchanged.
                     var percentHit = PhraseTicksHit / PhraseTicksTotal.Value;
                     if (!hasNotes)
