@@ -410,16 +410,18 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                 if (_micCount > 1)
                 {
-                    // Final window commit
+                    // Final window commit so the canonical meters reflect the phrase tail.
                     CommitWindowAssignment();
 
-                    // Derive grade
+                    // Grade is derived from how many parts crossed the awesome threshold.
                     int awesomeCount = 0;
                     double awesomeThreshold = EngineParameters.PhraseHitPercent;
+                    double bestMeter = 0;
                     for (int j = 0; j < _canonicalMeters.Length; j++)
                     {
                         if (_phraseTicksTotalPerPart[j] == 0) continue;
                         if (_canonicalMeters[j] >= awesomeThreshold) awesomeCount++;
+                        if (_canonicalMeters[j] > bestMeter) bestMeter = _canonicalMeters[j];
                     }
 
                     PhraseGrade grade = awesomeCount switch
@@ -430,36 +432,50 @@ namespace YARG.Core.Engine.Vocals.Engines
                         _ => PhraseGrade.TripleAwesome,
                     };
 
-                    // Score: sum over j of M[j] × PointsPerPhrase for parts present in this phrase.
-                    int totalPoints = 0;
-                    uint totalTicksHit = 0;
-                    uint totalTicksMissed = 0;
+                    // Reuse the legacy phrase-end path so combo, NotesHit, score, multiplier,
+                    // NoteIndex, OnPhraseHit, IsFc etc. all stay consistent with the rest of
+                    // the engine. percentHit is the best-matched part's meter; bonus points
+                    // for double/triple awesome go through AddScore on top.
+                    bool hit = grade != PhraseGrade.Miss;
+                    double percentHit = bestMeter;
 
-                    for (int j = 0; j < _canonicalMeters.Length; j++)
+                    if (hasNotes)
                     {
-                        if (_phraseTicksTotalPerPart[j] == 0) continue;
-                        totalPoints += (int) Math.Round(_canonicalMeters[j] * EngineParameters.PointsPerPhrase);
+                        if (hit)
+                        {
+                            EngineStats.TicksHit += PhraseTicksTotal.Value;
+                            HitNote(phrase);
 
-                        // Track hit/miss stats for EngineStats
-                        totalTicksHit += (uint) Math.Round(_canonicalMeters[j] * _phraseTicksTotalPerPart[j]);
-                        totalTicksMissed += (uint) Math.Round((1.0 - _canonicalMeters[j]) * _phraseTicksTotalPerPart[j]);
-                    }
-
-                    EngineStats.TicksHit += totalTicksHit;
-                    EngineStats.TicksMissed += totalTicksMissed;
-
-                    if (totalPoints > 0) AddScore(totalPoints);
-
-                    // Combo: continue iff at least one meter crossed threshold.
-                    if (grade == PhraseGrade.Miss)
-                    {
-                        ResetCombo();
+                            // Bonus: each extra awesome above the first awards another
+                            // PointsPerPhrase, so double awesome = 2x phrase, triple = 3x.
+                            int extraAwesomes = awesomeCount - 1;
+                            if (extraAwesomes > 0)
+                            {
+                                AddScore(EngineParameters.PointsPerPhrase * extraAwesomes);
+                            }
+                        }
+                        else
+                        {
+                            var ticksHit = (uint) Math.Round(PhraseTicksHit);
+                            EngineStats.TicksHit += ticksHit;
+                            EngineStats.TicksMissed += PhraseTicksTotal.Value - ticksHit;
+                            MissNote(phrase, percentHit);
+                        }
                     }
                     else
                     {
-                        IncrementCombo();
+                        // Empty phrase: count as hit, no score change (mirrors single-mic path
+                        // which treats hasNotes=false as percentHit=1.0).
+                        HitNote(phrase);
                     }
 
+                    PhraseTicksHit = 0;
+                    PhraseTicksTotal = null;
+
+                    if (hasNotes)
+                    {
+                        OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
+                    }
                     OnPartyVocalsPhrase?.Invoke(grade, _canonicalMeters.ToArray(), isLastPhrase);
 
                     // Reset all window state for next phrase
@@ -469,11 +485,6 @@ namespace YARG.Core.Engine.Vocals.Engines
                     Array.Clear(_canonicalMeters, 0, _canonicalMeters.Length);
                     Array.Clear(_phraseTicksTotalPerPart, 0, _phraseTicksTotalPerPart.Length);
                     _lastRollbackTime = CurrentTime;
-
-                    // Reset phrase state and advance to next phrase
-                    PhraseTicksHit = 0;
-                    PhraseTicksTotal = null;
-                    NoteIndex++;
                 }
                 else
                 {
