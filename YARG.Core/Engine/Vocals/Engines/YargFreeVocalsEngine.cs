@@ -618,6 +618,11 @@ namespace YARG.Core.Engine.Vocals.Engines
                 var ticksSinceLast = CurrentTick - lastTick;
                 PhraseTicksHit += ticksSinceLast * bestHitPercent;
 
+                // Drive the visual "on note" state for real-mic singers. Without this,
+                // VocalsPlayer's single-mic path never sees _lastHitTime set, so the
+                // hitting particle trail never plays. Mirrors YargVocalsEngine.
+                OnHit?.Invoke(true);
+
                 // Trigger hit event
                 if (HasHit)
                 {
@@ -635,6 +640,8 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
             else
             {
+                OnHit?.Invoke(false);
+
                 // Singing (or any noise) can result in a call to CheckPercussionHit() as well, so we need to check SingToActivateStarPower here.
                 if (HasHit && CanStarPowerActivate && EngineParameters.SingToActivateStarPower)
                 {
