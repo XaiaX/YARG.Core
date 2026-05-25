@@ -445,14 +445,9 @@ namespace YARG.Core.Engine.Vocals.Engines
                         {
                             EngineStats.TicksHit += PhraseTicksTotal.Value;
                             HitNote(phrase);
-
-                            // Bonus: each extra awesome above the first awards another
-                            // PointsPerPhrase, so double awesome = 2x phrase, triple = 3x.
-                            int extraAwesomes = awesomeCount - 1;
-                            if (extraAwesomes > 0)
-                            {
-                                AddScore(EngineParameters.PointsPerPhrase * extraAwesomes);
-                            }
+                            // No score bonus for double/triple awesome — per design
+                            // (`2026-05-21-party-vocals.md` §Scoring): N-awesome is
+                            // display and stats only, does not multiply score.
                         }
                         else
                         {
