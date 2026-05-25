@@ -816,6 +816,12 @@ namespace YARG.Core.Engine.Vocals.Engines
                 throw new ArgumentOutOfRangeException(nameof(micIndex));
             _micPitches[micIndex] = pitch;
             _micHasSang[micIndex] = true;
+
+            // Drive OnSing so VocalsPlayer's all-needles "is anyone singing?" gate
+            // (IsInThreshold(_lastSingTime)) actually opens. Without this, party-vocals
+            // pitch inputs that bypass MutateStateWithInput leave _lastSingTime null
+            // and every per-mic needle stays hidden.
+            OnSing?.Invoke(true);
         }
 
         /// <summary>
