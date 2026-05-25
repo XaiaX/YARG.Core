@@ -23,6 +23,19 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// </summary>
         public double AwesomeThreshold => EngineParameters.PhraseHitPercent;
 
+        /// <summary>
+        /// Whether each HARM part has any phrase content in this chart. The Harmony
+        /// track always exposes 3 placeholder parts even if the song only charts
+        /// HARM1+HARM2, so the HUD uses this to hide empty-lane meters.
+        /// </summary>
+        public bool PartHasContent(int partIndex)
+        {
+            if (partIndex < 0 || partIndex >= _allParts.Count) return false;
+            return _allParts[partIndex].NotePhrases.Count > 0;
+        }
+
+        public int PartCount => _allParts.Count;
+
         // Store reference to all parts for hit testing
         private readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
@@ -365,7 +378,16 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Per-mic-per-part hidden accumulation. Runs for all free vocals (incl. single
             // real-mic and single-mic bot) so the HARM1/2/3 % HUD has data. Multi-mic
             // scoring still gates on _micCount > 1 at phrase-end below.
-            AccumulateMicPartHits();
+            bool anyMicHit = AccumulateMicPartHits();
+
+            // Drive the "on note" visual state for real-mic multi-mic players. Single-mic
+            // real-mic uses CheckSingingHit's OnHit, and bots fire OnHit from UpdateBot/
+            // UpdateBotMultiMic. Without this, multi-mic real-mic players never set
+            // _lastHitTime, so VocalsPlayer's multi-needle gate hides the needles.
+            if (!IsBot && _micCount > 1)
+            {
+                OnHit?.Invoke(anyMicHit);
+            }
 
             // Per-window visual rollback cadence. Does not consume the hidden buffer.
             if (CurrentTime - _lastRollbackTime >= ROLLBACK_WINDOW_SECONDS)
@@ -501,9 +523,10 @@ namespace YARG.Core.Engine.Vocals.Engines
             CheckPercussionHit();
         }
 
-        private void AccumulateMicPartHits()
+        private bool AccumulateMicPartHits()
         {
             var maxLeniency = 1.0 / EngineParameters.ApproximateVocalFps;
+            bool anyMicHit = false;
 
             for (int micIndex = 0; micIndex < _micCount; micIndex++)
             {
@@ -538,6 +561,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                             if (CanVocalNoteBeHit(note, out float hitPercent))
                             {
                                 _micPartHits[micIndex, partIndex] += ticksSinceLast * hitPercent;
+                                if (hitPercent > 0f) anyMicHit = true;
                             }
                         }
                     }
@@ -545,6 +569,8 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                 PitchSang = savedPitchSang;
             }
+
+            return anyMicHit;
         }
 
         private void CheckSingingHit()
