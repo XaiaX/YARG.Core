@@ -10,12 +10,33 @@ namespace YARG.Core.UnitTests.Input;
 [TestFixture]
 public sealed class ProfileBindingsTests
 {
-    // Test for party-vocals.AC1.1: Add microphones up to cap
+    // Test for party-vocals.AC2.5.1: Solo Vocals profile rejects a second mic
     [Test]
-    public void AddMicrophone_OneToSeven_AllAccepted()
+    public void SoloVocals_Profile_Rejects_Second_Mic()
     {
         // Arrange
-        var profile = new YargProfile { Name = "TestProfile" };
+        var profile = new YargProfile { Name = "SoloSinger", GameMode = GameMode.Vocals };
+        var bindings = new TestableProfileBindings(profile);
+        var mic1 = new TestableMicDevice("Mic1", "Mic1@0");
+        var mic2 = new TestableMicDevice("Mic2", "Mic2@1");
+
+        // Act
+        var firstResult = bindings.AddMicrophone(mic1);
+        var secondResult = bindings.AddMicrophone(mic2);
+
+        // Assert
+        Assert.That(firstResult, Is.True, "First microphone should be accepted");
+        Assert.That(secondResult, Is.False, "Second microphone should be rejected for Solo Vocals");
+        Assert.That(bindings.Microphones.Count, Is.EqualTo(1));
+        Assert.That(mic2.IsDisposed, Is.True, "Rejected mic should be disposed");
+    }
+
+    // Test for party-vocals.AC1.1: Party Vocals accepts up to 7 mics
+    [Test]
+    public void PartyVocals_AddMicrophone_OneToSeven_AllAccepted()
+    {
+        // Arrange
+        var profile = new YargProfile { Name = "PartySinger", GameMode = GameMode.PartyVocals };
         var bindings = new TestableProfileBindings(profile);
         var micDevices = CreateTestMicDevices(7);
 
@@ -34,10 +55,10 @@ public sealed class ProfileBindingsTests
 
     // Test for party-vocals.AC1.2: Reject 8th microphone
     [Test]
-    public void AddMicrophone_EighthRejected_DisposesNewMic()
+    public void PartyVocals_AddMicrophone_EighthRejected_DisposesNewMic()
     {
         // Arrange
-        var profile = new YargProfile { Name = "TestProfile" };
+        var profile = new YargProfile { Name = "PartySinger", GameMode = GameMode.PartyVocals };
         var bindings = new TestableProfileBindings(profile);
         var micDevices = CreateTestMicDevices(8);
 
@@ -121,6 +142,8 @@ public sealed class ProfileBindingsTests
         public string TestDeviceId { get; }
         public bool IsDisposed { get; private set; }
 
+        public override string StableId => TestDeviceId;
+
         public TestableMicDevice(string displayName, string deviceId) : base(displayName)
         {
             TestDeviceId = deviceId;
@@ -148,7 +171,7 @@ public sealed class ProfileBindingsTests
 
         public override SerializedMic Serialize()
         {
-            return new SerializedMic(TestDeviceId);
+            return new SerializedMic(TestDeviceId, StableId);
         }
 
         protected override void DisposeManagedResources()
@@ -161,32 +184,33 @@ public sealed class ProfileBindingsTests
         }
     }
 
-    // Testable ProfileBindings that isolates mic logic from Unity dependencies
+    // Testable ProfileBindings that isolates mic logic from Unity dependencies.
+    // Mirrors the real ProfileBindings.AddMicrophone / RemoveMicrophone logic.
     private class TestableProfileBindings
     {
         private const int MICROPHONE_CAP = 7;
         private readonly List<MicDevice> _microphones = new();
+        private readonly YargProfile _profile;
 
         public IReadOnlyList<MicDevice> Microphones => _microphones;
         public MicDevice Microphone => _microphones.Count > 0 ? _microphones[0] : null;
 
         public TestableProfileBindings(YargProfile profile)
         {
-            // Constructor would normally initialize other things, but we only test mic logic
+            _profile = profile;
         }
 
         public bool AddMicrophone(MicDevice microphone)
         {
-            // Check if we've reached the cap
-            if (_microphones.Count >= MICROPHONE_CAP)
+            int cap = _profile.GameMode == GameMode.PartyVocals ? MICROPHONE_CAP : 1;
+            if (_microphones.Count >= cap)
             {
                 microphone.Dispose();
                 return false;
             }
 
-            // Check for duplicates by device ID
-            var deviceId = microphone.Serialize().Name;
-            if (_microphones.Any(m => m.Serialize().Name == deviceId))
+            var stableId = microphone.StableId;
+            if (_microphones.Any(m => m.StableId == stableId))
             {
                 microphone.Dispose();
                 return false;

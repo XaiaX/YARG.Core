@@ -51,6 +51,13 @@ namespace YARG.Core.Audio
         public bool IsMonitoring;
         public bool IsRecordingOutput;
 
+        /// <summary>
+        /// A within-session-unique identifier for this physical device. Two
+        /// devices with identical DisplayName (e.g. two Logitech USB Microphones)
+        /// must produce different StableIds.
+        /// </summary>
+        public abstract string StableId { get; }
+
         protected MicDevice(string displayName)
         {
             DisplayName = displayName;
