@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using Newtonsoft.Json;
 
 namespace YARG.Core.Audio
 {
@@ -19,7 +20,8 @@ namespace YARG.Core.Audio
             StableId = null;
         }
 
-        public SerializedMic(string name, string stableId)
+        [JsonConstructor]
+        public SerializedMic(string name, string? stableId)
         {
             Name = name;
             StableId = stableId;
