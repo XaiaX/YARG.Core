@@ -509,6 +509,7 @@ namespace YARG.Core.Chart
             GameMode.ProKeys => MoonChart.GameMode.ProKeys,
 
             GameMode.Vocals => MoonChart.GameMode.Vocals,
+            GameMode.PartyVocals => MoonChart.GameMode.Vocals,
 
             _ => throw new NotImplementedException($"Unhandled game mode {mode}!")
         };
@@ -541,6 +542,7 @@ namespace YARG.Core.Chart
             // Vocals and harmony need to be handled specially
             // Instrument.Vocals  => MoonSong.MoonInstrument.Vocals,
             // Instrument.Harmony => MoonSong.MoonInstrument.Harmony1,
+            // Instrument.PartyVocals => MoonSong.MoonInstrument.Harmony1,
 
             _ => throw new NotImplementedException($"Unhandled instrument {instrument}!")
         };
