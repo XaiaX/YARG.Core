@@ -81,7 +81,8 @@ namespace YARG.Core.Audio
                 Instrument.FiveLaneDrums => SongStem.Drums,
 
                 Instrument.Vocals or
-                Instrument.Harmony => SongStem.Vocals,
+                Instrument.Harmony or
+                Instrument.PartyVocals => SongStem.Vocals,
 
                 _ => throw new Exception("Unreachable.")
             };
