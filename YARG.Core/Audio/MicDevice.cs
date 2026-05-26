@@ -55,8 +55,21 @@ namespace YARG.Core.Audio
         /// A within-session-unique identifier for this physical device. Two
         /// devices with identical DisplayName (e.g. two Logitech USB Microphones)
         /// must produce different StableIds.
+        ///
+        /// Backends should produce this string via <see cref="ComputeStableId"/>
+        /// so callers (binding resolver, picker filter) can predict the same
+        /// value from the raw (deviceId, name) pairs returned by
+        /// <c>GlobalAudioHandler.GetAllInputDevices()</c> without instantiating
+        /// the device first.
         /// </summary>
         public abstract string StableId { get; }
+
+        /// <summary>
+        /// Canonical formula for a device's StableId. Single source of truth
+        /// for everything that needs to derive a StableId from a raw
+        /// (deviceId, name) pair without holding a live <see cref="MicDevice"/>.
+        /// </summary>
+        public static string ComputeStableId(int deviceId, string name) => $"{name}@{deviceId}";
 
         protected MicDevice(string displayName)
         {
