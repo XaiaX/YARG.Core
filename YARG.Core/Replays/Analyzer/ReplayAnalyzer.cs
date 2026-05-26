@@ -317,6 +317,7 @@ namespace YARG.Core.Replays.Analyzer
                         profile.IsBot);
                 }
                 case GameMode.Vocals:
+                case GameMode.PartyVocals:
                 {
                     // Get the notes
                     var notes = _chart.GetVocalsTrack(profile.CurrentInstrument)

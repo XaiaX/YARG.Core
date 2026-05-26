@@ -67,6 +67,7 @@ namespace YARG.Core.Replays
                     Stats = new DrumsStats(ref stream, version);
                     break;
                 case GameMode.Vocals:
+                case GameMode.PartyVocals:
                     EngineParameters = new VocalsEngineParameters(ref stream, version);
                     Stats = new VocalsStats(ref stream, version);
                     break;

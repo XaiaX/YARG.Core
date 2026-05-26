@@ -149,8 +149,9 @@ namespace YARG.Core.Game
         // (e.g. Bohemian Rhapsody) — the menu forces CurrentInstrument to Harmony there
         // because Vocals isn't in the song's possible-instruments list.
         public bool IsFreeVocals =>
-            (CurrentInstrument == Instrument.Vocals || CurrentInstrument == Instrument.Harmony)
-            && _freeHarmony;
+            CurrentInstrument == Instrument.PartyVocals
+            || ((CurrentInstrument == Instrument.Vocals || CurrentInstrument == Instrument.Harmony)
+                && _freeHarmony);
 
         /// <summary>
         /// The currently selected modifiers as a flag.
@@ -445,6 +446,7 @@ namespace YARG.Core.Game
                             $"track with notes of {typeof(TNote)}!");
                     }
                 case GameMode.Vocals:
+                case GameMode.PartyVocals:
                             throw new InvalidOperationException("For vocals, use ApplyVocalModifiers instead!");
                         }
         }

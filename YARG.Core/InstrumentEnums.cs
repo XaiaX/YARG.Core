@@ -30,6 +30,7 @@ namespace YARG.Core
 
         // 15-19: Vocals
         Vocals = 15,
+        PartyVocals = 16,
 
         // 20-24: Other
         // Dj = 20,
@@ -71,6 +72,7 @@ namespace YARG.Core
         // 40-49: Vocals
         Vocals = 40,
         Harmony = 41,
+        PartyVocals = 42,
 
         // 50-59: DJ
         // DjSingle = 50,
@@ -195,6 +197,8 @@ namespace YARG.Core
                 Instrument.Vocals or
                 Instrument.Harmony => GameMode.Vocals,
 
+                Instrument.PartyVocals => GameMode.PartyVocals,
+
                 // Instrument.DjSingle => GameMode.Dj,
                 // Instrument.DjDouble => GameMode.Dj,
 
@@ -257,6 +261,10 @@ namespace YARG.Core
                 {
                     Instrument.Vocals,
                     Instrument.Harmony
+                },
+                GameMode.PartyVocals => new[]
+                {
+                    Instrument.PartyVocals,
                 },
                 // GameMode.Dj             => new[]
                 // {
