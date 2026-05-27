@@ -29,8 +29,12 @@ namespace YARG.Core.Replays
         private static readonly EightCC REPLAY_MAGIC_HEADER_OLD = new('Y', 'A', 'R', 'G', 'P', 'L', 'A', 'Y');
         private static readonly EightCC REPLAY_MAGIC_HEADER = new('Y', 'A', 'R', 'E', 'P', 'L', 'A', 'Y');
 
-        private static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 16);
-        private const int ENGINE_VERSION = 4;
+        // CURRENT=17: free-harmonies reached 16 (party-vocals per-mic replay format);
+        // 17 marks the combined format that also carries the autohit-lane engine params.
+        // ENGINE_VERSION=5: taken from upstream #383 — lane autohit params now serialize
+        // into the engine parameters (gated separately from ReplayVersion).
+        private static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 17);
+        private const int ENGINE_VERSION = 5;
 
         public static (ReplayReadResult Result, ReplayInfo Info, ReplayData Data) TryDeserialize(string path, ReplayReadOptions replayOptions)
         {
