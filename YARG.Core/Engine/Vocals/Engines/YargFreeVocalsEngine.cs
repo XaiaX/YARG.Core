@@ -868,12 +868,6 @@ namespace YARG.Core.Engine.Vocals.Engines
             return _micCurrentlyHittingParts[micIndex];
         }
 
-        /// <summary>
-        /// Number of HARM parts in the loaded chart (1 for Solo, 1-3 for Harmony).
-        /// Used by visualization to derive a mic's assigned-part index via
-        /// <c>micIndex % PartCount</c>.
-        /// </summary>
-        public int PartCount => _allParts.Count;
 
         public bool IsMicOnNote(int micIndex)
         {
