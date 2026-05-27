@@ -53,6 +53,13 @@ namespace YARG.Core.Engine.Vocals.Engines
         private readonly uint[] _micLastSingTicks;
         private readonly double[,] _micPartHits;
 
+        // Per-mic bitmask of which parts that mic landed an on-pitch hit on,
+        // refreshed each AccumulateMicPartHits tick. Bit j set ⇒ mic landed on
+        // part j this tick. Read by the visualization layer (PartyVocalsPlayer)
+        // to pick a trail color reflecting what was actually sung, rather than
+        // the slot's static assignment.
+        private readonly uint[] _micCurrentlyHittingParts;
+
         private const double ROLLBACK_WINDOW_SECONDS = 0.5; // 500 ms MVP default per design
 
         // Smoke-test: mics with index >= RANDOM_BEHAVIOR_MIN_MIC_INDEX use random
@@ -101,6 +108,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             _micHasSang = new bool[micCount];
             _micLastSingTicks = new uint[micCount];
             _micPartHits = new double[micCount, allParts.Count];
+            _micCurrentlyHittingParts = new uint[micCount];
 
             // Window state for per-window assignment and N-awesome grading
             _lastRollbackTime = 0;
@@ -563,6 +571,10 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             for (int micIndex = 0; micIndex < _micCount; micIndex++)
             {
+                // Reset this mic's "currently hitting parts" bitmask each tick;
+                // we'll re-populate below for any parts CanVocalNoteBeHit confirms.
+                _micCurrentlyHittingParts[micIndex] = 0u;
+
                 if (!_micHasSang[micIndex])
                     continue;
 
@@ -598,6 +610,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                                 {
                                     anyMicHit = true;
                                     representativeHitNote ??= note;
+                                    _micCurrentlyHittingParts[micIndex] |= 1u << partIndex;
                                 }
                             }
                         }
@@ -842,6 +855,26 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// 2. Effective part has a phrase but no sing note covering CurrentTick (gap
         ///    between notes within a phrase — also silent, holds last position).
         /// </summary>
+        /// <summary>
+        /// Bitmask of HARM parts that this mic actually landed an on-pitch hit
+        /// on during the most recent AccumulateMicPartHits tick. Bit j set ⇒
+        /// mic was on part j. Used by the visualization layer to pick a trail
+        /// color reflecting what the singer actually sang, not the slot's
+        /// static assignment.
+        /// </summary>
+        public uint GetMicHittingParts(int micIndex)
+        {
+            if (micIndex < 0 || micIndex >= _micCount) return 0u;
+            return _micCurrentlyHittingParts[micIndex];
+        }
+
+        /// <summary>
+        /// Number of HARM parts in the loaded chart (1 for Solo, 1-3 for Harmony).
+        /// Used by visualization to derive a mic's assigned-part index via
+        /// <c>micIndex % PartCount</c>.
+        /// </summary>
+        public int PartCount => _allParts.Count;
+
         public bool IsMicOnNote(int micIndex)
         {
             if (micIndex < 0 || micIndex >= _micCount) return false;
