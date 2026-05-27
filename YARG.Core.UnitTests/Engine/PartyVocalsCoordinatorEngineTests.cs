@@ -101,7 +101,14 @@ public sealed class PartyVocalsCoordinatorEngineTests
             for (int m = 0; m < micCount; m++)
             {
                 int idx = Math.Min(f, micPitchArrays[m].Length - 1);
-                engine.SetMicPitch(m, micPitchArrays[m][idx]);
+                float pitch = micPitchArrays[m][idx];
+                // float.NaN is the silence sentinel — don't call SetMicPitch, so the
+                // mic's _micHasSang stays false and it contributes nothing to scoring.
+                // (Plain numeric "out of range" values like -1f don't work because the
+                // engine's pitch comparison is octave-equivalent — any value matches
+                // C4 if the modular distance is within the pitch window.)
+                if (float.IsNaN(pitch)) continue;
+                engine.SetMicPitch(m, pitch);
             }
             engine.Update(time);
         }
@@ -131,6 +138,28 @@ public sealed class PartyVocalsCoordinatorEngineTests
     {
         var arr = (double[])AmbiguityBucketsField.GetValue(engine)!;
         arr[mask] = ticks;
+        // Also set the per-mic bookkeeping so perMicCap matches the bucket total.
+        // For unit tests, mic 0 is treated as the sole contributor — perMicCap = ticks.
+        // This makes the bucket's credit fully usable by any single HARM (matching the
+        // pre-per-mic-cap allocator's behavior for the cases these tests exercise).
+        var perMic = (double[,])typeof(PartyVocalsCoordinatorEngine)
+            .GetField("_bucketPerMic", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(engine)!;
+        perMic[0, mask] = ticks;
+    }
+
+    /// <summary>
+    /// Per-mic bucket credit injector for tests that need to model multi-mic
+    /// contributions explicitly (e.g., stacking-shortcut regression tests).
+    /// Caller is responsible for keeping _ambiguityBuckets[mask] consistent
+    /// (= sum across mics).
+    /// </summary>
+    private static void SetBucketPerMic(PartyVocalsCoordinatorEngine engine, int micIndex, int mask, double ticks)
+    {
+        var perMic = (double[,])typeof(PartyVocalsCoordinatorEngine)
+            .GetField("_bucketPerMic", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(engine)!;
+        perMic[micIndex, mask] = ticks;
     }
 
     private static void SetPhraseTicksTotalPerPart(PartyVocalsCoordinatorEngine engine, params uint[] values)
@@ -176,20 +205,25 @@ public sealed class PartyVocalsCoordinatorEngineTests
     [Test]
     public void Classifier_AmbiguousSingleMicTwoHarms_CreditsBucketOnce()
     {
-        // Two parts at the SAME pitch. One mic singing that pitch is ambiguous on {0,1}.
-        // Bucket accumulates additively (one mic = one delta), so allocator fills HARM0 first.
+        // Two parts at the SAME pitch. ONE mic (micCount=1, so no phantom contribution
+        // from a silent-but-pitch-window-matching second mic) singing that pitch is
+        // ambiguous on {0,1}. Bucket gets N ticks total, perMicCap = N. Allocator fills
+        // HARM0 to N (capped by perMicCap, no spill to HARM1 since the per-HARM cap is
+        // also N) → Awesome (not Double).
         var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
         AddPhrase(parts[0], 0, 960, 60); // Both at C4
         AddPhrase(parts[1], 0, 960, 60);
 
         var (engine, grades) = RunCoordinatorScenario(parts, 2, e =>
         {
-            // Mic 0 sings C4 (ambiguous {0,1}), mic 1 silent
-            FeedPitches(e, 2, new[] { new[] { 60f }, new[] { -1f } }, 0.1, 2.0);
+            // Mic 0 sings ambiguous C4. Mic 1 stays SILENT — NaN sentinel bypasses
+            // SetMicPitch so _micHasSang[1] never flips true. (Plain -1f wouldn't
+            // work: pitch comparison is octave-modular, so -1 vs C4=60 is 1
+            // semitone apart, within the pitch window.)
+            FeedPitches(e, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.1, 2.0);
         }, 4.0);
 
         Assert.AreEqual(1, grades.Count, "One phrase grade");
-        // One ambiguous mic: bucket gets N ticks, allocator fills HARM0 first → Awesome (not Double)
         Assert.AreEqual(PhraseGrade.Awesome, grades[0],
             "Single ambiguous mic should fill only one HARM");
     }
@@ -380,16 +414,17 @@ public sealed class PartyVocalsCoordinatorEngineTests
     [Test]
     public void Scenario_SingleMicAmbig_WholePhrase_Awesome()
     {
-        // One mic ambiguous on {0,1}. Bucket gets N ticks. Allocator fills HARM0 only.
-        // Grade = Awesome (not Double).
+        // One mic ambiguous on {0,1}. Bucket gets N ticks (perMicCap = N). Allocator
+        // fills HARM0 to N (capped). HARM1 can also take up to perMicCap=N from this
+        // bucket, but the bucket is exhausted after HARM0 → HARM1 stays 0. Awesome.
         var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
         AddPhrase(parts[0], 0, 960, 60); // Both at C4
         AddPhrase(parts[1], 0, 960, 60);
 
         var (engine, grades) = RunCoordinatorScenario(parts, 2, e =>
         {
-            // Mic 0 sings the ambiguous pitch, mic 1 silent
-            FeedPitches(e, 2, new[] { new[] { 60f }, new[] { -1f } }, 0.1, 2.0);
+            // Mic 0 sings ambiguous C4. Mic 1 silent via NaN sentinel.
+            FeedPitches(e, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.1, 2.0);
         }, 4.0);
 
         Assert.AreEqual(1, grades.Count, "One phrase grade");
@@ -616,6 +651,150 @@ public sealed class PartyVocalsCoordinatorEngineTests
         engine.Update(3.0);
         Assert.AreEqual(2, grades.Count, "Phrase 2 should have graded");
         Assert.AreEqual(PhraseGrade.Miss, grades[1], "Phrase 2 with no singing = Miss");
+    }
+
+    // ================================================================
+    // Regression tests for issues found during real-game testing
+    // (post-merge of the per-phrase reset fix).
+    // ================================================================
+
+    [Test]
+    public void StatsPercent_AccumulatesTicksHitAndTicksMissed()
+    {
+        // Prior bug: coordinator's ProcessMultiMicPhraseEnd override skipped the
+        // EngineStats.TicksHit/TicksMissed accumulation that the base does. With
+        // both fields at 0, VocalsStats.Percent (TicksHit/TotalTicks) defaults to
+        // 1.0 (100%) when TotalTicks == 0 — making the end-of-song accuracy display
+        // show 100% even when the player missed phrases.
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);    // Phrase 1: ticks 0-960
+        AddPhrase(parts[0], 960, 960, 60);  // Phrase 2: ticks 960-1920
+
+        var engine = CreateCoordinator(parts, 2);
+
+        // Phrase 1: sing well → Hit.
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.05, 0.5);
+        engine.Update(1.1);
+
+        // Phrase 2: sing wrong pitch → Miss.
+        FeedPitches(engine, 2, new[] { new[] { 90f }, new[] { float.NaN } }, 1.05, 0.5);
+        engine.Update(2.1);
+
+        var stats = (VocalsStats) engine.BaseStats;
+        Assert.Greater(stats.TicksHit, 0u,
+            "TicksHit must accumulate on Hit phrases (regression: was 0).");
+        Assert.Greater(stats.TicksMissed, 0u,
+            "TicksMissed must accumulate on Miss phrases (regression: was 0).");
+        Assert.Less(stats.Percent, 1.0f,
+            "Percent must reflect real accuracy < 100% when there are misses " +
+            "(regression: VocalsStats.Percent defaults to 1.0 when TotalTicks == 0).");
+    }
+
+    [Test]
+    public void OnPhraseHit_FiresOnMissForIsFcFlip()
+    {
+        // Prior bug: coordinator never fired OnPhraseHit. VocalsPlayer.cs:486-489
+        // subscribes to OnPhraseHit to flip IsFc = false on !fullPoints — without
+        // this firing, the FC tile stays lit through misses.
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var engine = CreateCoordinator(parts, 2);
+        bool hitEventFired = false;
+        bool hitEventFullPoints = true;
+        engine.OnPhraseHit += (percent, fullPoints, isLast) =>
+        {
+            hitEventFired = true;
+            hitEventFullPoints = fullPoints;
+        };
+
+        // Sing wrong pitch → Miss.
+        FeedPitches(engine, 2, new[] { new[] { 90f }, new[] { float.NaN } }, 0.05, 0.5);
+        engine.Update(1.1);
+
+        Assert.IsTrue(hitEventFired, "OnPhraseHit must fire on the coordinator path.");
+        Assert.IsFalse(hitEventFullPoints, "fullPoints must be false on Miss (drives IsFc flip).");
+    }
+
+    [Test]
+    public void StackingShortcut_TwoMicsTalkieHalfPhrase_GradeMiss()
+    {
+        // The bug the per-mic-span cap was added to fix.
+        // 2 mics both ambiguous on {0,1} for HALF a phrase (talkies + harmonized
+        // talkies are the typical real-game case). Under the prior additive-bucket
+        // model: bucket = 2 × N/2 = N, allocator filled HARM0 to 100% → Awesome.
+        // Equivalent unambiguous singing (2 mics on HARM1 half phrase) graded Miss.
+        // Inconsistency was the shortcut.
+        // Under per-mic-span cap: bucket = N, perMicCap = N/2. Each HARM can receive
+        // at most N/2 → both HARMs at 50% → below threshold → Miss. Consistent.
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddTalkiePhrase(parts[0], 0, 960);
+        AddTalkiePhrase(parts[1], 0, 960);
+
+        var engine = CreateCoordinator(parts, 2);
+        var grades = new List<PhraseGrade>();
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) => grades.Add(grade);
+
+        // Both mics making noise for ONLY HALF the phrase (0.0-0.25s of a 0.0-0.5s
+        // content window) — they then go silent for the second half. Under the new
+        // model this is a Miss.
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 60f } }, 0.0, 0.25);
+        engine.Update(1.1); // past phrase end
+
+        Assert.AreEqual(1, grades.Count, "One phrase grade");
+        Assert.AreEqual(PhraseGrade.Miss, grades[0],
+            "Two mics on harmonized talkies for HALF the phrase must grade Miss " +
+            "(stacking shortcut prevention via per-mic-span cap).");
+    }
+
+    [Test]
+    public void TrueUnison_TwoMicsTalkieFullPhrase_DoubleAwesome()
+    {
+        // Companion to the stacking-shortcut test: 2 mics ambiguous on a harmonized
+        // talkie for the FULL phrase should still grade DoubleAwesome. Bucket = 2N,
+        // perMicCap = N. Each HARM receives up to N (= capacity). Both filled.
+        // Verifies the per-mic-span cap doesn't break Goal G1 (true unison → Double).
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddTalkiePhrase(parts[0], 0, 960);
+        AddTalkiePhrase(parts[1], 0, 960);
+
+        var engine = CreateCoordinator(parts, 2);
+        var grades = new List<PhraseGrade>();
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) => grades.Add(grade);
+
+        // Both mics making noise for the WHOLE phrase content window.
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 60f } }, 0.0, 0.55);
+        engine.Update(1.1);
+
+        Assert.AreEqual(1, grades.Count, "One phrase grade");
+        Assert.AreEqual(PhraseGrade.DoubleAwesome, grades[0],
+            "Two mics on harmonized talkies for the FULL phrase = DoubleAwesome " +
+            "(per-mic-span cap permits both HARMs when each mic vouches for a full span).");
+    }
+
+    [Test]
+    public void EmptyPhrase_TreatedAsHit_NoSpuriousMiss()
+    {
+        // Prior bug: phraseTicksTotal == 0 (lyric-less phrase) went through the
+        // allocator → all-zero meters → grade Miss → MissNote. The base treats
+        // empty phrases as a free Hit. Coordinator now short-circuits to match.
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        // Phrase with non-zero tick length but no child lyric notes (phraseTicksTotal == 0).
+        var emptyNote = new VocalNote(NoteFlags.None, false, 0.0, 2.0, 0, 960);
+        parts[0].NotePhrases.Add(new VocalsPhrase(
+            0.0, 2.0, 0, 960, emptyNote, new List<LyricEvent>()));
+
+        var engine = CreateCoordinator(parts, 2);
+        var grades = new List<PhraseGrade>();
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) => grades.Add(grade);
+
+        engine.Update(1.5); // past the empty phrase's TickEnd
+
+        Assert.AreEqual(1, grades.Count, "Empty phrase should still emit a grade event");
+        Assert.AreNotEqual(PhraseGrade.Miss, grades[0],
+            "Empty phrase should NOT grade as Miss (base treats it as Hit).");
+        Assert.AreEqual(1, engine.BaseStats.NotesHit,
+            "Empty phrase should count as a NotesHit (HitNote was called).");
     }
 
     // ================================================================

@@ -19,6 +19,17 @@ namespace YARG.Core.Engine.Vocals.Engines
         // singletons and empty mask are unused but cheap.
         private readonly double[] _ambiguityBuckets; // length = 1 << PartCount
 
+        // Per-mic-per-bucket cumulative credit. At allocation time, the maximum
+        // value over mics for a given bucket S is used to cap how much credit
+        // any single HARM can receive from that bucket. This prevents the
+        // ambiguity stacking shortcut: two mics on a fully-ambiguous (or
+        // talkie-harmonized) passage for half a phrase contribute 2 × N/2 = N
+        // to the aggregate bucket, but each mic only contributed N/2, so the
+        // per-HARM cap of N/2 prevents that bucket from filling a single HARM
+        // to capacity. Two mics on a true full-phrase unison still credit both
+        // HARMs (bucket = 2N, per-mic max = N, each HARM filled to N).
+        private readonly double[,] _bucketPerMic; // [mic, mask]
+
         // Scratch for the per-tick classifier (mic → mask of HARMs it's
         // currently hitting). Reused each tick to avoid alloc. uint to match
         // _micCurrentlyHittingParts's element type and avoid a per-tick cast.
@@ -45,6 +56,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             int partCount = allParts.Count;
             _harmDirectTicks = new double[partCount];
             _ambiguityBuckets = new double[1 << partCount];
+            _bucketPerMic = new double[micCount, 1 << partCount];
             _micHitMaskScratch = new uint[micCount];
             _bucketOrder = ComputeBucketOrder(partCount);
         }
@@ -118,12 +130,20 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
 
             // 3. Ambiguity bucket credit: additive across mics. Each ambiguous
-            //    mic contributes its own clamped delta to its set's bucket.
+            //    mic contributes its own clamped delta to its set's bucket. The
+            //    per-mic bookkeeping (_bucketPerMic) lets the allocator cap
+            //    per-HARM credit at the longest single-mic span — preventing
+            //    the stacking shortcut where N mics ambiguous on S for time T
+            //    would otherwise allocate N×T total credit to one HARM.
             for (int i = 0; i < _micCount; i++)
             {
                 uint m = _micHitMaskScratch[i];
                 if (PopCount(m) >= 2)
-                    _ambiguityBuckets[(int) m] += _lastTickMicDeltas[i];
+                {
+                    double delta = _lastTickMicDeltas[i];
+                    _ambiguityBuckets[(int) m] += delta;
+                    _bucketPerMic[i, (int) m] += delta;
+                }
             }
         }
 
@@ -154,10 +174,29 @@ namespace YARG.Core.Engine.Vocals.Engines
         protected override void ProcessMultiMicPhraseEnd(
             VocalNote phrase, uint phraseTicksTotal, bool isLastPhrase)
         {
+            // DEBUG
+            Console.WriteLine($"=== PhraseEnd. bucket[3]={_ambiguityBuckets[3]:F2}, " +
+                $"perMic[0,3]={_bucketPerMic[0,3]:F2}, perMic[1,3]={_bucketPerMic[1,3]:F2}, " +
+                $"direct[0]={_harmDirectTicks[0]:F2}, direct[1]={_harmDirectTicks[1]:F2}");
+
+            int partCount = _phraseTicksTotalPerPart.Length;
+
+            // Empty phrase: no content to grade. Treat as a free hit (matches the
+            // base engine's behavior and the single-mic path). Still fire the
+            // OnPartyVocalsPhrase event so the HUD's banner pipeline stays in sync,
+            // graded as Awesome with all-zero meters (the convention for empty
+            // phrases — there's nothing to award, but nothing failed either).
+            if (phraseTicksTotal == 0)
+            {
+                HitNote(phrase);
+                OnPartyVocalsPhrase?.Invoke(
+                    PhraseGrade.Awesome, new double[partCount], isLastPhrase);
+                return;
+            }
+
             // Final allocation into _canonicalMeters using all accumulated credit.
             RunAllocatorIntoCanonicalMeters(commit: true);
 
-            int partCount = _phraseTicksTotalPerPart.Length;
             int awesomeCount = 0;
             double bestMeter = 0;
             for (int j = 0; j < partCount; j++)
@@ -173,15 +212,33 @@ namespace YARG.Core.Engine.Vocals.Engines
                 2 => PhraseGrade.DoubleAwesome,
                 _ => PhraseGrade.TripleAwesome,
             };
+            bool hit = grade != PhraseGrade.Miss;
 
             // Snapshot meters for the event payload BEFORE we reset for the next phrase.
             var metersSnapshot = new double[partCount];
             Array.Copy(_canonicalMeters, metersSnapshot, partCount);
 
-            if (grade == PhraseGrade.Miss)
-                MissNote(phrase, bestMeter);
-            else
+            // Mirror the base engine's TicksHit/TicksMissed accounting so the
+            // end-of-song accuracy percent (VocalsStats.Percent = TicksHit / TotalTicks)
+            // reflects real performance. Without these increments TotalTicks stays
+            // at 0 and Percent defaults to 1.0 (= 100%) across the whole session.
+            if (hit)
+            {
+                EngineStats.TicksHit += phraseTicksTotal;
                 HitNote(phrase);
+            }
+            else
+            {
+                var ticksHit = (uint) Math.Round(PhraseTicksHit);
+                EngineStats.TicksHit += ticksHit;
+                EngineStats.TicksMissed += phraseTicksTotal - ticksHit;
+                MissNote(phrase, bestMeter);
+            }
+
+            // OnPhraseHit drives VocalsPlayer.IsFc (flipped to false on !fullPoints
+            // at VocalsPlayer.cs:486-489) and ShowTextNotifications. Without firing
+            // this, the FC tile stays lit through misses.
+            OnPhraseHit?.Invoke(bestMeter / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
 
             OnPartyVocalsPhrase?.Invoke(grade, metersSnapshot, isLastPhrase);
 
@@ -200,6 +257,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             base.ResetMultiMicPhraseState();
             Array.Clear(_harmDirectTicks, 0, _harmDirectTicks.Length);
             Array.Clear(_ambiguityBuckets, 0, _ambiguityBuckets.Length);
+            Array.Clear(_bucketPerMic, 0, _bucketPerMic.Length);
         }
 
         private void RunAllocatorIntoCanonicalMeters(bool commit)
@@ -219,6 +277,11 @@ namespace YARG.Core.Engine.Vocals.Engines
             Span<double> bucketsCopy = stackalloc double[_ambiguityBuckets.Length];
             for (int i = 0; i < _ambiguityBuckets.Length; i++) bucketsCopy[i] = _ambiguityBuckets[i];
 
+            // Per-HARM scratch tracking how much credit each HARM has already received
+            // from the CURRENT bucket, to enforce the per-mic-span cap. Reset between
+            // buckets.
+            Span<double> receivedFromBucket = stackalloc double[partCount];
+
             // Bucket processing order: ascending |S|, then lex over included HARM indices.
             // For partCount=3 the order is: {0,1}=3, {0,2}=5, {1,2}=6, {0,1,2}=7.
             // _bucketOrder is computed once in the constructor (ComputeBucketOrder).
@@ -226,10 +289,23 @@ namespace YARG.Core.Engine.Vocals.Engines
             {
                 if (bucketsCopy[S] <= 0) continue;
 
+                // Per-mic-span cap: max credit any single mic contributed to this
+                // bucket. Each HARM can receive at most this much credit from this
+                // bucket — prevents the stacking shortcut where N mics ambiguous for
+                // time T would otherwise pour N×T into one HARM.
+                double perMicCap = 0;
+                for (int i = 0; i < _micCount; i++)
+                {
+                    double v = _bucketPerMic[i, S];
+                    if (v > perMicCap) perMicCap = v;
+                }
+
+                receivedFromBucket.Clear();
+
                 while (bucketsCopy[S] > 0)
                 {
-                    // Find eligible j ∈ S with credited[j] < capacity[j], pick most-full
-                    // (ties broken by lowest index).
+                    // Find eligible j ∈ S with credited[j] < capacity[j] AND
+                    // receivedFromBucket[j] < perMicCap; pick most-full (ties by lowest index).
                     int chosen = -1;
                     double chosenCredited = -1;
                     for (int j = 0; j < partCount; j++)
@@ -237,6 +313,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                         if ((S & (1 << j)) == 0) continue;
                         uint cap = _phraseTicksTotalPerPart[j];
                         if (cap == 0 || credited[j] >= cap) continue;
+                        if (receivedFromBucket[j] >= perMicCap) continue;
                         if (credited[j] > chosenCredited)
                         {
                             chosenCredited = credited[j];
@@ -246,9 +323,15 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                     if (chosen < 0) break; // no eligible HARM in this bucket; remaining credit discarded
 
-                    double transfer = Math.Min(bucketsCopy[S], _phraseTicksTotalPerPart[chosen] - credited[chosen]);
+                    double remainingCapacity = _phraseTicksTotalPerPart[chosen] - credited[chosen];
+                    double remainingPerMicCap = perMicCap - receivedFromBucket[chosen];
+                    double transfer = Math.Min(
+                        Math.Min(bucketsCopy[S], remainingCapacity),
+                        remainingPerMicCap);
+                    if (transfer <= 0) break; // defensive — perMicCap could be 0 if no mics contributed
                     credited[chosen] += transfer;
                     bucketsCopy[S] -= transfer;
+                    receivedFromBucket[chosen] += transfer;
                 }
             }
 
