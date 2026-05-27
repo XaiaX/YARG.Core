@@ -7,7 +7,7 @@ using YARG.Core.Logging;
 
 namespace YARG.Core.Engine.Vocals.Engines
 {
-    public sealed class YargFreeVocalsEngine : VocalsEngine
+    public class YargFreeVocalsEngine : VocalsEngine
     {
         public int CurrentTargetHarmonyIndex { get; private set; }
 
@@ -37,7 +37,7 @@ namespace YARG.Core.Engine.Vocals.Engines
         public int PartCount => _allParts.Count;
 
         // Store reference to all parts for hit testing
-        private readonly IReadOnlyList<VocalsPart> _allParts;
+        protected readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
 
         // Resolved bot part for the current tick after applying the per-phrase fallback:
@@ -47,18 +47,18 @@ namespace YARG.Core.Engine.Vocals.Engines
         private int _currentBotEffectivePartIndex;
 
         // Multi-mic state. Empty/zero-length when micCount == 1 (single-mic path uses PitchSang).
-        private readonly int _micCount;
+        protected readonly int _micCount;
         private readonly float[] _micPitches;
         private readonly bool[] _micHasSang;
         private readonly uint[] _micLastSingTicks;
-        private readonly double[,] _micPartHits;
+        protected readonly double[,] _micPartHits;
 
         // Per-mic bitmask of which parts that mic landed an on-pitch hit on,
         // refreshed each AccumulateMicPartHits tick. Bit j set ⇒ mic landed on
         // part j this tick. Read by the visualization layer (PartyVocalsPlayer)
         // to pick a trail color reflecting what was actually sung, rather than
         // the slot's static assignment.
-        private readonly uint[] _micCurrentlyHittingParts;
+        protected readonly uint[] _micCurrentlyHittingParts;
 
         private const double ROLLBACK_WINDOW_SECONDS = 0.5; // 500 ms MVP default per design
 
@@ -77,8 +77,13 @@ namespace YARG.Core.Engine.Vocals.Engines
         private double _lastRollbackTime;
         private readonly double[,] _lastWindowSnapshot;
         private readonly double[] _cumulativeAssignedTicks;
-        private readonly double[] _canonicalMeters;
-        private readonly uint[] _phraseTicksTotalPerPart;
+        protected readonly double[] _canonicalMeters;
+        protected readonly uint[] _phraseTicksTotalPerPart;
+
+        // Ticks since last sing per mic, this tick; 0 for mics that didn't sing.
+        // Used by the coordinator's ambiguity scoring to get the same clamped deltas
+        // that AccumulateMicPartHits computed for _micPartHits.
+        protected readonly double[] _lastTickMicDeltas;
 
         public YargFreeVocalsEngine(InstrumentDifficulty<VocalNote> primaryChart, IReadOnlyList<VocalsPart> allParts,
             SyncTrack syncTrack, VocalsEngineParameters engineParameters, bool isBot, int botPartIndex = 0)
@@ -116,6 +121,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             _cumulativeAssignedTicks = new double[allParts.Count];
             _canonicalMeters = new double[allParts.Count];
             _phraseTicksTotalPerPart = new uint[allParts.Count];
+            _lastTickMicDeltas = new double[micCount];
 
             // Smoke-test state for mics 4-7: each picks a random target part (or
             // -1 = silent) every RANDOM_REASSIGN_INTERVAL_SECONDS. Lets us visually
@@ -388,6 +394,11 @@ namespace YARG.Core.Engine.Vocals.Engines
             // scoring still gates on _micCount > 1 at phrase-end below.
             bool anyMicHit = AccumulateMicPartHits(out VocalNote? repNote);
 
+            // Hook for subclasses to run per-tick logic after AccumulateMicPartHits,
+            // attributing boundary-tick credit to the closing phrase (matching the
+            // base's AccumulateMicPartHits convention).
+            OnAfterMicPartHitsAccumulated();
+
             // Drive the "on note" visual state for real-mic multi-mic players. Single-mic
             // real-mic uses CheckSingingHit's OnHit, and bots fire OnHit from UpdateBot/
             // UpdateBotMultiMic. Without this, multi-mic real-mic players never set
@@ -433,76 +444,7 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                 if (_micCount > 1)
                 {
-                    // Final window commit so the canonical meters reflect the phrase tail.
-                    CommitWindowAssignment();
-
-                    // Grade is derived from how many parts crossed the awesome threshold.
-                    int awesomeCount = 0;
-                    double awesomeThreshold = EngineParameters.PhraseHitPercent;
-                    double bestMeter = 0;
-                    for (int j = 0; j < _canonicalMeters.Length; j++)
-                    {
-                        if (_phraseTicksTotalPerPart[j] == 0) continue;
-                        if (_canonicalMeters[j] >= awesomeThreshold) awesomeCount++;
-                        if (_canonicalMeters[j] > bestMeter) bestMeter = _canonicalMeters[j];
-                    }
-
-                    PhraseGrade grade = awesomeCount switch
-                    {
-                        0 => PhraseGrade.Miss,
-                        1 => PhraseGrade.Awesome,
-                        2 => PhraseGrade.DoubleAwesome,
-                        _ => PhraseGrade.TripleAwesome,
-                    };
-
-                    // Reuse the legacy phrase-end path so combo, NotesHit, score, multiplier,
-                    // NoteIndex, OnPhraseHit, IsFc etc. all stay consistent with the rest of
-                    // the engine. percentHit is the best-matched part's meter; bonus points
-                    // for double/triple awesome go through AddScore on top.
-                    bool hit = grade != PhraseGrade.Miss;
-                    double percentHit = bestMeter;
-
-                    if (hasNotes)
-                    {
-                        if (hit)
-                        {
-                            EngineStats.TicksHit += PhraseTicksTotal.Value;
-                            HitNote(phrase);
-                            // No score bonus for double/triple awesome — per design
-                            // (`2026-05-21-party-vocals.md` §Scoring): N-awesome is
-                            // display and stats only, does not multiply score.
-                        }
-                        else
-                        {
-                            var ticksHit = (uint) Math.Round(PhraseTicksHit);
-                            EngineStats.TicksHit += ticksHit;
-                            EngineStats.TicksMissed += PhraseTicksTotal.Value - ticksHit;
-                            MissNote(phrase, percentHit);
-                        }
-                    }
-                    else
-                    {
-                        // Empty phrase: count as hit, no score change (mirrors single-mic path
-                        // which treats hasNotes=false as percentHit=1.0).
-                        HitNote(phrase);
-                    }
-
-                    PhraseTicksHit = 0;
-                    PhraseTicksTotal = null;
-
-                    if (hasNotes)
-                    {
-                        OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
-                    }
-                    OnPartyVocalsPhrase?.Invoke(grade, _canonicalMeters.ToArray(), isLastPhrase);
-
-                    // Reset all window state for next phrase
-                    Array.Clear(_micPartHits, 0, _micPartHits.Length);
-                    Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
-                    Array.Clear(_cumulativeAssignedTicks, 0, _cumulativeAssignedTicks.Length);
-                    Array.Clear(_canonicalMeters, 0, _canonicalMeters.Length);
-                    Array.Clear(_phraseTicksTotalPerPart, 0, _phraseTicksTotalPerPart.Length);
-                    _lastRollbackTime = CurrentTime;
+                    ProcessMultiMicPhraseEnd(phrase, PhraseTicksTotal!.Value, isLastPhrase);
                 }
                 else
                 {
@@ -569,6 +511,9 @@ namespace YARG.Core.Engine.Vocals.Engines
             bool anyMicHit = false;
             representativeHitNote = null;
 
+            // Clear the per-mic deltas array before populating it this tick
+            Array.Clear(_lastTickMicDeltas, 0, _lastTickMicDeltas.Length);
+
             for (int micIndex = 0; micIndex < _micCount; micIndex++)
             {
                 // Reset this mic's "currently hitting parts" bitmask each tick;
@@ -587,6 +532,9 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                 if (ticksSinceLast == 0)
                     continue;
+
+                // Record the delta for this mic for the coordinator's ambiguity scoring
+                _lastTickMicDeltas[micIndex] = ticksSinceLast;
 
                 // Snapshot this mic's pitch into PitchSang for the duration of the per-part scan
                 // (CanVocalNoteBeHit reads PitchSang internally). Restore afterwards so the
@@ -1112,6 +1060,96 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             // Advance snapshot to current state
             Array.Copy(_micPartHits, _lastWindowSnapshot, _micPartHits.Length);
+        }
+
+        /// <summary>
+        /// Called once per tick from UpdateHitLogic after AccumulateMicPartHits returns,
+        /// and before the phrase-end check. Virtual hook for subclasses to run per-tick
+        /// logic (e.g., ambiguity scoring) on the same side of the phrase-end boundary
+        /// as AccumulateMicPartHits.
+        /// </summary>
+        protected virtual void OnAfterMicPartHitsAccumulated()
+        {
+            // Base implementation is empty; subclasses can override to add per-tick logic.
+        }
+
+        /// <summary>
+        /// Handle phrase-end logic for multi-mic Party Vocals. Base implementation uses
+        /// the legacy assignment scoring model. Virtual for subclasses to override with
+        /// different scoring strategies (e.g., ambiguity-bucket coordinator).
+        /// </summary>
+        protected virtual void ProcessMultiMicPhraseEnd(VocalNote phrase, uint phraseTicksTotal, bool isLastPhrase)
+        {
+            // Final window commit so the canonical meters reflect the phrase tail.
+            CommitWindowAssignment();
+
+            // Grade is derived from how many parts crossed the awesome threshold.
+            int awesomeCount = 0;
+            double awesomeThreshold = EngineParameters.PhraseHitPercent;
+            double bestMeter = 0;
+            for (int j = 0; j < _canonicalMeters.Length; j++)
+            {
+                if (_phraseTicksTotalPerPart[j] == 0) continue;
+                if (_canonicalMeters[j] >= awesomeThreshold) awesomeCount++;
+                if (_canonicalMeters[j] > bestMeter) bestMeter = _canonicalMeters[j];
+            }
+
+            PhraseGrade grade = awesomeCount switch
+            {
+                0 => PhraseGrade.Miss,
+                1 => PhraseGrade.Awesome,
+                2 => PhraseGrade.DoubleAwesome,
+                _ => PhraseGrade.TripleAwesome,
+            };
+
+            // Reuse the legacy phrase-end path so combo, NotesHit, score, multiplier,
+            // NoteIndex, OnPhraseHit, IsFc etc. all stay consistent with the rest of
+            // the engine. percentHit is the best-matched part's meter; bonus points
+            // for double/triple awesome go through AddScore on top.
+            bool hit = grade != PhraseGrade.Miss;
+            double percentHit = bestMeter;
+
+            if (phraseTicksTotal != 0)
+            {
+                if (hit)
+                {
+                    EngineStats.TicksHit += phraseTicksTotal;
+                    HitNote(phrase);
+                    // No score bonus for double/triple awesome — per design
+                    // (`2026-05-21-party-vocals.md` §Scoring): N-awesome is
+                    // display and stats only, does not multiply score.
+                }
+                else
+                {
+                    var ticksHit = (uint) Math.Round(PhraseTicksHit);
+                    EngineStats.TicksHit += ticksHit;
+                    EngineStats.TicksMissed += phraseTicksTotal - ticksHit;
+                    MissNote(phrase, percentHit);
+                }
+            }
+            else
+            {
+                // Empty phrase: count as hit, no score change (mirrors single-mic path
+                // which treats hasNotes=false as percentHit=1.0).
+                HitNote(phrase);
+            }
+
+            PhraseTicksHit = 0;
+            PhraseTicksTotal = null;
+
+            if (phraseTicksTotal != 0)
+            {
+                OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
+            }
+            OnPartyVocalsPhrase?.Invoke(grade, _canonicalMeters.ToArray(), isLastPhrase);
+
+            // Reset all window state for next phrase
+            Array.Clear(_micPartHits, 0, _micPartHits.Length);
+            Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
+            Array.Clear(_cumulativeAssignedTicks, 0, _cumulativeAssignedTicks.Length);
+            Array.Clear(_canonicalMeters, 0, _canonicalMeters.Length);
+            Array.Clear(_phraseTicksTotalPerPart, 0, _phraseTicksTotalPerPart.Length);
+            _lastRollbackTime = CurrentTime;
         }
 
         // Positive remainder
