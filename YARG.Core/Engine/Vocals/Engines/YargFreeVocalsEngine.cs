@@ -1005,7 +1005,7 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// Snapshot the hidden buffer, compute delta since last snapshot, run assignment on the
         /// window's delta, and accumulate assigned contributions into canonical meters.
         /// </summary>
-        private void CommitWindowAssignment()
+        protected virtual void CommitWindowAssignment()
         {
             int micCount = _micPartHits.GetLength(0);
             int partCount = _micPartHits.GetLength(1);
