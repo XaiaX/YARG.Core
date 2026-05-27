@@ -445,6 +445,10 @@ namespace YARG.Core.Engine.Vocals.Engines
                 if (_micCount > 1)
                 {
                     ProcessMultiMicPhraseEnd(phrase, PhraseTicksTotal!.Value, isLastPhrase);
+                    // Always reset per-phrase state after the (virtual) phrase-end
+                    // handler runs. This means subclasses overriding ProcessMultiMicPhraseEnd
+                    // cannot accidentally skip the reset.
+                    ResetMultiMicPhraseState();
                 }
                 else
                 {
@@ -1134,16 +1138,31 @@ namespace YARG.Core.Engine.Vocals.Engines
                 HitNote(phrase);
             }
 
-            PhraseTicksHit = 0;
-            PhraseTicksTotal = null;
-
             if (phraseTicksTotal != 0)
             {
                 OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
             }
             OnPartyVocalsPhrase?.Invoke(grade, _canonicalMeters.ToArray(), isLastPhrase);
 
-            // Reset all window state for next phrase
+            // Per-phrase state reset (PhraseTicksHit/Total, _micPartHits and other
+            // working arrays) is performed by ResetMultiMicPhraseState, called from
+            // UpdateHitLogic immediately after this method returns. Subclasses that
+            // override ProcessMultiMicPhraseEnd do NOT have to remember those resets:
+            // the base contract guarantees they always run.
+        }
+
+        /// <summary>
+        /// Per-phrase state reset for the multi-mic path, called from UpdateHitLogic
+        /// immediately after ProcessMultiMicPhraseEnd returns. Always runs regardless
+        /// of which ProcessMultiMicPhraseEnd implementation fired — subclasses can
+        /// override to add their own per-phrase array clears, but they should call
+        /// base.ResetMultiMicPhraseState() to preserve the engine's reset contract
+        /// (PhraseTicksHit/PhraseTicksTotal nulling, _micPartHits clear, etc.).
+        /// </summary>
+        protected virtual void ResetMultiMicPhraseState()
+        {
+            PhraseTicksHit = 0;
+            PhraseTicksTotal = null;
             Array.Clear(_micPartHits, 0, _micPartHits.Length);
             Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
             Array.Clear(_cumulativeAssignedTicks, 0, _cumulativeAssignedTicks.Length);
