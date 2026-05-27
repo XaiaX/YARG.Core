@@ -185,13 +185,19 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             OnPartyVocalsPhrase?.Invoke(grade, metersSnapshot, isLastPhrase);
 
-            // Reset our own accumulators for the next phrase. _canonicalMeters and
-            // _micPartHits / _phraseTicksTotalPerPart are cleared by the base at
-            // lines 500-504 immediately after this method returns; that's a redundant
-            // (but harmless) overwrite of _canonicalMeters since the allocator just
-            // wrote into it. Letting the base do it keeps the base's reset contract
-            // intact for any future maintenance — not worth a custom override path
-            // to skip it.
+            // Per-phrase resets (including this engine's _harmDirectTicks /
+            // _ambiguityBuckets) are handled by ResetMultiMicPhraseState, which the
+            // base UpdateHitLogic calls immediately after this method returns.
+        }
+
+        /// <summary>
+        /// Extend the base per-phrase reset with the coordinator's own scoring
+        /// accumulators. Called automatically by the base UpdateHitLogic after
+        /// ProcessMultiMicPhraseEnd returns.
+        /// </summary>
+        protected override void ResetMultiMicPhraseState()
+        {
+            base.ResetMultiMicPhraseState();
             Array.Clear(_harmDirectTicks, 0, _harmDirectTicks.Length);
             Array.Clear(_ambiguityBuckets, 0, _ambiguityBuckets.Length);
         }

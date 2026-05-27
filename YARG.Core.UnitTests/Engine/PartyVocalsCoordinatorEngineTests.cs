@@ -550,6 +550,75 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     // ================================================================
+    // Per-phrase state reset regression (issue: ProcessMultiMicPhraseEnd
+    // override was not invoking the base's PhraseTicksTotal/PhraseTicksHit
+    // nulling or _micPartHits clear, leaving stale state across phrase
+    // boundaries. Fixed by extracting cleanup into ResetMultiMicPhraseState,
+    // which the base UpdateHitLogic always calls after the virtual returns.)
+    // ================================================================
+
+    [Test]
+    public void StateReset_PhraseBoundary_ClearsMicPartHitsAndPhraseTicksTotal()
+    {
+        // Two sequential HARM0-only phrases with DIFFERENT tick lengths, so a
+        // stale PhraseTicksTotal carried over from phrase 1 would be detectable
+        // when phrase 2 starts (the `??=` at top of UpdateHitLogic only assigns
+        // if PhraseTicksTotal is null — a stale non-null value would persist).
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);     // Phrase 1: ticks 0-960 (1.0s)
+        AddPhrase(parts[0], 1920, 480, 60);  // Phrase 2: ticks 1920-2400 (0.5s)
+
+        var engine = CreateCoordinator(parts, 2);
+        var grades = new List<PhraseGrade>();
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) => grades.Add(grade);
+
+        // Phrase 1: sing HARM0 well to populate _micPartHits and PhraseTicksTotal.
+        engine.Update(0.05);
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { -1f } }, 0.05, 0.5);
+        // Advance past phrase 1's TickEnd (tick 960 → t=1.0s).
+        engine.Update(1.1);
+
+        Assert.AreEqual(1, grades.Count, "Phrase 1 should have graded");
+
+        // Inspect base _micPartHits via reflection — ResetMultiMicPhraseState must
+        // have cleared it. Without the fix, phrase 1's per-mic accumulation would
+        // still be sitting in the array, leaking into phrase 2's stats.
+        var micPartHitsField = typeof(PartyVocalsCoordinatorEngine).BaseType!
+            .GetField("_micPartHits", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var micPartHits = (double[,])micPartHitsField.GetValue(engine)!;
+        double sumAfterPhrase1 = 0;
+        foreach (var v in micPartHits) sumAfterPhrase1 += v;
+        Assert.AreEqual(0.0, sumAfterPhrase1, Epsilon,
+            "_micPartHits must be cleared between phrases (regression: prior coordinator " +
+            "override skipped the base's Array.Clear of _micPartHits).");
+
+        // Drive into phrase 2 with no mic activity. PhraseTicksTotal must be
+        // re-derived for phrase 2 (480 ticks) — if the prior bug were present,
+        // it would still hold phrase 1's value (960) because `??=` doesn't
+        // overwrite a non-null value.
+        engine.SetMicPitch(0, -1f);
+        engine.SetMicPitch(1, -1f);
+        engine.Update(2.05); // within phrase 2 (tick 1920-2400 → t=2.0-2.5s)
+
+        // PhraseTicksTotal reflects the sum of lyric child-note ticks in the phrase.
+        // AddPhrase uses tickLength/2 for the lyric, so phrase 1 = 480, phrase 2 = 240.
+        // If the bug regressed (PhraseTicksTotal never nulled at phrase 1 end), the
+        // `??=` at top of UpdateHitLogic would leave it at 480 forever.
+        Assert.IsTrue(engine.PhraseTicksTotal.HasValue,
+            "PhraseTicksTotal should be populated for phrase 2");
+        Assert.AreEqual(240u, engine.PhraseTicksTotal!.Value,
+            "PhraseTicksTotal must reflect phrase 2's lyric ticks (240), not phrase 1's (480). " +
+            "Regression: prior coordinator override skipped the base's PhraseTicksTotal = null.");
+        Assert.AreNotEqual(480u, engine.PhraseTicksTotal!.Value,
+            "Explicit guard against the specific regression — phrase 1's stale value.");
+
+        // Finish phrase 2 with no singing → grade Miss.
+        engine.Update(3.0);
+        Assert.AreEqual(2, grades.Count, "Phrase 2 should have graded");
+        Assert.AreEqual(PhraseGrade.Miss, grades[1], "Phrase 2 with no singing = Miss");
+    }
+
+    // ================================================================
     // Legacy Compatibility Test (18)
     // ================================================================
 
