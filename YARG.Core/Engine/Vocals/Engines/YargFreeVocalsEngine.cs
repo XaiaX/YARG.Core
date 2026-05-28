@@ -36,9 +36,25 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         public int PartCount => _allParts.Count;
 
+        /// <summary>
+        /// Per-tick deltas credited to each part for the current tick. This property
+        /// is updated in UpdateHitLogic after per-part credit is committed, allowing
+        /// external systems to read the exact credit assigned for this tick.
+        /// </summary>
+        public IReadOnlyList<double> LastTickPartDeltas => _lastTickPartDeltas;
+
         // Store reference to all parts for hit testing
         protected readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
+
+        /// <summary>
+        /// Set the active parts for the engine. Called by the coordinator when
+        /// the active part set changes at phrase boundaries.
+        /// </summary>
+        public void SetActiveParts(VocalsPart[] newParts)
+        {
+            _allParts = newParts;
+        }
 
         // Resolved bot part for the current tick after applying the per-phrase fallback:
         // if the assigned _botPartIndex has no active phrase, fall back to the lowest-numbered
@@ -85,6 +101,10 @@ namespace YARG.Core.Engine.Vocals.Engines
         // that AccumulateMicPartHits computed for _micPartHits.
         protected readonly double[] _lastTickMicDeltas;
 
+        // Per-part delta for the current tick. Updated in UpdateHitLogic after
+        // per-part credit is committed, for external consumption (e.g., coordinator).
+        private readonly double[] _lastTickPartDeltas;
+
         public YargFreeVocalsEngine(InstrumentDifficulty<VocalNote> primaryChart, IReadOnlyList<VocalsPart> allParts,
             SyncTrack syncTrack, VocalsEngineParameters engineParameters, bool isBot, int botPartIndex = 0)
             : this(primaryChart, allParts, syncTrack, engineParameters, isBot, micCount: 1, botPartIndex)
@@ -122,6 +142,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             _canonicalMeters = new double[allParts.Count];
             _phraseTicksTotalPerPart = new uint[allParts.Count];
             _lastTickMicDeltas = new double[micCount];
+            _lastTickPartDeltas = new double[allParts.Count];
 
             // Smoke-test state for mics 4-7: each picks a random target part (or
             // -1 = silent) every RANDOM_REASSIGN_INTERVAL_SECONDS. Lets us visually
@@ -494,6 +515,12 @@ namespace YARG.Core.Engine.Vocals.Engines
                     }
                 }
 
+                // Update LastTickPartDeltas for external consumption (coordinator)
+                if (_micCount == 1)
+                {
+                    UpdateLastTickPartDeltas();
+                }
+
                 UpdateCarriedNote(phrase);
             }
         }
@@ -727,6 +754,28 @@ namespace YARG.Core.Engine.Vocals.Engines
             {
                 AddScore(percussion);
                 OnNoteHit?.Invoke(NoteIndex, percussion);
+            }
+        }
+
+        /// <summary>
+        /// Update LastTickPartDeltas from _micPartHits for external consumption
+        /// (used by coordinator to read per-tick credit).
+        /// </summary>
+        private void UpdateLastTickPartDeltas()
+        {
+            if (_micCount == 1)
+            {
+                // For single-mic, copy _micPartHits[0] to _lastTickPartDeltas
+                for (int j = 0; j < _allParts.Count; j++)
+                {
+                    _lastTickPartDeltas[j] = _micPartHits[0, j];
+                }
+            }
+            else
+            {
+                // For multi-mic, this shouldn't be called as the coordinator reads deltas directly
+                // from individual sub-engines
+                Array.Clear(_lastTickPartDeltas, 0, _lastTickPartDeltas.Length);
             }
         }
 
