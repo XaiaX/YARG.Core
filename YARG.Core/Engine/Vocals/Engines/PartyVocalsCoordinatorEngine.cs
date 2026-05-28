@@ -4,11 +4,30 @@ using YARG.Core.Chart;
 
 namespace YARG.Core.Engine.Vocals.Engines
 {
-    public sealed class PartyVocalsCoordinatorEngine : YargFreeVocalsEngine
+    public sealed class PartyVocalsCoordinatorEngine : VocalsEngine
     {
-        // Suppress the base's legacy windowed-assignment cadence — the coordinator
-        // owns meter computation via its greedy allocator instead.
-        protected override void CommitWindowAssignment() { }
+        // Multi-mic state (hoisted from YargFreeVocalsEngine in Phase 3, now owned directly)
+        protected readonly int _micCount;
+        protected readonly VocalsPart[] _allParts;
+        protected readonly bool[] _partHasContent;
+        protected readonly double[] _canonicalMeters;
+        protected readonly uint[] _phraseTicksTotalPerPart;
+        protected readonly double[,] _micPartHits;
+        protected readonly double[,] _lastWindowSnapshot;
+        protected readonly double[,] _cumulativeAssignedTicks;
+        protected readonly double[] _lastTickMicDeltas;
+
+        // State inherited from Phase 3 coordinator logic
+        private readonly double[] _harmDirectTicks;
+        private readonly double[] _ambiguityBuckets;
+        private readonly double[,] _bucketPerMic;
+        private readonly uint[] _micHitMaskScratch;
+        private readonly int[] _bucketOrder;
+        private double _lastMeterRefreshTime;
+        private const double METER_UPDATE_INTERVAL_SECONDS = 0.1;
+
+        // Sub-engines array (one per mic)
+        private readonly YargFreeVocalsEngine[] _subEngines;
 
         // Direct credit per HARM, accumulated binary across mics per tick.
         private readonly double[] _harmDirectTicks;
@@ -50,15 +69,46 @@ namespace YARG.Core.Engine.Vocals.Engines
             bool isBot,
             int micCount,
             int botPartIndex = 0)
-            : base(noteTrack, allParts, syncTrack, engineParameters, isBot,
-                   micCount, botPartIndex)
+            : base(noteTrack, syncTrack, engineParameters, isBot)
         {
             int partCount = allParts.Count;
+
+            // Initialize multi-mic state (hoisted from YargFreeVocalsEngine)
+            _micCount = micCount;
+            _allParts = allParts.ToArray();
+            _partHasContent = new bool[partCount];
+            _canonicalMeters = new double[partCount];
+            _phraseTicksTotalPerPart = new uint[partCount];
+            _micPartHits = new double[micCount, partCount];
+            _lastWindowSnapshot = new double[micCount, partCount];
+            _cumulativeAssignedTicks = new double[partCount];
+            _lastTickMicDeltas = new double[micCount];
+
+            // Initialize Phase 3 coordinator state
             _harmDirectTicks = new double[partCount];
             _ambiguityBuckets = new double[1 << partCount];
             _bucketPerMic = new double[micCount, 1 << partCount];
             _micHitMaskScratch = new uint[micCount];
             _bucketOrder = ComputeBucketOrder(partCount);
+
+            // Initialize sub-engines (one per mic)
+            _subEngines = new YargFreeVocalsEngine[micCount];
+            for (int i = 0; i < micCount; i++)
+            {
+                _subEngines[i] = new YargFreeVocalsEngine(
+                    noteTrack,
+                    allParts,
+                    syncTrack,
+                    engineParameters,
+                    isBot,
+                    botPartIndex: i);
+            }
+
+            // Initialize PartHasContent
+            for (int j = 0; j < partCount; j++)
+            {
+                _partHasContent[j] = allParts[j].NotePhrases.Count > 0;
+            }
         }
 
         private static int[] ComputeBucketOrder(int partCount)
@@ -356,5 +406,132 @@ namespace YARG.Core.Engine.Vocals.Engines
                 // arrays are zeroed by ProcessMultiMicPhraseEnd after grading.
             }
         }
+
+        /// <summary>
+        /// Override UpdateHitLogic to drive all sub-engines and run the coordinator's logic
+        /// </summary>
+        protected override void UpdateHitLogic(double time)
+        {
+            // Phase 4a: CheckSingingHit does NOT write TicksHit/TicksMissed directly.
+            // Those only happen at phrase-end.
+
+            // Phase 4a: Per-tick entry point is BaseEngine.Update(double time). The coordinator
+            // calls _subEngines[i].Update(time) for each sub-engine after setting pitch via SetMicPitch.
+
+            // Drive each sub-engine forward for this tick
+            for (int i = 0; i < _micCount; i++)
+            {
+                _subEngines[i].Update(time);
+            }
+
+            // Read LastTickPartDeltas from each sub-engine
+            for (int i = 0; i < _micCount; i++)
+            {
+                var deltas = _subEngines[i].GetLastTickPartDeltas();
+                for (int j = 0; j < deltas.Length; j++)
+                {
+                    _lastTickMicDeltas[i] = deltas[j];
+                }
+            }
+
+            // Run the classifier logic
+            AccumulateAmbiguityScoring();
+
+            // Speculative refresh on the 100ms throttle so the HUD live view updates
+            if (CurrentTime - _lastMeterRefreshTime >= METER_UPDATE_INTERVAL_SECONDS)
+            {
+                _lastMeterRefreshTime = CurrentTime;
+                RunAllocatorIntoCanonicalMeters(commit: false);
+            }
+
+            // Phrase boundary logic - this method needs to check for phrase end
+            if (NoteIndex < Notes.Count && CurrentTick > Notes[NoteIndex].TickEnd)
+            {
+                var phrase = Notes[NoteIndex];
+                uint phraseTicksTotal = GetTicksInPhrase(phrase);
+
+                // Check if we're in multi-mic mode (we always are for Party Vocals)
+                ProcessMultiMicPhraseEnd(phrase, phraseTicksTotal, NoteIndex == Notes.Count - 1);
+
+                // Always reset per-phrase state after phrase-end
+                ResetMultiMicPhraseState();
+
+                UpdateCarriedNote(phrase);
+                NoteIndex++;
+            }
+        }
+
+        #region Abstract Method Implementations (VocalsEngine)
+
+        // Note: The coordinator doesn't need to check for note hits directly,
+        // as the sub-engines handle per-mic pitch matching internally.
+        protected override void CheckForNoteHit() { }
+
+        // Note: The coordinator delegates pitch to sub-engines via SetMicPitch.
+        // This method should not be called directly.
+        protected override void MutateStateWithInput(GameInput gameInput)
+        {
+            if (gameInput.Button)
+            {
+                HasHit = true;
+            }
+            else if (gameInput.Action is VocalsAction.StarPower)
+            {
+                IsStarPowerInputActive = gameInput.Button;
+            }
+        }
+
+        // Note: Bots are handled by sub-engines in their UpdateBot.
+        protected override void UpdateBot(double songTime) { }
+
+        protected override bool CanVocalNoteBeHit(VocalNote note, out float hitPercent)
+        {
+            // This should not be called on the coordinator as it delegates to sub-engines
+            hitPercent = 0f;
+            throw new NotImplementedException();
+        }
+
+        #endregion
+
+        #region Public API
+
+        /// <summary>
+        /// Set pitch for a specific mic (delegates to sub-engine)
+        /// </summary>
+        public void SetMicPitch(int mic, float pitch)
+        {
+            if (mic < 0 || mic >= _micCount)
+                throw new ArgumentOutOfRangeException(nameof(mic));
+
+            _subEngines[mic].SetMicPitch(pitch);
+        }
+
+        /// <summary>
+        /// Access to sub-engines for the player to use
+        /// </summary>
+        public IReadOnlyList<YargFreeVocalsEngine> SubEngines => _subEngines;
+
+        /// <summary>
+        /// Set the active parts for all sub-engines. Called when the active part set changes
+        /// at phrase boundaries.
+        /// </summary>
+        public void SetActiveParts(VocalsPart[] newParts)
+        {
+            _allParts = newParts;
+
+            // Propagate to all sub-engines
+            for (int i = 0; i < _micCount; i++)
+            {
+                _subEngines[i].SetActiveParts(newParts);
+            }
+
+            // Update PartHasContent
+            for (int j = 0; j < newParts.Length; j++)
+            {
+                _partHasContent[j] = newParts[j].NotePhrases.Count > 0;
+            }
+        }
+
+        #endregion
     }
 }
