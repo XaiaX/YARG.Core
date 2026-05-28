@@ -47,15 +47,6 @@ namespace YARG.Core.Engine.Vocals.Engines
         protected readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
 
-        /// <summary>
-        /// Set the active parts for the engine. Called by the coordinator when
-        /// the active part set changes at phrase boundaries.
-        /// </summary>
-        public void SetActiveParts(VocalsPart[] newParts)
-        {
-            _allParts = newParts;
-        }
-
         // Resolved bot part for the current tick after applying the per-phrase fallback:
         // if the assigned _botPartIndex has no active phrase, fall back to the lowest-numbered
         // part that does. Updated in UpdateBot, consumed by CheckSingingHit so the bot scores
@@ -842,6 +833,17 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// Read the last pitch submitted by a specific microphone.
         /// </summary>
         public float GetMicPitch(int micIndex) => _micPitches[micIndex];
+
+        /// <summary>
+        /// Submit a pitch reading for the single mic. Used by the coordinator under
+        /// composition to push per-mic pitch into each sub-engine.
+        /// </summary>
+        public void SetMicPitch(float pitch)
+        {
+            _micPitches[0] = pitch;
+            _micHasSang[0] = true;
+            OnSing?.Invoke(true);
+        }
 
         /// <summary>
         /// Is the given mic currently sitting on a sing note within its effective part?

@@ -1,23 +1,30 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using YARG.Core.Chart;
+using YARG.Core.Input;
 
 namespace YARG.Core.Engine.Vocals.Engines
 {
     public sealed class PartyVocalsCoordinatorEngine : VocalsEngine
     {
-        // Multi-mic state (hoisted from YargFreeVocalsEngine in Phase 3, now owned directly)
-        protected readonly int _micCount;
-        protected readonly VocalsPart[] _allParts;
-        protected readonly bool[] _partHasContent;
-        protected readonly double[] _canonicalMeters;
-        protected readonly uint[] _phraseTicksTotalPerPart;
-        protected readonly double[,] _micPartHits;
-        protected readonly double[,] _lastWindowSnapshot;
-        protected readonly double[,] _cumulativeAssignedTicks;
-        protected readonly double[] _lastTickMicDeltas;
+        // Multi-mic state owned directly by the coordinator (was hoisted into
+        // YargFreeVocalsEngine in Phase 3 so the subclass could see them).
+        private readonly int _micCount;
+        private readonly VocalsPart[] _allParts;
+        private readonly bool[] _partHasContent;
+        private readonly double[] _canonicalMeters;
+        private readonly uint[] _phraseTicksTotalPerPart;
+        private readonly double[,] _micPartHits;
+        private readonly double[,] _lastWindowSnapshot;
+        private readonly double[] _cumulativeAssignedTicks;
+        private readonly double[] _lastTickMicDeltas;
 
-        // State inherited from Phase 3 coordinator logic
+        // Per-mic bitmask of which parts each mic is currently hitting.
+        // Populated by reading each sub-engine's GetMicHittingParts after driving its tick.
+        private readonly uint[] _micCurrentlyHittingParts;
+
+        // Coordinator-specific ambiguity scoring state
         private readonly double[] _harmDirectTicks;
         private readonly double[] _ambiguityBuckets;
         private readonly double[,] _bucketPerMic;
@@ -26,40 +33,11 @@ namespace YARG.Core.Engine.Vocals.Engines
         private double _lastMeterRefreshTime;
         private const double METER_UPDATE_INTERVAL_SECONDS = 0.1;
 
-        // Sub-engines array (one per mic)
+        // Sub-engines (one per mic, composition)
         private readonly YargFreeVocalsEngine[] _subEngines;
 
-        // Direct credit per HARM, accumulated binary across mics per tick.
-        private readonly double[] _harmDirectTicks;
-
-        // Ambiguity buckets keyed by an integer mask over HARM indices.
-        // Masks of interest for 3-HARM songs: 0b011 ({0,1}), 0b101 ({0,2}),
-        // 0b110 ({1,2}), 0b111 ({0,1,2}). Indexed directly; entries for
-        // singletons and empty mask are unused but cheap.
-        private readonly double[] _ambiguityBuckets; // length = 1 << PartCount
-
-        // Per-mic-per-bucket cumulative credit. At allocation time, the maximum
-        // value over mics for a given bucket S is used to cap how much credit
-        // any single HARM can receive from that bucket. This prevents the
-        // ambiguity stacking shortcut: two mics on a fully-ambiguous (or
-        // talkie-harmonized) passage for half a phrase contribute 2 × N/2 = N
-        // to the aggregate bucket, but each mic only contributed N/2, so the
-        // per-HARM cap of N/2 prevents that bucket from filling a single HARM
-        // to capacity. Two mics on a true full-phrase unison still credit both
-        // HARMs (bucket = 2N, per-mic max = N, each HARM filled to N).
-        private readonly double[,] _bucketPerMic; // [mic, mask]
-
-        // Scratch for the per-tick classifier (mic → mask of HARMs it's
-        // currently hitting). Reused each tick to avoid alloc. uint to match
-        // _micCurrentlyHittingParts's element type and avoid a per-tick cast.
-        private readonly uint[] _micHitMaskScratch;
-
-        // Cached bucket-processing order (narrowest |S| first, then lex).
-        // partCount is fixed for the engine's lifetime, so compute once.
-        private readonly int[] _bucketOrder;
-
-        private double _lastMeterRefreshTime;
-        private const double METER_UPDATE_INTERVAL_SECONDS = 0.1;
+        // Per-phrase tracking for the coordinator's own phrase-end logic
+        private uint? _coordinatorPhraseTicksTotal;
 
         public PartyVocalsCoordinatorEngine(
             InstrumentDifficulty<VocalNote> noteTrack,
@@ -73,7 +51,6 @@ namespace YARG.Core.Engine.Vocals.Engines
         {
             int partCount = allParts.Count;
 
-            // Initialize multi-mic state (hoisted from YargFreeVocalsEngine)
             _micCount = micCount;
             _allParts = allParts.ToArray();
             _partHasContent = new bool[partCount];
@@ -83,15 +60,15 @@ namespace YARG.Core.Engine.Vocals.Engines
             _lastWindowSnapshot = new double[micCount, partCount];
             _cumulativeAssignedTicks = new double[partCount];
             _lastTickMicDeltas = new double[micCount];
+            _micCurrentlyHittingParts = new uint[micCount];
 
-            // Initialize Phase 3 coordinator state
             _harmDirectTicks = new double[partCount];
             _ambiguityBuckets = new double[1 << partCount];
             _bucketPerMic = new double[micCount, 1 << partCount];
             _micHitMaskScratch = new uint[micCount];
             _bucketOrder = ComputeBucketOrder(partCount);
 
-            // Initialize sub-engines (one per mic)
+            // Build one sub-engine per mic (composition)
             _subEngines = new YargFreeVocalsEngine[micCount];
             for (int i = 0; i < micCount; i++)
             {
@@ -104,149 +81,191 @@ namespace YARG.Core.Engine.Vocals.Engines
                     botPartIndex: i);
             }
 
-            // Initialize PartHasContent
             for (int j = 0; j < partCount; j++)
             {
                 _partHasContent[j] = allParts[j].NotePhrases.Count > 0;
             }
+
+            BuildCountdownsFromAllParts(allParts.ToList(), excludePercussion: true);
         }
 
-        private static int[] ComputeBucketOrder(int partCount)
+        public IReadOnlyList<YargFreeVocalsEngine> SubEngines => _subEngines;
+
+        public void SetMicPitch(int mic, float pitch)
         {
-            // Bucket indices are kept as int since they index _ambiguityBuckets[].
-            // The masks themselves fit in a few bits regardless.
-            var masks = new List<int>();
-            for (int m = 0; m < (1 << partCount); m++)
+            if (mic < 0 || mic >= _micCount)
+                throw new ArgumentOutOfRangeException(nameof(mic));
+            _subEngines[mic].SetMicPitch(pitch);
+        }
+
+        public bool PartHasContent(int partIndex)
+        {
+            if (partIndex < 0 || partIndex >= _allParts.Length) return false;
+            return _partHasContent[partIndex];
+        }
+
+        public int PartCount => _allParts.Length;
+
+        public IReadOnlyList<double> CanonicalMeters => _canonicalMeters;
+
+        public double AwesomeThreshold => EngineParameters.PhraseHitPercent;
+
+        public uint GetMicHittingParts(int micIndex)
+        {
+            if (micIndex < 0 || micIndex >= _micCount) return 0u;
+            return _micCurrentlyHittingParts[micIndex];
+        }
+
+        public float GetMicPitch(int micIndex)
+        {
+            if (micIndex < 0 || micIndex >= _micCount) return 0f;
+            return _subEngines[micIndex].GetMicPitch(0);
+        }
+
+        #region VocalsEngine Abstract Implementations
+
+        protected override void MutateStateWithInput(GameInput gameInput)
+        {
+            var action = gameInput.GetAction<VocalsAction>();
+            if (action == VocalsAction.Hit && gameInput.Button)
             {
-                if (PopCount((uint) m) >= 2) masks.Add(m);
+                HasHit = true;
             }
-            masks.Sort((a, b) =>
+            else if (action == VocalsAction.StarPower)
             {
-                int pa = PopCount((uint) a);
-                int pb = PopCount((uint) b);
-                if (pa != pb) return pa - pb;
-                return a - b;
-            });
-            return masks.ToArray();
+                IsStarPowerInputActive = gameInput.Button;
+            }
         }
 
-        /// <summary>
-        /// Per-tick: classify each mic into "hits HARM mask M" and update
-        /// direct + bucket accumulators. Called from UpdateHitLogic AFTER
-        /// the base has populated _phraseTicksTotalPerPart, run
-        /// AccumulateMicPartHits (which still maintains _micPartHits for
-        /// HUD/stats but is no longer the scoring input), and written
-        /// per-mic ticksSinceLast into _lastTickMicDeltas.
-        /// </summary>
-        private void AccumulateAmbiguityScoring()
+        protected override void UpdateHitLogic(double time)
         {
-            int partCount = _phraseTicksTotalPerPart.Length;
+            if (NoteIndex >= Notes.Count)
+            {
+                HasSang = false;
+                return;
+            }
 
-            // 1. Classify: for each mic, build the mask of HARMs it could be hitting.
-            //    The base's AccumulateMicPartHits already keeps _micCurrentlyHittingParts
-            //    populated as a per-tick bitmask — reuse it (uint, no cast).
+            // Drive each sub-engine forward for this tick. Each sub-engine runs its
+            // full single-mic lifecycle (MutateStateWithInput → UpdateHitLogic →
+            // phrase-end). Sub-engine outputs nobody reads are dead data.
             for (int i = 0; i < _micCount; i++)
             {
-                uint rawMask = _micCurrentlyHittingParts[i];
-                uint mask = 0u;
-                for (int j = 0; j < partCount; j++)
-                {
-                    if ((rawMask & (1u << j)) != 0u && _phraseTicksTotalPerPart[j] > 0u)
-                        mask |= 1u << j;
-                }
-                _micHitMaskScratch[i] = mask;
+                _subEngines[i].Update(time);
             }
 
-            // 2. Direct credit: binary across mics, but credit per HARM j is the
-            //    max of _lastTickMicDeltas[i] across mics that are unambiguously
-            //    on HARM j this tick. Rationale: HARM j "was covered" for the
-            //    longest span any covering mic can vouch for (per the leniency
-            //    model in AccumulateMicPartHits). One mic with a 3-tick delta and
-            //    another with a 1-tick delta both unambiguous on HARM j contribute
-            //    3 ticks of HARM j coverage, not 4.
-            for (int j = 0; j < partCount; j++)
-            {
-                double maxDelta = 0;
-                for (int i = 0; i < _micCount; i++)
-                {
-                    uint m = _micHitMaskScratch[i];
-                    if (PopCount(m) == 1 && (m & (1u << j)) != 0u)
-                    {
-                        double d = _lastTickMicDeltas[i];
-                        if (d > maxDelta) maxDelta = d;
-                    }
-                }
-                _harmDirectTicks[j] += maxDelta;
-            }
+            // Mirror time variables from sub-engines (they all share the same SyncTrack,
+            // so any one would do — use the first).
+            CurrentTime = _subEngines[0].CurrentTime;
+            CurrentTick = _subEngines[0].CurrentTick;
 
-            // 3. Ambiguity bucket credit: additive across mics. Each ambiguous
-            //    mic contributes its own clamped delta to its set's bucket. The
-            //    per-mic bookkeeping (_bucketPerMic) lets the allocator cap
-            //    per-HARM credit at the longest single-mic span — preventing
-            //    the stacking shortcut where N mics ambiguous on S for time T
-            //    would otherwise allocate N×T total credit to one HARM.
+            // Read per-tick credit from each sub-engine's LastTickPartDeltas and
+            // per-mic hitting-parts bitmask.
+            Array.Clear(_lastTickMicDeltas, 0, _lastTickMicDeltas.Length);
             for (int i = 0; i < _micCount; i++)
             {
-                uint m = _micHitMaskScratch[i];
-                if (PopCount(m) >= 2)
+                var deltas = _subEngines[i].LastTickPartDeltas;
+                double totalDelta = 0;
+                for (int j = 0; j < deltas.Count && j < _allParts.Length; j++)
                 {
-                    double delta = _lastTickMicDeltas[i];
-                    _ambiguityBuckets[(int) m] += delta;
-                    _bucketPerMic[i, (int) m] += delta;
+                    totalDelta += deltas[j];
                 }
+                _lastTickMicDeltas[i] = totalDelta;
+
+                // Read the sub-engine's per-mic hitting-parts bitmask
+                _micCurrentlyHittingParts[i] = _subEngines[i].GetMicHittingParts(0);
             }
-        }
 
-        private static int PopCount(uint m)
-        {
-            // 3 bits at most; intrinsic not worth it.
-            return (int) (((m >> 0) & 1u) + ((m >> 1) & 1u) + ((m >> 2) & 1u));
-        }
+            var phrase = Notes[NoteIndex];
+            _coordinatorPhraseTicksTotal ??= GetTicksInPhrase(phrase);
 
-        // Per-tick accumulation runs inside the base's UpdateHitLogic, on the same
-        // side of the phrase-end check as AccumulateMicPartHits. This ensures
-        // boundary-tick credit attributes to the closing phrase (matching the base
-        // convention) instead of leaking into the next phrase.
-        protected override void OnAfterMicPartHitsAccumulated()
-        {
+            // Populate per-part tick totals for the current phrase
+            for (int j = 0; j < _allParts.Length; j++)
+            {
+                _phraseTicksTotalPerPart[j] = GetTicksInPhraseForPart(_allParts[j]);
+            }
+
+            // Run the coordinator's per-tick ambiguity classifier
             AccumulateAmbiguityScoring();
 
-            // Speculative refresh on the 100ms throttle so the HUD live view updates.
-            // Lives in the per-tick hook (not a separate UpdateHitLogic override)
-            // because it's a per-tick concern and avoids needing two override sites.
+            // Speculative refresh on the 100ms throttle for live HUD
             if (CurrentTime - _lastMeterRefreshTime >= METER_UPDATE_INTERVAL_SECONDS)
             {
                 _lastMeterRefreshTime = CurrentTime;
                 RunAllocatorIntoCanonicalMeters(commit: false);
             }
-        }
 
-        protected override void ProcessMultiMicPhraseEnd(
-            VocalNote phrase, uint phraseTicksTotal, bool isLastPhrase)
-        {
-            // DEBUG
-            Console.WriteLine($"=== PhraseEnd. bucket[3]={_ambiguityBuckets[3]:F2}, " +
-                $"perMic[0,3]={_bucketPerMic[0,3]:F2}, perMic[1,3]={_bucketPerMic[1,3]:F2}, " +
-                $"direct[0]={_harmDirectTicks[0]:F2}, direct[1]={_harmDirectTicks[1]:F2}");
-
-            int partCount = _phraseTicksTotalPerPart.Length;
-
-            // Empty phrase: no content to grade. Treat as a free hit (matches the
-            // base engine's behavior and the single-mic path). Still fire the
-            // OnPartyVocalsPhrase event so the HUD's banner pipeline stays in sync,
-            // graded as Awesome with all-zero meters (the convention for empty
-            // phrases — there's nothing to award, but nothing failed either).
-            if (phraseTicksTotal == 0)
+            // Drive visual events for real-mic multi-mic players
+            if (!IsBot)
             {
-                HitNote(phrase);
-                OnPartyVocalsPhrase?.Invoke(
-                    PhraseGrade.Awesome, new double[partCount], isLastPhrase);
-                return;
+                bool anyMicHit = false;
+                for (int i = 0; i < _micCount; i++)
+                {
+                    if (_micCurrentlyHittingParts[i] != 0u)
+                    {
+                        anyMicHit = true;
+                    }
+                }
+
+                OnHit?.Invoke(anyMicHit);
             }
 
-            // Final allocation into _canonicalMeters using all accumulated credit.
+            // Check for end of phrase
+            if (CurrentTick > phrase.TickEnd)
+            {
+                bool hasNotes = _coordinatorPhraseTicksTotal.Value != 0;
+                bool isLastPhrase = NoteIndex == Notes.Count - 1;
+                uint phraseTicksTotal = _coordinatorPhraseTicksTotal.Value;
+
+                if (phraseTicksTotal == 0)
+                {
+                    HitNote(phrase);
+                    OnPartyVocalsPhrase?.Invoke(
+                        PhraseGrade.Awesome, new double[_allParts.Length], isLastPhrase);
+                }
+                else
+                {
+                    ProcessPhraseEnd(phrase, phraseTicksTotal, isLastPhrase);
+                }
+
+                // Reset per-phrase state
+                ResetPhraseState();
+
+                UpdateCarriedNote(phrase);
+            }
+        }
+
+        protected override void CheckForNoteHit()
+        {
+            // No-op: sub-engines handle their own hit detection.
+        }
+
+        protected override void UpdateBot(double songTime)
+        {
+            // No-op: each sub-engine runs its own UpdateBot via its own Update cycle.
+        }
+
+        protected override bool CanVocalNoteBeHit(VocalNote note, out float hitPercent)
+        {
+            hitPercent = 0f;
+            throw new NotImplementedException(
+                "CanVocalNoteBeHit is not called on the coordinator; sub-engines handle pitch matching.");
+        }
+
+        protected override bool CanNoteBeHit(VocalNote note) =>
+            throw new NotImplementedException();
+
+        #endregion
+
+        // OnPartyVocalsPhrase is inherited from VocalsEngine — no re-declaration needed.
+
+        #region Phrase-End Logic
+
+        private void ProcessPhraseEnd(VocalNote phrase, uint phraseTicksTotal, bool isLastPhrase)
+        {
+            // Final allocation using all accumulated credit
             RunAllocatorIntoCanonicalMeters(commit: true);
 
+            int partCount = _allParts.Length;
             int awesomeCount = 0;
             double bestMeter = 0;
             for (int j = 0; j < partCount; j++)
@@ -264,14 +283,9 @@ namespace YARG.Core.Engine.Vocals.Engines
             };
             bool hit = grade != PhraseGrade.Miss;
 
-            // Snapshot meters for the event payload BEFORE we reset for the next phrase.
             var metersSnapshot = new double[partCount];
             Array.Copy(_canonicalMeters, metersSnapshot, partCount);
 
-            // Mirror the base engine's TicksHit/TicksMissed accounting so the
-            // end-of-song accuracy percent (VocalsStats.Percent = TicksHit / TotalTicks)
-            // reflects real performance. Without these increments TotalTicks stays
-            // at 0 and Percent defaults to 1.0 (= 100%) across the whole session.
             if (hit)
             {
                 EngineStats.TicksHit += phraseTicksTotal;
@@ -279,43 +293,92 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
             else
             {
-                var ticksHit = (uint) Math.Round(PhraseTicksHit);
+                var ticksHit = (uint)Math.Round(PhraseTicksHit);
                 EngineStats.TicksHit += ticksHit;
                 EngineStats.TicksMissed += phraseTicksTotal - ticksHit;
                 MissNote(phrase, bestMeter);
             }
 
-            // OnPhraseHit drives VocalsPlayer.IsFc (flipped to false on !fullPoints
-            // at VocalsPlayer.cs:486-489) and ShowTextNotifications. Without firing
-            // this, the FC tile stays lit through misses.
             OnPhraseHit?.Invoke(bestMeter / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
-
             OnPartyVocalsPhrase?.Invoke(grade, metersSnapshot, isLastPhrase);
-
-            // Per-phrase resets (including this engine's _harmDirectTicks /
-            // _ambiguityBuckets) are handled by ResetMultiMicPhraseState, which the
-            // base UpdateHitLogic calls immediately after this method returns.
         }
 
-        /// <summary>
-        /// Extend the base per-phrase reset with the coordinator's own scoring
-        /// accumulators. Called automatically by the base UpdateHitLogic after
-        /// ProcessMultiMicPhraseEnd returns.
-        /// </summary>
-        protected override void ResetMultiMicPhraseState()
+        private void ResetPhraseState()
         {
-            base.ResetMultiMicPhraseState();
+            PhraseTicksHit = 0;
+            PhraseTicksTotal = null;
+            _coordinatorPhraseTicksTotal = null;
+
+            Array.Clear(_micPartHits, 0, _micPartHits.Length);
+            Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
+            Array.Clear(_cumulativeAssignedTicks, 0, _cumulativeAssignedTicks.Length);
+            Array.Clear(_canonicalMeters, 0, _canonicalMeters.Length);
+            Array.Clear(_phraseTicksTotalPerPart, 0, _phraseTicksTotalPerPart.Length);
             Array.Clear(_harmDirectTicks, 0, _harmDirectTicks.Length);
             Array.Clear(_ambiguityBuckets, 0, _ambiguityBuckets.Length);
             Array.Clear(_bucketPerMic, 0, _bucketPerMic.Length);
+
+            _lastMeterRefreshTime = CurrentTime;
         }
+
+        #endregion
+
+        #region Ambiguity Scoring
+
+        private void AccumulateAmbiguityScoring()
+        {
+            int partCount = _phraseTicksTotalPerPart.Length;
+
+            // Classify: for each mic, build the mask of HARMs it could be hitting
+            for (int i = 0; i < _micCount; i++)
+            {
+                uint rawMask = _micCurrentlyHittingParts[i];
+                uint mask = 0u;
+                for (int j = 0; j < partCount; j++)
+                {
+                    if ((rawMask & (1u << j)) != 0u && _phraseTicksTotalPerPart[j] > 0u)
+                        mask |= 1u << j;
+                }
+                _micHitMaskScratch[i] = mask;
+            }
+
+            // Direct credit: binary across mics
+            for (int j = 0; j < partCount; j++)
+            {
+                double maxDelta = 0;
+                for (int i = 0; i < _micCount; i++)
+                {
+                    uint m = _micHitMaskScratch[i];
+                    if (PopCount(m) == 1 && (m & (1u << j)) != 0u)
+                    {
+                        double d = _lastTickMicDeltas[i];
+                        if (d > maxDelta) maxDelta = d;
+                    }
+                }
+                _harmDirectTicks[j] += maxDelta;
+            }
+
+            // Ambiguity bucket credit: additive across mics with per-mic-span cap
+            for (int i = 0; i < _micCount; i++)
+            {
+                uint m = _micHitMaskScratch[i];
+                if (PopCount(m) >= 2)
+                {
+                    double delta = _lastTickMicDeltas[i];
+                    _ambiguityBuckets[(int)m] += delta;
+                    _bucketPerMic[i, (int)m] += delta;
+                }
+            }
+        }
+
+        #endregion
+
+        #region Allocator
 
         private void RunAllocatorIntoCanonicalMeters(bool commit)
         {
             int partCount = _phraseTicksTotalPerPart.Length;
 
-            // Working copy of credited[j] so the speculative path doesn't clobber
-            // _canonicalMeters mid-computation.
             Span<double> credited = stackalloc double[partCount];
             for (int j = 0; j < partCount; j++)
             {
@@ -323,26 +386,15 @@ namespace YARG.Core.Engine.Vocals.Engines
                 credited[j] = cap == 0 ? 0 : Math.Min(_harmDirectTicks[j], cap);
             }
 
-            // Work on a copy of the buckets so the speculative path is non-destructive.
             Span<double> bucketsCopy = stackalloc double[_ambiguityBuckets.Length];
             for (int i = 0; i < _ambiguityBuckets.Length; i++) bucketsCopy[i] = _ambiguityBuckets[i];
 
-            // Per-HARM scratch tracking how much credit each HARM has already received
-            // from the CURRENT bucket, to enforce the per-mic-span cap. Reset between
-            // buckets.
             Span<double> receivedFromBucket = stackalloc double[partCount];
 
-            // Bucket processing order: ascending |S|, then lex over included HARM indices.
-            // For partCount=3 the order is: {0,1}=3, {0,2}=5, {1,2}=6, {0,1,2}=7.
-            // _bucketOrder is computed once in the constructor (ComputeBucketOrder).
             foreach (int S in _bucketOrder)
             {
                 if (bucketsCopy[S] <= 0) continue;
 
-                // Per-mic-span cap: max credit any single mic contributed to this
-                // bucket. Each HARM can receive at most this much credit from this
-                // bucket — prevents the stacking shortcut where N mics ambiguous for
-                // time T would otherwise pour N×T into one HARM.
                 double perMicCap = 0;
                 for (int i = 0; i < _micCount; i++)
                 {
@@ -354,8 +406,6 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                 while (bucketsCopy[S] > 0)
                 {
-                    // Find eligible j ∈ S with credited[j] < capacity[j] AND
-                    // receivedFromBucket[j] < perMicCap; pick most-full (ties by lowest index).
                     int chosen = -1;
                     double chosenCredited = -1;
                     for (int j = 0; j < partCount; j++)
@@ -371,14 +421,14 @@ namespace YARG.Core.Engine.Vocals.Engines
                         }
                     }
 
-                    if (chosen < 0) break; // no eligible HARM in this bucket; remaining credit discarded
+                    if (chosen < 0) break;
 
                     double remainingCapacity = _phraseTicksTotalPerPart[chosen] - credited[chosen];
                     double remainingPerMicCap = perMicCap - receivedFromBucket[chosen];
                     double transfer = Math.Min(
                         Math.Min(bucketsCopy[S], remainingCapacity),
                         remainingPerMicCap);
-                    if (transfer <= 0) break; // defensive — perMicCap could be 0 if no mics contributed
+                    if (transfer <= 0) break;
                     credited[chosen] += transfer;
                     bucketsCopy[S] -= transfer;
                     receivedFromBucket[chosen] += transfer;
@@ -391,7 +441,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                 _canonicalMeters[j] = cap == 0 ? 0 : credited[j] / cap;
             }
 
-            // Mirror best meter into PhraseTicksHit so the HUD combo fill bar tracks.
+            // Mirror best meter into PhraseTicksHit for HUD combo fill bar
             if (PhraseTicksTotal is { } total && total > 0)
             {
                 double best = 0;
@@ -399,137 +449,54 @@ namespace YARG.Core.Engine.Vocals.Engines
                     if (_canonicalMeters[j] > best) best = _canonicalMeters[j];
                 PhraseTicksHit = best * total;
             }
-
-            if (commit)
-            {
-                // No state to commit beyond _canonicalMeters write — the buckets/direct
-                // arrays are zeroed by ProcessMultiMicPhraseEnd after grading.
-            }
         }
 
-        /// <summary>
-        /// Override UpdateHitLogic to drive all sub-engines and run the coordinator's logic
-        /// </summary>
-        protected override void UpdateHitLogic(double time)
+        private static int[] ComputeBucketOrder(int partCount)
         {
-            // Phase 4a: CheckSingingHit does NOT write TicksHit/TicksMissed directly.
-            // Those only happen at phrase-end.
-
-            // Phase 4a: Per-tick entry point is BaseEngine.Update(double time). The coordinator
-            // calls _subEngines[i].Update(time) for each sub-engine after setting pitch via SetMicPitch.
-
-            // Drive each sub-engine forward for this tick
-            for (int i = 0; i < _micCount; i++)
+            var masks = new List<int>();
+            for (int m = 0; m < (1 << partCount); m++)
             {
-                _subEngines[i].Update(time);
+                if (PopCount((uint)m) >= 2) masks.Add(m);
             }
-
-            // Read LastTickPartDeltas from each sub-engine
-            for (int i = 0; i < _micCount; i++)
+            masks.Sort((a, b) =>
             {
-                var deltas = _subEngines[i].GetLastTickPartDeltas();
-                for (int j = 0; j < deltas.Length; j++)
-                {
-                    _lastTickMicDeltas[i] = deltas[j];
-                }
-            }
-
-            // Run the classifier logic
-            AccumulateAmbiguityScoring();
-
-            // Speculative refresh on the 100ms throttle so the HUD live view updates
-            if (CurrentTime - _lastMeterRefreshTime >= METER_UPDATE_INTERVAL_SECONDS)
-            {
-                _lastMeterRefreshTime = CurrentTime;
-                RunAllocatorIntoCanonicalMeters(commit: false);
-            }
-
-            // Phrase boundary logic - this method needs to check for phrase end
-            if (NoteIndex < Notes.Count && CurrentTick > Notes[NoteIndex].TickEnd)
-            {
-                var phrase = Notes[NoteIndex];
-                uint phraseTicksTotal = GetTicksInPhrase(phrase);
-
-                // Check if we're in multi-mic mode (we always are for Party Vocals)
-                ProcessMultiMicPhraseEnd(phrase, phraseTicksTotal, NoteIndex == Notes.Count - 1);
-
-                // Always reset per-phrase state after phrase-end
-                ResetMultiMicPhraseState();
-
-                UpdateCarriedNote(phrase);
-                NoteIndex++;
-            }
+                int pa = PopCount((uint)a);
+                int pb = PopCount((uint)b);
+                if (pa != pb) return pa - pb;
+                return a - b;
+            });
+            return masks.ToArray();
         }
 
-        #region Abstract Method Implementations (VocalsEngine)
-
-        // Note: The coordinator doesn't need to check for note hits directly,
-        // as the sub-engines handle per-mic pitch matching internally.
-        protected override void CheckForNoteHit() { }
-
-        // Note: The coordinator delegates pitch to sub-engines via SetMicPitch.
-        // This method should not be called directly.
-        protected override void MutateStateWithInput(GameInput gameInput)
+        private static int PopCount(uint m)
         {
-            if (gameInput.Button)
-            {
-                HasHit = true;
-            }
-            else if (gameInput.Action is VocalsAction.StarPower)
-            {
-                IsStarPowerInputActive = gameInput.Button;
-            }
-        }
-
-        // Note: Bots are handled by sub-engines in their UpdateBot.
-        protected override void UpdateBot(double songTime) { }
-
-        protected override bool CanVocalNoteBeHit(VocalNote note, out float hitPercent)
-        {
-            // This should not be called on the coordinator as it delegates to sub-engines
-            hitPercent = 0f;
-            throw new NotImplementedException();
+            return (int)(((m >> 0) & 1u) + ((m >> 1) & 1u) + ((m >> 2) & 1u));
         }
 
         #endregion
 
-        #region Public API
+        #region Helpers
 
-        /// <summary>
-        /// Set pitch for a specific mic (delegates to sub-engine)
-        /// </summary>
-        public void SetMicPitch(int mic, float pitch)
+        private uint GetTicksInPhraseForPart(VocalsPart part)
         {
-            if (mic < 0 || mic >= _micCount)
-                throw new ArgumentOutOfRangeException(nameof(mic));
+            var masterPhrase = Notes[NoteIndex];
+            uint masterStart = masterPhrase.Tick;
+            uint masterEnd = masterPhrase.TickEnd;
 
-            _subEngines[mic].SetMicPitch(pitch);
-        }
-
-        /// <summary>
-        /// Access to sub-engines for the player to use
-        /// </summary>
-        public IReadOnlyList<YargFreeVocalsEngine> SubEngines => _subEngines;
-
-        /// <summary>
-        /// Set the active parts for all sub-engines. Called when the active part set changes
-        /// at phrase boundaries.
-        /// </summary>
-        public void SetActiveParts(VocalsPart[] newParts)
-        {
-            _allParts = newParts;
-
-            // Propagate to all sub-engines
-            for (int i = 0; i < _micCount; i++)
+            uint totalTime = 0;
+            foreach (var partPhrase in part.NotePhrases)
             {
-                _subEngines[i].SetActiveParts(newParts);
-            }
+                var phraseNote = partPhrase.PhraseParentNote;
+                if (phraseNote.Tick >= masterEnd || phraseNote.TickEnd <= masterStart) continue;
 
-            // Update PartHasContent
-            for (int j = 0; j < newParts.Length; j++)
-            {
-                _partHasContent[j] = newParts[j].NotePhrases.Count > 0;
+                foreach (var noteInPhrase in phraseNote.ChildNotes)
+                {
+                    if (noteInPhrase.IsPercussion) continue;
+                    totalTime += phraseNote.GetTicksForNote(noteInPhrase);
+                }
+                break;
             }
+            return totalTime;
         }
 
         #endregion
