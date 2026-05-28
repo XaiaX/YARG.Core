@@ -793,4 +793,43 @@ public sealed class PartyVocalsCoordinatorEngineTests
             "Empty phrase should count as a NotesHit (HitNote was called).");
     }
 
+    [Test]
+    public void Bot_ThreeMicsThreeHarms_EachBotHitsItsPart()
+    {
+        // Regression guard: bot Party Vocals builds one sub-engine per HARM part
+        // (micCount == part count). Each bot sub-engine must self-drive via UpdateBot
+        // and hit its assigned part, so the coordinator credits every part and the
+        // phrase grades as a hit. This path was never exercised by existing tests
+        // (CreateCoordinator passes isBot=false and feeds pitches manually); here we
+        // drive a real bot coordinator with no SetMicPitch calls.
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(isHarmony: true),
+            CreateVocalsPart(isHarmony: true),
+            CreateVocalsPart(isHarmony: true),
+        };
+        AddPhrase(parts[0], 0, 960, 60); // HARM1 C4
+        AddPhrase(parts[1], 0, 960, 64); // HARM2 E4
+        AddPhrase(parts[2], 0, 960, 67); // HARM3 G4
+
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var engine = new PartyVocalsCoordinatorEngine(
+            primaryChart, parts, CreateSyncTrack(), EngineParams, isBot: true, micCount: 3);
+
+        var grades = new List<PhraseGrade>();
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) => grades.Add(grade);
+
+        // Drive the bots through the phrase at ~60fps; bots self-generate pitch, so
+        // we deliberately do NOT call SetMicPitch.
+        int totalFrames = (int) (2.0 * ApproximateVocalFps);
+        for (int f = 0; f < totalFrames; f++)
+            engine.Update((f + 1) / ApproximateVocalFps);
+
+        Assert.AreEqual(1, grades.Count, "Bot phrase should be graded once");
+        Assert.AreNotEqual(PhraseGrade.Miss, grades[0],
+            "Bots should hit their assigned parts, not miss");
+        Assert.Greater(engine.EngineStats.TicksHit, 0u,
+            "Bot hits should accumulate TicksHit");
+    }
+
 }
