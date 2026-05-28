@@ -119,7 +119,7 @@ namespace YARG.Core.Engine.Vocals.Engines
         public float GetMicPitch(int micIndex)
         {
             if (micIndex < 0 || micIndex >= _micCount) return 0f;
-            return _subEngines[micIndex].GetMicPitch(0);
+            return _subEngines[micIndex].GetCurrentPitch();
         }
 
         #region VocalsEngine Abstract Implementations
@@ -172,7 +172,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                 _lastTickMicDeltas[i] = totalDelta;
 
                 // Read the sub-engine's per-mic hitting-parts bitmask
-                _micCurrentlyHittingParts[i] = _subEngines[i].GetMicHittingParts(0);
+                _micCurrentlyHittingParts[i] = _subEngines[i].GetMicHittingParts();
             }
 
             var phrase = Notes[NoteIndex];
