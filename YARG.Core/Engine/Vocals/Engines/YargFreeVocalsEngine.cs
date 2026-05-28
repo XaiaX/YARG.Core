@@ -12,18 +12,6 @@ namespace YARG.Core.Engine.Vocals.Engines
         public int CurrentTargetHarmonyIndex { get; private set; }
 
         /// <summary>
-        /// Live canonical meter values per HARM part. Updated at rollback cadence and phrase end.
-        /// </summary>
-        public IReadOnlyList<double> CanonicalMeters => _canonicalMeters;
-
-        /// <summary>
-        /// Per-difficulty raw hit ratio at which a HARM line counts as "Awesome".
-        /// Display meters should be normalized against this so the bar fills to
-        /// 100% when the threshold is reached.
-        /// </summary>
-        public double AwesomeThreshold => EngineParameters.PhraseHitPercent;
-
-        /// <summary>
         /// Whether each HARM part has any phrase content in this chart. The Harmony
         /// track always exposes 3 placeholder parts even if the song only charts
         /// HARM1+HARM2, so the HUD uses this to hide empty-lane meters.
@@ -53,54 +41,17 @@ namespace YARG.Core.Engine.Vocals.Engines
         // against whatever line it's actually singing.
         private int _currentBotEffectivePartIndex;
 
-        // Multi-mic state. Empty/zero-length when micCount == 1 (single-mic path uses PitchSang).
-        protected readonly int _micCount;
-        private readonly float[] _micPitches;
-        private readonly bool[] _micHasSang;
-        private readonly uint[] _micLastSingTicks;
-        protected readonly double[,] _micPartHits;
-
-        // Per-mic bitmask of which parts that mic landed an on-pitch hit on,
-        // refreshed each AccumulateMicPartHits tick. Bit j set ⇒ mic landed on
-        // part j this tick. Read by the visualization layer (PartyVocalsPlayer)
-        // to pick a trail color reflecting what was actually sung, rather than
-        // the slot's static assignment.
-        protected readonly uint[] _micCurrentlyHittingParts;
-
-        private const double ROLLBACK_WINDOW_SECONDS = 0.5; // 500 ms MVP default per design
-
-        // Smoke-test: mics with index >= RANDOM_BEHAVIOR_MIN_MIC_INDEX use random
-        // part reassignment (or silence). Threshold matches "mics 1-3 keep their
-        // current behavior, mics 4-7 randomize" since the user-facing slots are
-        // 1-indexed.
-        private const int RANDOM_BEHAVIOR_MIN_MIC_INDEX = 3;
-        private const double RANDOM_REASSIGN_INTERVAL_SECONDS = 0.2;
-        private const double RANDOM_SILENCE_CHANCE = 0.10;
-        private readonly int[] _micRandomTarget;
-        private readonly double[] _micRandomNextReassignTime;
-        private readonly Random _micRandom;
-
-        // Window state for per-window assignment and N-awesome grading
-        private double _lastRollbackTime;
-        private readonly double[,] _lastWindowSnapshot;
-        private readonly double[] _cumulativeAssignedTicks;
-        protected readonly double[] _canonicalMeters;
-        protected readonly uint[] _phraseTicksTotalPerPart;
-
-        // Ticks since last sing per mic, this tick; 0 for mics that didn't sing.
-        // Used by the coordinator's ambiguity scoring to get the same clamped deltas
-        // that AccumulateMicPartHits computed for _micPartHits.
-        protected readonly double[] _lastTickMicDeltas;
-
+        
+        
+        
         // Per-part delta for the current tick. Updated in UpdateHitLogic after
         // per-part credit is committed, for external consumption (e.g., coordinator).
         private readonly double[] _lastTickPartDeltas;
 
-        public YargFreeVocalsEngine(InstrumentDifficulty<VocalNote> primaryChart, IReadOnlyList<VocalsPart> allParts,
-            SyncTrack syncTrack, VocalsEngineParameters engineParameters, bool isBot, int botPartIndex = 0)
-            : this(primaryChart, allParts, syncTrack, engineParameters, isBot, micCount: 1, botPartIndex)
-        {
-        }
+        // Per-part hit accumulator for single-mic free vocals
+        private readonly double[] _singleMicPartHits;
+        // Bitmask of parts that the single mic is hitting this tick
+        private uint _singleMicHittingParts;
 
         public YargFreeVocalsEngine(
             InstrumentDifficulty<VocalNote> primaryChart,
@@ -108,46 +59,17 @@ namespace YARG.Core.Engine.Vocals.Engines
             SyncTrack syncTrack,
             VocalsEngineParameters engineParameters,
             bool isBot,
-            int micCount,
             int botPartIndex = 0)
             : base(primaryChart, syncTrack, engineParameters, isBot)
         {
-            if (micCount < 1 || micCount > 7)
-                throw new ArgumentOutOfRangeException(nameof(micCount), "micCount must be between 1 and 7.");
-
             _allParts = allParts;
             _botPartIndex = Math.Max(0, Math.Min(botPartIndex, allParts.Count - 1));
             _currentBotEffectivePartIndex = _botPartIndex;
 
-            _micCount = micCount;
-            _micPitches = new float[micCount];
-            _micHasSang = new bool[micCount];
-            _micLastSingTicks = new uint[micCount];
-            _micPartHits = new double[micCount, allParts.Count];
-            _micCurrentlyHittingParts = new uint[micCount];
-
-            // Window state for per-window assignment and N-awesome grading
-            _lastRollbackTime = 0;
-            _lastWindowSnapshot = new double[micCount, allParts.Count];
-            _cumulativeAssignedTicks = new double[allParts.Count];
-            _canonicalMeters = new double[allParts.Count];
-            _phraseTicksTotalPerPart = new uint[allParts.Count];
-            _lastTickMicDeltas = new double[micCount];
+            // Initialize fields for single-mic per-part accumulation
             _lastTickPartDeltas = new double[allParts.Count];
-
-            // Smoke-test state for mics 4-7: each picks a random target part (or
-            // -1 = silent) every RANDOM_REASSIGN_INTERVAL_SECONDS. Lets us visually
-            // confirm that extra mics actually move between HARM lines instead of
-            // stacking invisibly on top of the first 3. Replace once the per-bot
-            // behavior dropdowns land.
-            _micRandomTarget = new int[micCount];
-            _micRandomNextReassignTime = new double[micCount];
-            for (int i = 0; i < micCount; i++)
-            {
-                _micRandomTarget[i] = i % Math.Max(1, allParts.Count);
-                _micRandomNextReassignTime[i] = 0;
-            }
-            _micRandom = new Random(1234);
+            _singleMicPartHits = new double[allParts.Count];
+            _singleMicHittingParts = 0u;
 
             // Build countdowns from all parts for free vocals; exclude percussion so
             // percussion-only stretches show the countdown wheel instead of being
@@ -155,84 +77,8 @@ namespace YARG.Core.Engine.Vocals.Engines
             BuildCountdownsFromAllParts(allParts.ToList(), excludePercussion: true);
         }
 
-        private int ResolveMicTargetPart(int micIdx, double songTime)
-        {
-            int partCount = _allParts.Count;
-
-            if (micIdx >= RANDOM_BEHAVIOR_MIN_MIC_INDEX)
-            {
-                if (songTime >= _micRandomNextReassignTime[micIdx])
-                {
-                    double roll = _micRandom.NextDouble();
-                    _micRandomTarget[micIdx] = roll < RANDOM_SILENCE_CHANCE
-                        ? -1
-                        : _micRandom.Next(0, partCount);
-                    _micRandomNextReassignTime[micIdx] = songTime + RANDOM_REASSIGN_INTERVAL_SECONDS;
-                }
-                return _micRandomTarget[micIdx];
-            }
-
-            int assigned = micIdx % partCount;
-            if (FindActivePhraseInPart(assigned) is not null) return assigned;
-            for (int j = 0; j < partCount; j++)
-            {
-                if (j == assigned) continue;
-                if (FindActivePhraseInPart(j) is not null) return j;
-            }
-            return -1;
-        }
-
-        private void UpdateBotMultiMic(double songTime)
-        {
-            bool anyMicSang = false;
-            VocalNote? representativeNote = null;
-
-            for (int micIdx = 0; micIdx < _micCount; micIdx++)
-            {
-                int targetPart = ResolveMicTargetPart(micIdx, songTime);
-                if (targetPart < 0) continue;
-
-                VocalNote? phrase = FindActivePhraseInPart(targetPart);
-                if (phrase is null) continue;
-
-                VocalNote? singNote = null;
-                foreach (var childNote in phrase.ChildNotes)
-                {
-                    if (!childNote.IsPercussion
-                        && CurrentTick >= childNote.Tick
-                        && CurrentTick <= childNote.TotalTickEnd)
-                    {
-                        singNote = childNote;
-                        break;
-                    }
-                }
-                if (singNote is null) continue;
-
-                _micPitches[micIdx] = singNote.PitchAtSongTime(songTime);
-                _micHasSang[micIdx] = true;
-                anyMicSang = true;
-                representativeNote ??= singNote;
-            }
-
-            if (anyMicSang)
-            {
-                HasSang = true;
-                // Mirror the single-mic bot path's PitchSang for any legacy single-pitch
-                // consumer (HUD particles, OnSing semantics).
-                PitchSang = _micPitches[0];
-                OnSing?.Invoke(true);
-                // Drive needle anchoring: VocalsPlayer's multi-needle update inspects
-                // _lastTargetNote and IsInThreshold(_lastHitTime). Without these events,
-                // every needle falls through to AnchorPitchToOctave's +12-semitone fallback.
-                OnTargetNoteChanged?.Invoke(representativeNote!);
-                OnHit?.Invoke(true);
-            }
-            else
-            {
-                OnHit?.Invoke(false);
-            }
-        }
-
+        
+        
         private VocalNote? FindActivePhraseInPart(int partIndex)
         {
             foreach (var partPhrase in _allParts[partIndex].NotePhrases)
@@ -254,17 +100,6 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
 
             IsStarPowerInputActive = CanStarPowerActivate && !IsStarPowerInputActive;
-
-            // Party Vocals bot: simulate one vocalist per HARM part (cycling if mic count
-            // exceeds part count). Each simulated mic produces the perfect pitch for its
-            // assigned part. Populates the multi-mic buffers so AccumulateMicPartHits and
-            // the rolling-window assignment run identically to a real multi-mic Party
-            // Vocals player.
-            if (_micCount > 1)
-            {
-                UpdateBotMultiMic(songTime);
-                return;
-            }
 
             var phrase = Notes[NoteIndex];
 
@@ -316,14 +151,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                 PitchSang = singNote.PitchAtSongTime(songTime);
                 HasSang = true;
 
-                // Mirror into mic[0] for single-mic bot free vocals so the per-part
-                // canonical-meter accumulation (HARM1/2/3 % HUD) gets data.
-                if (_micCount == 1)
-                {
-                    _micPitches[0] = PitchSang;
-                    _micHasSang[0] = true;
-                }
-
+                
                 OnSing?.Invoke(true);
 
                 // Drive the visual "on note" state for bots: VocalsPlayer's needle path
@@ -361,15 +189,6 @@ namespace YARG.Core.Engine.Vocals.Engines
             {
                 HasSang = true;
                 PitchSang = gameInput.Axis;
-
-                // Mirror into mic[0] so single-mic free vocals also feeds the per-part
-                // canonical-meter accumulation (used to show HARM1/2/3 % in the HUD).
-                if (_micCount == 1)
-                {
-                    _micPitches[0] = gameInput.Axis;
-                    _micHasSang[0] = true;
-                }
-
                 OnSing?.Invoke(true);
             }
             else if (action is VocalsAction.StarPower)
@@ -392,61 +211,22 @@ namespace YARG.Core.Engine.Vocals.Engines
             var phrase = Notes[NoteIndex];
             PhraseTicksTotal ??= GetTicksInPhrase(phrase);
 
-            // Populate per-part tick totals for the current phrase
+            // Populate per-part tick totals for the current phrase (local for single-mic)
+            var phraseTicksTotalPerPart = new uint[_allParts.Count];
             for (int j = 0; j < _allParts.Count; j++)
             {
-                _phraseTicksTotalPerPart[j] = GetTicksInPhraseForPart(_allParts[j]);
+                phraseTicksTotalPerPart[j] = GetTicksInPhraseForPart(_allParts[j]);
                 // If part j has no active phrase, set to 0 (assignment will skip it).
             }
 
             CheckForNoteHit();
 
-            // Per-mic-per-part hidden accumulation. Runs for all free vocals (incl. single
-            // real-mic and single-mic bot) so the HARM1/2/3 % HUD has data. Multi-mic
-            // scoring still gates on _micCount > 1 at phrase-end below.
+            // Per-part hit accumulation for single-mic free vocals to feed the HUD's HARM1/2/3 %
             bool anyMicHit = AccumulateMicPartHits(out VocalNote? repNote);
 
-            // Hook for subclasses to run per-tick logic after AccumulateMicPartHits,
-            // attributing boundary-tick credit to the closing phrase (matching the
-            // base's AccumulateMicPartHits convention).
-            OnAfterMicPartHitsAccumulated();
+            // For single-mic, CheckSingingHit already handles the visual state through OnHit
 
-            // Drive the "on note" visual state for real-mic multi-mic players. Single-mic
-            // real-mic uses CheckSingingHit's OnHit, and bots fire OnHit from UpdateBot/
-            // UpdateBotMultiMic. Without this, multi-mic real-mic players never set
-            // _lastHitTime, so VocalsPlayer's multi-needle gate hides the needles. The
-            // gate also requires _lastTargetNote — drive that via OnTargetNoteChanged
-            // using whichever note a mic actually landed on this tick.
-            if (!IsBot && _micCount > 1)
-            {
-                if (anyMicHit && repNote is not null)
-                {
-                    OnTargetNoteChanged?.Invoke(repNote);
-                }
-                OnHit?.Invoke(anyMicHit);
-            }
-
-            // Per-window visual rollback cadence. Does not consume the hidden buffer.
-            if (CurrentTime - _lastRollbackTime >= ROLLBACK_WINDOW_SECONDS)
-            {
-                CommitWindowAssignment();
-                _lastRollbackTime = CurrentTime;
-            }
-
-            // Mirror the best canonical meter into PhraseTicksHit so the HUD's per-phrase
-            // fill bar tracks progress for multi-mic too. CheckSingingHit is the only
-            // other writer and it bails when HasSang is false (multi-mic input bypasses
-            // it via SetMicPitch), so without this the fill bar stays empty all phrase.
-            if (_micCount > 1 && PhraseTicksTotal is { } total && total > 0)
-            {
-                double bestMeter = 0;
-                for (int j = 0; j < _canonicalMeters.Length; j++)
-                {
-                    if (_phraseTicksTotalPerPart[j] == 0) continue;
-                    if (_canonicalMeters[j] > bestMeter) bestMeter = _canonicalMeters[j];
-                }
-                PhraseTicksHit = bestMeter * total;
-            }
+            // For single-mic free vocals, PhraseTicksHit is updated directly in CheckSingingHit
 
             // Check for the end of a phrase
             if (CurrentTick > phrase.TickEnd)
@@ -454,63 +234,40 @@ namespace YARG.Core.Engine.Vocals.Engines
                 bool hasNotes = PhraseTicksTotal.Value != 0;
                 bool isLastPhrase = NoteIndex == Notes.Count - 1;
 
-                if (_micCount > 1)
+                // For single-mic free vocals, reset per-phrase state and run the standard phrase-end flow
+                // Note: _singleMicPartHits is maintained for single-mic HUD display
+                var percentHit = PhraseTicksHit / PhraseTicksTotal.Value;
+                if (!hasNotes)
                 {
-                    ProcessMultiMicPhraseEnd(phrase, PhraseTicksTotal!.Value, isLastPhrase);
-                    // Always reset per-phrase state after the (virtual) phrase-end
-                    // handler runs. This means subclasses overriding ProcessMultiMicPhraseEnd
-                    // cannot accidentally skip the reset.
-                    ResetMultiMicPhraseState();
+                    percentHit = 1.0;
+                }
+
+                bool hit = percentHit >= EngineParameters.PhraseHitPercent;
+                if (hit)
+                {
+                    EngineStats.TicksHit += PhraseTicksTotal.Value;
+                    HitNote(phrase);
                 }
                 else
                 {
-                    // Final per-part commit so the HUD's HARM% reflects the phrase tail
-                    // before we clear the meter state for the next phrase.
-                    CommitWindowAssignment();
-                    Array.Clear(_micPartHits, 0, _micPartHits.Length);
-                    Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
-                    Array.Clear(_cumulativeAssignedTicks, 0, _cumulativeAssignedTicks.Length);
-                    Array.Clear(_canonicalMeters, 0, _canonicalMeters.Length);
-                    Array.Clear(_phraseTicksTotalPerPart, 0, _phraseTicksTotalPerPart.Length);
-                    _lastRollbackTime = CurrentTime;
+                    var ticksHit = (uint) Math.Round(PhraseTicksHit);
 
-                    // Single-mic path: existing HitNote/MissNote/OnPhraseHit flow unchanged.
-                    var percentHit = PhraseTicksHit / PhraseTicksTotal.Value;
-                    if (!hasNotes)
-                    {
-                        percentHit = 1.0;
-                    }
+                    EngineStats.TicksHit += ticksHit;
+                    EngineStats.TicksMissed += PhraseTicksTotal.Value - ticksHit;
 
-                    bool hit = percentHit >= EngineParameters.PhraseHitPercent;
-                    if (hit)
-                    {
-                        EngineStats.TicksHit += PhraseTicksTotal.Value;
-                        HitNote(phrase);
-                    }
-                    else
-                    {
-                        var ticksHit = (uint) Math.Round(PhraseTicksHit);
+                    MissNote(phrase, percentHit);
+                }
 
-                        EngineStats.TicksHit += ticksHit;
-                        EngineStats.TicksMissed += PhraseTicksTotal.Value - ticksHit;
+                PhraseTicksHit = 0;
+                PhraseTicksTotal = null;
 
-                        MissNote(phrase, percentHit);
-                    }
-
-                    PhraseTicksHit = 0;
-                    PhraseTicksTotal = null;
-
-                    if (hasNotes)
-                    {
-                        OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
-                    }
+                if (hasNotes)
+                {
+                    OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
                 }
 
                 // Update LastTickPartDeltas for external consumption (coordinator)
-                if (_micCount == 1)
-                {
-                    UpdateLastTickPartDeltas();
-                }
+                UpdateLastTickPartDeltas();
 
                 UpdateCarriedNote(phrase);
             }
@@ -533,61 +290,43 @@ namespace YARG.Core.Engine.Vocals.Engines
             bool anyMicHit = false;
             representativeHitNote = null;
 
-            // Clear the per-mic deltas array before populating it this tick
-            Array.Clear(_lastTickMicDeltas, 0, _lastTickMicDeltas.Length);
+            // Reset the "currently hitting parts" bitmask for single-mic
+            _singleMicHittingParts = 0u;
 
-            for (int micIndex = 0; micIndex < _micCount; micIndex++)
+            if (!HasSang)
+                return false;
+
+            var lastTick = Math.Max(
+                SyncTrack.TimeToTick(CurrentTime - maxLeniency),
+                LastSingTick);
+            var ticksSinceLast = CurrentTick - lastTick;
+            LastSingTick = CurrentTick;
+
+            if (ticksSinceLast == 0)
+                return false;
+
+            // Accumulate hits for all parts to feed the HUD's HARM1/2/3 %
+            for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
             {
-                // Reset this mic's "currently hitting parts" bitmask each tick;
-                // we'll re-populate below for any parts CanVocalNoteBeHit confirms.
-                _micCurrentlyHittingParts[micIndex] = 0u;
-
-                if (!_micHasSang[micIndex])
-                    continue;
-
-                var lastTick = Math.Max(
-                    SyncTrack.TimeToTick(CurrentTime - maxLeniency),
-                    _micLastSingTicks[micIndex]);
-                var ticksSinceLast = CurrentTick - lastTick;
-                _micLastSingTicks[micIndex] = CurrentTick;
-                _micHasSang[micIndex] = false;
-
-                if (ticksSinceLast == 0)
-                    continue;
-
-                // Record the delta for this mic for the coordinator's ambiguity scoring
-                _lastTickMicDeltas[micIndex] = ticksSinceLast;
-
-                // Snapshot this mic's pitch into PitchSang for the duration of the per-part scan
-                // (CanVocalNoteBeHit reads PitchSang internally). Restore afterwards so the
-                // single-mic / bot path isn't disturbed if it ran first in this tick.
-                var savedPitchSang = PitchSang;
-                PitchSang = _micPitches[micIndex];
-
-                for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
+                foreach (var partPhrase in _allParts[partIndex].NotePhrases)
                 {
-                    foreach (var partPhrase in _allParts[partIndex].NotePhrases)
+                    foreach (var note in partPhrase.PhraseParentNote.ChildNotes)
                     {
-                        foreach (var note in partPhrase.PhraseParentNote.ChildNotes)
-                        {
-                            if (note.IsPercussion) continue;
-                            if (CurrentTick < note.Tick || CurrentTick > note.TotalTickEnd) continue;
+                        if (note.IsPercussion) continue;
+                        if (CurrentTick < note.Tick || CurrentTick > note.TotalTickEnd) continue;
 
-                            if (CanVocalNoteBeHit(note, out float hitPercent))
+                        if (CanVocalNoteBeHit(note, out float hitPercent))
+                        {
+                            _singleMicPartHits[partIndex] += ticksSinceLast * hitPercent;
+                            if (hitPercent > 0f)
                             {
-                                _micPartHits[micIndex, partIndex] += ticksSinceLast * hitPercent;
-                                if (hitPercent > 0f)
-                                {
-                                    anyMicHit = true;
-                                    representativeHitNote ??= note;
-                                    _micCurrentlyHittingParts[micIndex] |= 1u << partIndex;
-                                }
+                                anyMicHit = true;
+                                representativeHitNote ??= note;
+                                _singleMicHittingParts |= 1u << partIndex;
                             }
                         }
                     }
                 }
-
-                PitchSang = savedPitchSang;
             }
 
             return anyMicHit;
@@ -627,17 +366,13 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             // Note: The primary chart (phrase.ChildNotes) is HARM1 from _allParts[0]
             // We only need to check _allParts to avoid double-counting HARM1 notes
-            // For bot mode, only check HARM1 (first part)
-            // Bots score against the part they're currently singing (which may be a
-            // fallback chosen in UpdateBot when the assigned HARM part has no phrase here).
-            var partsToCheck = IsBot ?
-                _allParts.Skip(_currentBotEffectivePartIndex).Take(1).ToList() :
-                _allParts;
+            // For bot mode, check the part the bot is currently singing (fallback chosen in UpdateBot)
+            // For singer mode, check all parts
 
             // Check each part for active notes
-            for (int partIndex = 0; partIndex < partsToCheck.Count; partIndex++)
+            for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
             {
-                var part = partsToCheck[partIndex];
+                var part = _allParts[partIndex];
 
                 // Get notes from this part's phrases
                 foreach (var partPhrase in part.NotePhrases)
@@ -749,24 +484,15 @@ namespace YARG.Core.Engine.Vocals.Engines
         }
 
         /// <summary>
-        /// Update LastTickPartDeltas from _micPartHits for external consumption
+        /// Update LastTickPartDeltas from _singleMicPartHits for external consumption
         /// (used by coordinator to read per-tick credit).
         /// </summary>
         private void UpdateLastTickPartDeltas()
         {
-            if (_micCount == 1)
+            // For single-mic, copy _singleMicPartHits to _lastTickPartDeltas
+            for (int j = 0; j < _singleMicPartHits.Length; j++)
             {
-                // For single-mic, copy _micPartHits[0] to _lastTickPartDeltas
-                for (int j = 0; j < _allParts.Count; j++)
-                {
-                    _lastTickPartDeltas[j] = _micPartHits[0, j];
-                }
-            }
-            else
-            {
-                // For multi-mic, this shouldn't be called as the coordinator reads deltas directly
-                // from individual sub-engines
-                Array.Clear(_lastTickPartDeltas, 0, _lastTickPartDeltas.Length);
+                _lastTickPartDeltas[j] = _singleMicPartHits[j];
             }
         }
 
@@ -809,30 +535,18 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         protected override bool CanNoteBeHit(VocalNote note) => throw new NotImplementedException();
 
+        
         /// <summary>
-        /// Submit a pitch reading for a specific microphone. Multi-mic Party Vocals path.
-        /// micIndex must be in [0, micCount). For single-mic profiles (micCount == 1), prefer the
-        /// existing PitchSang / QueueInput path — both work, but the legacy path is what existing
-        /// tests exercise.
+        /// Get the current pitch for the single mic. Used by the coordinator to read
+        /// the sub-engine's current pitch state for visual feedback.
         /// </summary>
-        public void SetMicPitch(int micIndex, float pitch)
-        {
-            if (micIndex < 0 || micIndex >= _micCount)
-                throw new ArgumentOutOfRangeException(nameof(micIndex));
-            _micPitches[micIndex] = pitch;
-            _micHasSang[micIndex] = true;
-
-            // Drive OnSing so VocalsPlayer's all-needles "is anyone singing?" gate
-            // (IsInThreshold(_lastSingTime)) actually opens. Without this, party-vocals
-            // pitch inputs that bypass MutateStateWithInput leave _lastSingTime null
-            // and every per-mic needle stays hidden.
-            OnSing?.Invoke(true);
-        }
+        public float GetCurrentPitch() => PitchSang;
 
         /// <summary>
-        /// Read the last pitch submitted by a specific microphone.
+        /// Get the bitmask of parts that the single mic is hitting this tick.
+        /// Used by the coordinator for visual feedback.
         /// </summary>
-        public float GetMicPitch(int micIndex) => _micPitches[micIndex];
+        public uint GetMicHittingParts() => _singleMicHittingParts;
 
         /// <summary>
         /// Submit a pitch reading for the single mic. Used by the coordinator under
@@ -840,8 +554,8 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// </summary>
         public void SetMicPitch(float pitch)
         {
-            _micPitches[0] = pitch;
-            _micHasSang[0] = true;
+            PitchSang = pitch;
+            HasSang = true;
             OnSing?.Invoke(true);
         }
 
@@ -858,175 +572,8 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// 2. Effective part has a phrase but no sing note covering CurrentTick (gap
         ///    between notes within a phrase — also silent, holds last position).
         /// </summary>
-        /// <summary>
-        /// Bitmask of HARM parts that this mic actually landed an on-pitch hit
-        /// on during the most recent AccumulateMicPartHits tick. Bit j set ⇒
-        /// mic was on part j. Used by the visualization layer to pick a trail
-        /// color reflecting what the singer actually sang, not the slot's
-        /// static assignment.
-        /// </summary>
-        public uint GetMicHittingParts(int micIndex)
-        {
-            if (micIndex < 0 || micIndex >= _micCount) return 0u;
-            return _micCurrentlyHittingParts[micIndex];
-        }
-
-
-        public bool IsMicOnNote(int micIndex)
-        {
-            if (micIndex < 0 || micIndex >= _micCount) return false;
-            int effectivePart = GetEffectivePartForMic(micIndex);
-            if (effectivePart < 0) return false;
-            var phrase = FindActivePhraseInPart(effectivePart);
-            if (phrase is null) return false;
-            foreach (var childNote in phrase.ChildNotes)
-            {
-                if (!childNote.IsPercussion
-                    && CurrentTick >= childNote.Tick
-                    && CurrentTick <= childNote.TotalTickEnd)
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        /// <summary>
-        /// Which HARM part this mic is effectively singing this tick — its
-        /// assigned part if that part has an active phrase, otherwise the lowest-
-        /// numbered part with one. Returns -1 if no part has an active phrase
-        /// (the mic is silent). Used by visualization to color the needle and
-        /// particle trail by the lane being hit, not by the mic's slot index.
-        /// </summary>
-        public int GetEffectivePartForMic(int micIndex)
-        {
-            if (micIndex < 0 || micIndex >= _micCount) return -1;
-            int partCount = _allParts.Count;
-
-            if (micIndex >= RANDOM_BEHAVIOR_MIN_MIC_INDEX)
-            {
-                // Random-target state is refreshed in UpdateBotMultiMic; just read it.
-                int target = _micRandomTarget[micIndex];
-                if (target < 0 || target >= partCount) return -1;
-                return FindActivePhraseInPart(target) is not null ? target : -1;
-            }
-
-            int assigned = micIndex % partCount;
-            if (FindActivePhraseInPart(assigned) is not null) return assigned;
-            for (int j = 0; j < partCount; j++)
-            {
-                if (j == assigned) continue;
-                if (FindActivePhraseInPart(j) is not null) return j;
-            }
-            return -1;
-        }
-
-        /// <summary>
-        /// Find the assignment of mics to parts that maximizes (in priority order):
-        /// 1. Number of canonical meters >= awesomeThreshold (the N-awesome count)
-        /// 2. Number of distinct parts that any mic is assigned to (spreads mics across
-        ///    HARMs so two singers don't collapse onto the same lane before either
-        ///    crosses the awesome threshold)
-        /// 3. Total sum of canonical meters
-        /// 4. Lexicographic tiebreak: mic[0] prefers lowest-numbered part it contributes to,
-        ///    then mic[1], etc.
-        /// Enumerates all (M+1)^N possibilities where M = parts.Count and N = mic count.
-        /// For the supported range (N <= 7, M <= 3), worst case is 16384 enumerations — fine.
-        /// </summary>
-        internal static (int[] assignment, double[] meters) ComputeBestAssignment(
-            double[,] micPartHits,
-            uint[] phraseTicksTotal,
-            double awesomeThreshold)
-        {
-            int micCount = micPartHits.GetLength(0);
-            int partCount = micPartHits.GetLength(1);
-
-            int choices = partCount + 1; // M parts + "unassigned"
-            int totalCombos = 1;
-            for (int i = 0; i < micCount; i++) totalCombos *= choices;
-
-            int[] bestAssignment = new int[micCount];
-            for (int i = 0; i < micCount; i++) bestAssignment[i] = -1;
-            double[] bestMeters = new double[partCount];
-            int bestN = -1;
-            int bestDistinct = -1;
-            double bestSum = -1;
-
-            int[] currentAssignment = new int[micCount];
-            double[] currentMeters = new double[partCount];
-
-            for (int combo = 0; combo < totalCombos; combo++)
-            {
-                // Decode combo into per-mic choice (base-`choices` decomposition).
-                int rem = combo;
-                for (int i = 0; i < micCount; i++)
-                {
-                    int choice = rem % choices;
-                    rem /= choices;
-                    currentAssignment[i] = choice == partCount ? -1 : choice;
-                }
-
-                // Compute meters under this assignment.
-                for (int j = 0; j < partCount; j++) currentMeters[j] = 0;
-                for (int i = 0; i < micCount; i++)
-                {
-                    int assignedPart = currentAssignment[i];
-                    if (assignedPart < 0) continue;
-                    if (phraseTicksTotal[assignedPart] == 0) continue;
-                    currentMeters[assignedPart] += micPartHits[i, assignedPart] / phraseTicksTotal[assignedPart];
-                }
-                for (int j = 0; j < partCount; j++)
-                {
-                    if (currentMeters[j] > 1.0) currentMeters[j] = 1.0;
-                }
-
-                // Score this assignment.
-                int n = 0;
-                double sum = 0;
-                for (int j = 0; j < partCount; j++)
-                {
-                    if (currentMeters[j] >= awesomeThreshold) n++;
-                    sum += currentMeters[j];
-                }
-
-                // Count distinct parts that any mic was assigned to, but only count parts
-                // that actually received hits — assigning a silent mic to an unused part
-                // shouldn't game this tiebreak.
-                int distinct = 0;
-                for (int j = 0; j < partCount; j++)
-                {
-                    if (currentMeters[j] > 0) distinct++;
-                }
-
-                // Compare: maximize n, then distinct-parts-hit, then sum, then lex.
-                bool better = false;
-                if (n > bestN) better = true;
-                else if (n == bestN && distinct > bestDistinct) better = true;
-                else if (n == bestN && distinct == bestDistinct && sum > bestSum + 1e-9) better = true;
-                else if (n == bestN && distinct == bestDistinct && Math.Abs(sum - bestSum) < 1e-9)
-                {
-                    for (int i = 0; i < micCount; i++)
-                    {
-                        int curr = currentAssignment[i] < 0 ? int.MaxValue : currentAssignment[i];
-                        int best = bestAssignment[i] < 0 ? int.MaxValue : bestAssignment[i];
-                        if (curr < best) { better = true; break; }
-                        if (curr > best) break;
-                    }
-                }
-
-                if (better)
-                {
-                    bestN = n;
-                    bestDistinct = distinct;
-                    bestSum = sum;
-                    Array.Copy(currentAssignment, bestAssignment, micCount);
-                    Array.Copy(currentMeters, bestMeters, partCount);
-                }
-            }
-
-            return (bestAssignment, bestMeters);
-        }
-
+        
+        
         /// <summary>
         /// Get the total ticks for a specific part in the current phrase.
         /// </summary>
@@ -1056,172 +603,10 @@ namespace YARG.Core.Engine.Vocals.Engines
             return totalTime;
         }
 
-        /// <summary>
-        /// Snapshot the hidden buffer, compute delta since last snapshot, run assignment on the
-        /// window's delta, and accumulate assigned contributions into canonical meters.
-        /// </summary>
-        protected virtual void CommitWindowAssignment()
-        {
-            int micCount = _micPartHits.GetLength(0);
-            int partCount = _micPartHits.GetLength(1);
-
-            // Solo-only: max over mics for the single part
-            if (partCount == 1 && micCount > 1)
-            {
-                double maxDelta = 0;
-                for (int i = 0; i < micCount; i++)
-                {
-                    double delta = _micPartHits[i, 0] - _lastWindowSnapshot[i, 0];
-                    if (delta > maxDelta) maxDelta = delta;
-                }
-                if (_phraseTicksTotalPerPart[0] > 0)
-                {
-                    _cumulativeAssignedTicks[0] += maxDelta;
-                    _canonicalMeters[0] = Math.Min(1.0, _cumulativeAssignedTicks[0] / _phraseTicksTotalPerPart[0]);
-                }
-                Array.Copy(_micPartHits, _lastWindowSnapshot, _micPartHits.Length);
-                return;
-            }
-
-            // Compute per-window delta
-            double[,] windowHits = new double[micCount, partCount];
-            for (int i = 0; i < micCount; i++)
-                for (int j = 0; j < partCount; j++)
-                    windowHits[i, j] = _micPartHits[i, j] - _lastWindowSnapshot[i, j];
-
-            // Run assignment on the window's contributions
-            var (assignment, _) = ComputeBestAssignment(
-                windowHits, _phraseTicksTotalPerPart, EngineParameters.PhraseHitPercent);
-
-            // Accumulate assigned ticks into cumulative totals
-            for (int i = 0; i < micCount; i++)
-            {
-                int part = assignment[i];
-                if (part < 0) continue;
-                if (_phraseTicksTotalPerPart[part] == 0) continue;
-                _cumulativeAssignedTicks[part] += windowHits[i, part];
-            }
-
-            // Recompute canonical meters from cumulative totals
-            for (int j = 0; j < partCount; j++)
-            {
-                if (_phraseTicksTotalPerPart[j] == 0)
-                {
-                    _canonicalMeters[j] = 0;
-                    continue;
-                }
-                _canonicalMeters[j] = Math.Min(1.0, _cumulativeAssignedTicks[j] / _phraseTicksTotalPerPart[j]);
-            }
-
-            // Advance snapshot to current state
-            Array.Copy(_micPartHits, _lastWindowSnapshot, _micPartHits.Length);
-        }
-
-        /// <summary>
-        /// Called once per tick from UpdateHitLogic after AccumulateMicPartHits returns,
-        /// and before the phrase-end check. Virtual hook for subclasses to run per-tick
-        /// logic (e.g., ambiguity scoring) on the same side of the phrase-end boundary
-        /// as AccumulateMicPartHits.
-        /// </summary>
-        protected virtual void OnAfterMicPartHitsAccumulated()
-        {
-            // Base implementation is empty; subclasses can override to add per-tick logic.
-        }
-
-        /// <summary>
-        /// Handle phrase-end logic for multi-mic Party Vocals. Base implementation uses
-        /// the legacy assignment scoring model. Virtual for subclasses to override with
-        /// different scoring strategies (e.g., ambiguity-bucket coordinator).
-        /// </summary>
-        protected virtual void ProcessMultiMicPhraseEnd(VocalNote phrase, uint phraseTicksTotal, bool isLastPhrase)
-        {
-            // Final window commit so the canonical meters reflect the phrase tail.
-            CommitWindowAssignment();
-
-            // Grade is derived from how many parts crossed the awesome threshold.
-            int awesomeCount = 0;
-            double awesomeThreshold = EngineParameters.PhraseHitPercent;
-            double bestMeter = 0;
-            for (int j = 0; j < _canonicalMeters.Length; j++)
-            {
-                if (_phraseTicksTotalPerPart[j] == 0) continue;
-                if (_canonicalMeters[j] >= awesomeThreshold) awesomeCount++;
-                if (_canonicalMeters[j] > bestMeter) bestMeter = _canonicalMeters[j];
-            }
-
-            PhraseGrade grade = awesomeCount switch
-            {
-                0 => PhraseGrade.Miss,
-                1 => PhraseGrade.Awesome,
-                2 => PhraseGrade.DoubleAwesome,
-                _ => PhraseGrade.TripleAwesome,
-            };
-
-            // Reuse the legacy phrase-end path so combo, NotesHit, score, multiplier,
-            // NoteIndex, OnPhraseHit, IsFc etc. all stay consistent with the rest of
-            // the engine. percentHit is the best-matched part's meter; bonus points
-            // for double/triple awesome go through AddScore on top.
-            bool hit = grade != PhraseGrade.Miss;
-            double percentHit = bestMeter;
-
-            if (phraseTicksTotal != 0)
-            {
-                if (hit)
-                {
-                    EngineStats.TicksHit += phraseTicksTotal;
-                    HitNote(phrase);
-                    // No score bonus for double/triple awesome — per design
-                    // (`2026-05-21-party-vocals.md` §Scoring): N-awesome is
-                    // display and stats only, does not multiply score.
-                }
-                else
-                {
-                    var ticksHit = (uint) Math.Round(PhraseTicksHit);
-                    EngineStats.TicksHit += ticksHit;
-                    EngineStats.TicksMissed += phraseTicksTotal - ticksHit;
-                    MissNote(phrase, percentHit);
-                }
-            }
-            else
-            {
-                // Empty phrase: count as hit, no score change (mirrors single-mic path
-                // which treats hasNotes=false as percentHit=1.0).
-                HitNote(phrase);
-            }
-
-            if (phraseTicksTotal != 0)
-            {
-                OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
-            }
-            OnPartyVocalsPhrase?.Invoke(grade, _canonicalMeters.ToArray(), isLastPhrase);
-
-            // Per-phrase state reset (PhraseTicksHit/Total, _micPartHits and other
-            // working arrays) is performed by ResetMultiMicPhraseState, called from
-            // UpdateHitLogic immediately after this method returns. Subclasses that
-            // override ProcessMultiMicPhraseEnd do NOT have to remember those resets:
-            // the base contract guarantees they always run.
-        }
-
-        /// <summary>
-        /// Per-phrase state reset for the multi-mic path, called from UpdateHitLogic
-        /// immediately after ProcessMultiMicPhraseEnd returns. Always runs regardless
-        /// of which ProcessMultiMicPhraseEnd implementation fired — subclasses can
-        /// override to add their own per-phrase array clears, but they should call
-        /// base.ResetMultiMicPhraseState() to preserve the engine's reset contract
-        /// (PhraseTicksHit/PhraseTicksTotal nulling, _micPartHits clear, etc.).
-        /// </summary>
-        protected virtual void ResetMultiMicPhraseState()
-        {
-            PhraseTicksHit = 0;
-            PhraseTicksTotal = null;
-            Array.Clear(_micPartHits, 0, _micPartHits.Length);
-            Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
-            Array.Clear(_cumulativeAssignedTicks, 0, _cumulativeAssignedTicks.Length);
-            Array.Clear(_canonicalMeters, 0, _canonicalMeters.Length);
-            Array.Clear(_phraseTicksTotalPerPart, 0, _phraseTicksTotalPerPart.Length);
-            _lastRollbackTime = CurrentTime;
-        }
-
+        
+        
+        
+        
         // Positive remainder
         private static float Mod(float a, float b)
         {
