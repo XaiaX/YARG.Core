@@ -177,6 +177,7 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             var phrase = Notes[NoteIndex];
             _coordinatorPhraseTicksTotal ??= GetTicksInPhrase(phrase);
+            PhraseTicksTotal ??= _coordinatorPhraseTicksTotal;
 
             // Populate per-part tick totals for the current phrase
             for (int j = 0; j < _allParts.Length; j++)
@@ -358,15 +359,29 @@ namespace YARG.Core.Engine.Vocals.Engines
                 _harmDirectTicks[j] += maxDelta;
             }
 
-            // Ambiguity bucket credit: additive across mics with per-mic-span cap
+            // Ambiguity bucket credit: additive across mics with per-mic-span cap.
+            // Use per-part delta (not summed) so the per-mic-span cap correctly
+            // limits each HARM to what one mic actually contributed per HARM.
             for (int i = 0; i < _micCount; i++)
             {
                 uint m = _micHitMaskScratch[i];
                 if (PopCount(m) >= 2)
                 {
-                    double delta = _lastTickMicDeltas[i];
-                    _ambiguityBuckets[(int)m] += delta;
-                    _bucketPerMic[i, (int)m] += delta;
+                    var deltas = _subEngines[i].LastTickPartDeltas;
+                    double partDelta = 0;
+                    int hitCount = 0;
+                    for (int j = 0; j < partCount && j < deltas.Count; j++)
+                    {
+                        if ((m & (1u << j)) != 0u)
+                        {
+                            partDelta += deltas[j];
+                            hitCount++;
+                        }
+                    }
+                    if (hitCount > 0) partDelta /= hitCount;
+
+                    _ambiguityBuckets[(int)m] += partDelta;
+                    _bucketPerMic[i, (int)m] += partDelta;
                 }
             }
         }

@@ -219,14 +219,24 @@ namespace YARG.Core.Engine.Vocals.Engines
                 // If part j has no active phrase, set to 0 (assignment will skip it).
             }
 
+            // Save singing state before CheckSingingHit consumes HasSang / LastSingTick
+            bool wasSinging = HasSang;
+            uint savedLastSingTick = LastSingTick;
+
             CheckForNoteHit();
 
-            // Per-part hit accumulation for single-mic free vocals to feed the HUD's HARM1/2/3 %
-            bool anyMicHit = AccumulateMicPartHits(out VocalNote? repNote);
+            // Snapshot per-part hits before accumulation to compute per-tick delta
+            // (coordinator reads LastTickPartDeltas every tick for ambiguity scoring)
+            Span<double> prevHits = stackalloc double[_allParts.Count];
+            for (int j = 0; j < _allParts.Count; j++)
+                prevHits[j] = _singleMicPartHits[j];
 
-            // For single-mic, CheckSingingHit already handles the visual state through OnHit
+            // Per-part hit accumulation using pre-consumption singing state
+            bool anyMicHit = AccumulateMicPartHits(wasSinging, savedLastSingTick, out VocalNote? repNote);
 
-            // For single-mic free vocals, PhraseTicksHit is updated directly in CheckSingingHit
+            // Compute per-tick delta for external consumption (coordinator reads these every tick)
+            for (int j = 0; j < _allParts.Count; j++)
+                _lastTickPartDeltas[j] = _singleMicPartHits[j] - prevHits[j];
 
             // Check for the end of a phrase
             if (CurrentTick > phrase.TickEnd)
@@ -266,9 +276,6 @@ namespace YARG.Core.Engine.Vocals.Engines
                     OnPhraseHit?.Invoke(percentHit / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
                 }
 
-                // Update LastTickPartDeltas for external consumption (coordinator)
-                UpdateLastTickPartDeltas();
-
                 UpdateCarriedNote(phrase);
             }
         }
@@ -281,10 +288,10 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         private bool AccumulateMicPartHits()
         {
-            return AccumulateMicPartHits(out _);
+            return AccumulateMicPartHits(HasSang, LastSingTick, out _);
         }
 
-        private bool AccumulateMicPartHits(out VocalNote? representativeHitNote)
+        private bool AccumulateMicPartHits(bool wasSinging, uint savedLastSingTick, out VocalNote? representativeHitNote)
         {
             var maxLeniency = 1.0 / EngineParameters.ApproximateVocalFps;
             bool anyMicHit = false;
@@ -293,14 +300,13 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Reset the "currently hitting parts" bitmask for single-mic
             _singleMicHittingParts = 0u;
 
-            if (!HasSang)
+            if (!wasSinging)
                 return false;
 
             var lastTick = Math.Max(
                 SyncTrack.TimeToTick(CurrentTime - maxLeniency),
-                LastSingTick);
+                savedLastSingTick);
             var ticksSinceLast = CurrentTick - lastTick;
-            LastSingTick = CurrentTick;
 
             if (ticksSinceLast == 0)
                 return false;
@@ -480,19 +486,6 @@ namespace YARG.Core.Engine.Vocals.Engines
             {
                 AddScore(percussion);
                 OnNoteHit?.Invoke(NoteIndex, percussion);
-            }
-        }
-
-        /// <summary>
-        /// Update LastTickPartDeltas from _singleMicPartHits for external consumption
-        /// (used by coordinator to read per-tick credit).
-        /// </summary>
-        private void UpdateLastTickPartDeltas()
-        {
-            // For single-mic, copy _singleMicPartHits to _lastTickPartDeltas
-            for (int j = 0; j < _singleMicPartHits.Length; j++)
-            {
-                _lastTickPartDeltas[j] = _singleMicPartHits[j];
             }
         }
 

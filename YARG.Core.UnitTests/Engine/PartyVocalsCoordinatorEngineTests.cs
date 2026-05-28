@@ -583,11 +583,9 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     // ================================================================
-    // Per-phrase state reset regression (issue: ProcessMultiMicPhraseEnd
-    // override was not invoking the base's PhraseTicksTotal/PhraseTicksHit
-    // nulling or _micPartHits clear, leaving stale state across phrase
-    // boundaries. Fixed by extracting cleanup into ResetMultiMicPhraseState,
-    // which the base UpdateHitLogic always calls after the virtual returns.)
+    // Per-phrase state reset regression (issue: coordinator's ResetPhraseState
+    // was not clearing _micPartHits, leaving stale accumulation across phrase
+    // boundaries. Fixed by clearing all per-phrase arrays in ResetPhraseState.)
     // ================================================================
 
     [Test]
@@ -613,10 +611,10 @@ public sealed class PartyVocalsCoordinatorEngineTests
 
         Assert.AreEqual(1, grades.Count, "Phrase 1 should have graded");
 
-        // Inspect base _micPartHits via reflection — ResetMultiMicPhraseState must
-        // have cleared it. Without the fix, phrase 1's per-mic accumulation would
-        // still be sitting in the array, leaking into phrase 2's stats.
-        var micPartHitsField = typeof(PartyVocalsCoordinatorEngine).BaseType!
+        // Inspect _micPartHits via reflection — ResetPhraseState must have cleared it.
+        // Without the fix, phrase 1's per-mic accumulation would still be sitting in
+        // the array, leaking into phrase 2's stats.
+        var micPartHitsField = typeof(PartyVocalsCoordinatorEngine)
             .GetField("_micPartHits", BindingFlags.NonPublic | BindingFlags.Instance)!;
         var micPartHits = (double[,])micPartHitsField.GetValue(engine)!;
         double sumAfterPhrase1 = 0;
@@ -659,7 +657,7 @@ public sealed class PartyVocalsCoordinatorEngineTests
     [Test]
     public void StatsPercent_AccumulatesTicksHitAndTicksMissed()
     {
-        // Prior bug: coordinator's ProcessMultiMicPhraseEnd override skipped the
+        // Prior bug: coordinator's ProcessPhraseEnd skipped the
         // EngineStats.TicksHit/TicksMissed accumulation that the base does. With
         // both fields at 0, VocalsStats.Percent (TicksHit/TotalTicks) defaults to
         // 1.0 (100%) when TotalTicks == 0 — making the end-of-song accuracy display
