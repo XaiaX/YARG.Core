@@ -123,7 +123,6 @@ public sealed class PartyVocalsCoordinatorEngineTests
     private static double[] GetCanonicalMeters(PartyVocalsCoordinatorEngine engine)
     {
         var field = typeof(PartyVocalsCoordinatorEngine)
-            .BaseType!
             .GetField("_canonicalMeters", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((double[])field.GetValue(engine)!).ToArray();
     }
@@ -165,7 +164,6 @@ public sealed class PartyVocalsCoordinatorEngineTests
     private static void SetPhraseTicksTotalPerPart(PartyVocalsCoordinatorEngine engine, params uint[] values)
     {
         var field = typeof(PartyVocalsCoordinatorEngine)
-            .BaseType!
             .GetField("_phraseTicksTotalPerPart", BindingFlags.NonPublic | BindingFlags.Instance)!;
         var arr = (uint[])field.GetValue(engine)!;
         for (int i = 0; i < values.Length && i < arr.Length; i++)
@@ -797,45 +795,4 @@ public sealed class PartyVocalsCoordinatorEngineTests
             "Empty phrase should count as a NotesHit (HitNote was called).");
     }
 
-    // ================================================================
-    // Legacy Compatibility Test (18)
-    // ================================================================
-
-    [Test]
-    public void LegacyYargFreeVocalsEngine_StillWorks()
-    {
-        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
-        AddPhrase(parts[0], 0, 960, 60);
-        AddPhrase(parts[1], 0, 960, 64);
-
-        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
-        var engine = new YargFreeVocalsEngine(
-            primaryChart, parts, CreateSyncTrack(), EngineParams, false, micCount: 2);
-
-        var grades = new List<PhraseGrade>();
-        engine.OnPartyVocalsPhrase += (grade, meters, isLast) => grades.Add(grade);
-        engine.Update(0.1);
-
-        FeedPitchesLegacy(engine, 2, new[] { new[] { 60f }, new[] { 64f } }, 0.1, 2.0);
-        engine.Update(4.0);
-
-        Assert.Greater(grades.Count, 0, "Legacy engine should emit phrase events");
-        Assert.Greater(engine.BaseStats.NotesHit, 0, "Legacy engine should score phrases");
-    }
-
-    private static void FeedPitchesLegacy(YargFreeVocalsEngine engine, int micCount,
-        float[][] micPitchArrays, double startTime, double duration)
-    {
-        int totalFrames = (int)(duration * ApproximateVocalFps);
-        for (int f = 0; f < totalFrames; f++)
-        {
-            double time = startTime + (f + 1) / ApproximateVocalFps;
-            for (int m = 0; m < micCount; m++)
-            {
-                int idx = Math.Min(f, micPitchArrays[m].Length - 1);
-                engine.SetMicPitch(m, micPitchArrays[m][idx]);
-            }
-            engine.Update(time);
-        }
-    }
 }
