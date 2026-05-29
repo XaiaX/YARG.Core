@@ -409,12 +409,16 @@ namespace YARG.Core.Engine.Vocals.Engines
             if (hitAnyNote)
             {
                 // Update target harmony index only if it changed (retains last value when no match)
-                // Only update when we actually hit a note to ensure index retains last value when no part matches
                 if (bestPartIndex != CurrentTargetHarmonyIndex)
                 {
                     CurrentTargetHarmonyIndex = bestPartIndex;
-                    OnTargetNoteChanged?.Invoke(bestNote!);
                 }
+
+                // Always fire target note change so visuals can snap to the current
+                // note. On solo-only charts the part index never changes (always 0),
+                // so the guard above would never fire — leaving slot.TargetNote null
+                // and suppressing the trail.
+                OnTargetNoteChanged?.Invoke(bestNote!);
 
                 // Scale the hit by chart ticks elapsed since the last sing, matching
                 // YargVocalsEngine. PhraseTicksTotal is in chart ticks (hundreds to
