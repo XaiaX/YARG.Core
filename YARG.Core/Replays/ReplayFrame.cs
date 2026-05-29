@@ -22,16 +22,15 @@ namespace YARG.Core.Replays
         public readonly GameInput[]          Inputs;
 
         /// <summary>
-        /// Number of microphones in a Party Vocals replay. 0 for non-Party-Vocals (single pitch in Inputs).
+        /// Per-mic input streams for Party Vocals replays. PerMicInputs[i] is the
+        /// chronological sequence of GameInput values recorded from mic i during the
+        /// live session. Null for non-Party-Vocals replays.
+        ///
+        /// Each stream is replayed in PartyVocalsPlayer.UpdateInputs by queueing
+        /// the inputs into the corresponding sub-engine, matching how live mic input
+        /// would flow.
         /// </summary>
-        public int MicCount;
-
-        /// <summary>
-        /// Per-mic pitch streams for Party Vocals replays. MicPitches[i] is the array of pitch values
-        /// for microphone i, sampled at the same cadence as GameInput entries in Inputs.
-        /// Null for non-Party-Vocals replays.
-        /// </summary>
-        public float[][]? MicPitches;
+        public GameInput[][]? PerMicInputs;
 
         public int InputCount => Inputs.Length;
 
@@ -41,8 +40,7 @@ namespace YARG.Core.Replays
             Stats = stats;
             EngineParameters = param;
             Inputs = inputs;
-            MicCount = 0;
-            MicPitches = null;
+            PerMicInputs = null;
         }
 
         public ReplayFrame(ref FixedArrayStream stream, int version)
@@ -90,27 +88,47 @@ namespace YARG.Core.Replays
                 Inputs[i] = new GameInput(time, action, value);
             }
 
-            if (version >= 15)
+            if (version >= 16)
             {
-                MicCount = stream.Read<int>(Endianness.Little);
-                if (MicCount > 0)
+                int micCount = stream.Read<int>(Endianness.Little);
+                if (micCount > 0)
                 {
-                    MicPitches = new float[MicCount][];
-                    for (int i = 0; i < MicCount; i++)
+                    PerMicInputs = new GameInput[micCount][];
+                    for (int i = 0; i < micCount; i++)
                     {
                         int len = stream.Read<int>(Endianness.Little);
-                        MicPitches[i] = new float[len];
+                        PerMicInputs[i] = new GameInput[len];
                         for (int j = 0; j < len; j++)
                         {
-                            MicPitches[i][j] = stream.Read<float>(Endianness.Little);
+                            double time = stream.Read<double>(Endianness.Little);
+                            int action = stream.Read<int>(Endianness.Little);
+                            float axis = stream.Read<float>(Endianness.Little);
+                            PerMicInputs[i][j] = new GameInput(time, action, axis);
                         }
+                    }
+                }
+                else
+                {
+                    PerMicInputs = null;
+                }
+            }
+            else if (version == 15)
+            {
+                // Read and discard legacy MicCount/MicPitches
+                int micCount = stream.Read<int>(Endianness.Little);
+                for (int i = 0; i < micCount; i++)
+                {
+                    int len = stream.Read<int>(Endianness.Little);
+                    for (int j = 0; j < len; j++)
+                    {
+                        stream.Read<float>(Endianness.Little); // discard
                     }
                 }
             }
             else
             {
-                MicCount = 0;
-                MicPitches = null;
+                // Version < 15, no mic block existed
+                PerMicInputs = null;
             }
         }
 
@@ -129,15 +147,18 @@ namespace YARG.Core.Replays
                 writer.Write(Inputs[i].Integer);
             }
 
-            writer.Write(MicCount);
-            if (MicCount > 0 && MicPitches != null)
+            writer.Write(PerMicInputs?.Length ?? 0);
+            if (PerMicInputs != null)
             {
-                for (int i = 0; i < MicCount; i++)
+                foreach (var stream in PerMicInputs)
                 {
-                    writer.Write(MicPitches[i].Length);
-                    foreach (float pitch in MicPitches[i])
+                    writer.Write(stream.Length);
+                    foreach (var input in stream)
                     {
-                        writer.Write(pitch);
+                        // Write fields inline, using Axis (float) for pitch
+                        writer.Write(input.Time);
+                        writer.Write(input.Action);
+                        writer.Write(input.Axis);
                     }
                 }
             }

@@ -49,20 +49,10 @@ public sealed class InstrumentEnumsTests
     }
 
     [Test]
-    public void Profile_SoloVocalsWithFreeHarmony_IsFreeVocals()
+    public void Profile_SoloVocals_IsNotFreeVocals()
     {
         var profile = new YARG.Core.Game.YargProfile();
         profile.CurrentInstrument = Instrument.Vocals;
-        profile.FreeHarmony = true;
-        Assert.IsTrue(profile.IsFreeVocals);
-    }
-
-    [Test]
-    public void Profile_SoloVocalsWithoutFreeHarmony_IsNotFreeVocals()
-    {
-        var profile = new YARG.Core.Game.YargProfile();
-        profile.CurrentInstrument = Instrument.Vocals;
-        profile.FreeHarmony = false;
         Assert.IsFalse(profile.IsFreeVocals);
     }
 }
