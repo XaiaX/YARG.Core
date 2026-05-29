@@ -101,6 +101,25 @@ namespace YARG.Core.Game
             set => _harmonyIndex = value;
         }
 
+        // 0 = Auto (one synthetic vocalist per HARM part in the chart, the default
+        // behavior). 1-7 = explicit override for testing edge cases like 3 mics vs
+        // 2 parts or 1 mic vs 3 semi-overlapping parts. JSON-only — not serialized
+        // to replays since it's a test/dev knob.
+        [JsonProperty]
+        private byte _partyVocalsMicCountOverride;
+
+        /// <summary>
+        /// Party Vocals bot mic-count override. 0 = Auto (one mic per HARM part in
+        /// the chart). 1-7 forces that many synthetic vocalists regardless of part
+        /// count — useful for testing scoring/rollback behavior with mismatched
+        /// mic-to-part ratios. Has no effect for human players.
+        /// </summary>
+        [JsonIgnore]
+        public byte PartyVocalsMicCountOverride
+        {
+            get => _partyVocalsMicCountOverride;
+            set => _partyVocalsMicCountOverride = value;
+        }
 
         /// <summary>
         /// Checks if this profile is currently using free vocals mode.
