@@ -279,7 +279,7 @@ namespace YARG.Core.Song
 
                 Instrument.Vocals => _parts.LeadVocals.IsActive(),
                 Instrument.Harmony => _parts.HarmonyVocals.IsActive(),
-                Instrument.PartyVocals => _parts.HarmonyVocals.IsActive(),
+                Instrument.PartyVocals => _parts.HarmonyVocals.IsActive() || _parts.LeadVocals.IsActive(),
                 Instrument.Band => _parts.BandDifficulty.IsActive(),
 
                 _ => false
