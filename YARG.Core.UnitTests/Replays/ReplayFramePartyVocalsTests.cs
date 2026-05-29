@@ -56,7 +56,7 @@ namespace YARG.Core.UnitTests.Replays
             {
                 CurrentInstrument = Instrument.Vocals,
                 GameMode = GameMode.Vocals,
-                                Version = 10
+                Version = 10
             };
 
             var stats = new VocalsStats();
@@ -113,13 +113,37 @@ namespace YARG.Core.UnitTests.Replays
         }
 
         [Test]
+        public void PartyVocalsFrame_SingleMic_RoundTrip()
+        {
+            var perMicInputs = new GameInput[][]
+            {
+                new[]
+                {
+                    new GameInput(0.0, (int)VocalsAction.Pitch, 60f),
+                    new GameInput(0.5, (int)VocalsAction.Pitch, 62f),
+                    new GameInput(1.0, (int)VocalsAction.Pitch, 64f),
+                },
+            };
+
+            var original = CreatePartyVocalsFrame(perMicInputs);
+            var deserialized = RoundTripV16(original);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(deserialized.PerMicInputs, Is.Not.Null, "PerMicInputs should not be null");
+                Assert.That(deserialized.PerMicInputs.Length, Is.EqualTo(1), "PerMicInputs should have 1 array");
+                Assert.That(deserialized.PerMicInputs[0], Is.EqualTo(perMicInputs[0]), "Mic 0 inputs should match");
+            });
+        }
+
+        [Test]
         public void NonPartyVocalsFrame_PerMicInputsIsNull()
         {
             var profile = new YargProfile(Guid.NewGuid())
             {
                 CurrentInstrument = Instrument.Vocals,
                 GameMode = GameMode.Vocals,
-                                Version = 10
+                Version = 10
             };
 
             var stats = new VocalsStats();
@@ -142,7 +166,7 @@ namespace YARG.Core.UnitTests.Replays
             {
                 CurrentInstrument = Instrument.Vocals,
                 GameMode = GameMode.Vocals,
-                                Version = 9
+                Version = 9
             };
             var stats = new VocalsStats();
             var inputs = new GameInput[]
@@ -187,7 +211,7 @@ namespace YARG.Core.UnitTests.Replays
             {
                 CurrentInstrument = Instrument.Vocals,
                 GameMode = GameMode.Vocals,
-                                Version = 10
+                Version = 10
             };
             profile.Serialize(writer);
 
@@ -229,6 +253,36 @@ namespace YARG.Core.UnitTests.Replays
                 // The next byte should be our sentinel (proving correct alignment)
                 byte nextByte = stream.ReadByte();
                 Assert.That(nextByte, Is.EqualTo(0xFF), "Stream should be positioned after legacy block");
+            });
+        }
+
+        [Test]
+        public void PlainVocalsFrame_RoundTrip()
+        {
+            // Test plain GameMode.Vocals solo-vocals replay round-trip
+            // (AC30.3: Solo Vocals replay playback unchanged).
+            var profile = new YargProfile(Guid.NewGuid())
+            {
+                CurrentInstrument = Instrument.Vocals,
+                GameMode = GameMode.Vocals,
+                Version = 10
+            };
+
+            var stats = new VocalsStats();
+            var inputs = new GameInput[]
+            {
+                new(0.0, (int)VocalsAction.Pitch, 60),
+                new(0.5, (int)VocalsAction.Pitch, 62),
+                new(1.0, (int)VocalsAction.Pitch, 64),
+            };
+
+            var frame = new ReplayFrame(profile, EngineParameters, stats, inputs);
+            var deserialized = RoundTripV16(frame);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(deserialized.PerMicInputs, Is.Null, "Plain Vocals should have null PerMicInputs");
+                Assert.That(deserialized.Inputs, Is.EqualTo(inputs), "Inputs should round-trip intact");
             });
         }
 
