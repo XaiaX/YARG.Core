@@ -25,7 +25,7 @@ namespace YARG.Core.UnitTests.Replays
             true,
             1000);
 
-        private static ReplayFrame RoundTripV15(ReplayFrame original)
+        private static ReplayFrame RoundTrip(ReplayFrame original, int version)
         {
             using var memoryStream = new MemoryStream();
             using var writer = new BinaryWriter(memoryStream);
@@ -37,17 +37,26 @@ namespace YARG.Core.UnitTests.Replays
             var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
             bytes.CopyTo(fixedArray.Span);
             var stream = new FixedArrayStream(fixedArray);
-            return new ReplayFrame(ref stream, 15);
+            return new ReplayFrame(ref stream, version);
         }
 
-        private static ReplayFrame CreatePartyVocalsFrame(int micCount, float[][] micPitches)
+        private static ReplayFrame RoundTripV16(ReplayFrame original)
+        {
+            return RoundTrip(original, 16);
+        }
+
+        private static ReplayFrame RoundTripV15(ReplayFrame original)
+        {
+            return RoundTrip(original, 15);
+        }
+
+        private static ReplayFrame CreatePartyVocalsFrame(GameInput[][] perMicInputs)
         {
             var profile = new YargProfile(Guid.NewGuid())
             {
                 CurrentInstrument = Instrument.Vocals,
                 GameMode = GameMode.Vocals,
-                FreeHarmony = true,
-                Version = 10
+                                Version = 10
             };
 
             var stats = new VocalsStats();
@@ -60,71 +69,80 @@ namespace YARG.Core.UnitTests.Replays
 
             var frame = new ReplayFrame(profile, EngineParameters, stats, inputs)
             {
-                MicCount = micCount,
-                MicPitches = micPitches
+                PerMicInputs = perMicInputs
             };
             return frame;
         }
 
         [Test]
-        public void PartyVocalsFrame_MicCountAndPitches_RoundTrip()
+        public void PartyVocalsFrame_PerMicInputs_RoundTrip()
         {
-            var micPitches = new float[][]
+            var perMicInputs = new GameInput[][]
             {
-                new[] { 60f, 62f, 64f },
-                new[] { 64f, 65f, 67f },
-                new[] { 67f, 69f, 71f },
+                new[]
+                {
+                    new GameInput(0.0, (int)VocalsAction.Pitch, 60f),
+                    new GameInput(0.5, (int)VocalsAction.Pitch, 62f),
+                    new GameInput(1.0, (int)VocalsAction.Pitch, 64f),
+                },
+                new[]
+                {
+                    new GameInput(0.1, (int)VocalsAction.Pitch, 64f),
+                    new GameInput(0.6, (int)VocalsAction.Pitch, 65f),
+                    new GameInput(1.1, (int)VocalsAction.Pitch, 67f),
+                },
+                new[]
+                {
+                    new GameInput(0.2, (int)VocalsAction.Pitch, 67f),
+                    new GameInput(0.7, (int)VocalsAction.Pitch, 69f),
+                    new GameInput(1.2, (int)VocalsAction.Pitch, 71f),
+                },
             };
 
-            var original = CreatePartyVocalsFrame(3, micPitches);
-            var deserialized = RoundTripV15(original);
+            var original = CreatePartyVocalsFrame(perMicInputs);
+            var deserialized = RoundTripV16(original);
 
             Assert.Multiple(() =>
             {
-                Assert.That(deserialized.MicCount, Is.EqualTo(3), "MicCount should round-trip");
-                Assert.That(deserialized.MicPitches, Is.Not.Null, "MicPitches should not be null");
-                Assert.That(deserialized.MicPitches.Length, Is.EqualTo(3), "MicPitches should have 3 arrays");
-                Assert.That(deserialized.MicPitches[0], Is.EqualTo(new[] { 60f, 62f, 64f }), "Mic 0 pitches should match");
-                Assert.That(deserialized.MicPitches[1], Is.EqualTo(new[] { 64f, 65f, 67f }), "Mic 1 pitches should match");
-                Assert.That(deserialized.MicPitches[2], Is.EqualTo(new[] { 67f, 69f, 71f }), "Mic 2 pitches should match");
+                Assert.That(deserialized.PerMicInputs, Is.Not.Null, "PerMicInputs should not be null");
+                Assert.That(deserialized.PerMicInputs.Length, Is.EqualTo(3), "PerMicInputs should have 3 arrays");
+                Assert.That(deserialized.PerMicInputs[0], Is.EqualTo(perMicInputs[0]), "Mic 0 inputs should match");
+                Assert.That(deserialized.PerMicInputs[1], Is.EqualTo(perMicInputs[1]), "Mic 1 inputs should match");
+                Assert.That(deserialized.PerMicInputs[2], Is.EqualTo(perMicInputs[2]), "Mic 2 inputs should match");
             });
         }
 
         [Test]
-        public void NonPartyVocalsFrame_MicCountZeroAndNullPitches()
+        public void NonPartyVocalsFrame_PerMicInputsIsNull()
         {
             var profile = new YargProfile(Guid.NewGuid())
             {
                 CurrentInstrument = Instrument.Vocals,
                 GameMode = GameMode.Vocals,
-                FreeHarmony = false,
-                Version = 10
+                                Version = 10
             };
 
             var stats = new VocalsStats();
             var frame = new ReplayFrame(profile, EngineParameters, stats, Array.Empty<GameInput>());
-            Assert.That(frame.MicCount, Is.EqualTo(0));
-            Assert.That(frame.MicPitches, Is.Null);
+            Assert.That(frame.PerMicInputs, Is.Null);
 
             var deserialized = RoundTripV15(frame);
 
             Assert.Multiple(() =>
             {
-                Assert.That(deserialized.MicCount, Is.EqualTo(0), "Non-Party Vocals should have MicCount=0");
-                Assert.That(deserialized.MicPitches, Is.Null, "Non-Party Vocals should have null MicPitches");
+                Assert.That(deserialized.PerMicInputs, Is.Null, "Non-Party Vocals should have null PerMicInputs");
             });
         }
 
         [Test]
-        public void V14Replay_DefaultsToZeroMicCount()
+        public void V14Replay_PerMicInputsIsNull()
         {
             // Create a frame with no mic data (simulates pre-v15 replay)
             var profile = new YargProfile(Guid.NewGuid())
             {
                 CurrentInstrument = Instrument.Vocals,
                 GameMode = GameMode.Vocals,
-                FreeHarmony = true,
-                Version = 9
+                                Version = 9
             };
             var stats = new VocalsStats();
             var inputs = new GameInput[]
@@ -148,29 +166,98 @@ namespace YARG.Core.UnitTests.Replays
 
             Assert.Multiple(() =>
             {
-                Assert.That(deserialized.MicCount, Is.EqualTo(0), "v14 deserialization should default MicCount to 0");
-                Assert.That(deserialized.MicPitches, Is.Null, "v14 deserialization should default MicPitches to null");
+                Assert.That(deserialized.PerMicInputs, Is.Null, "v14 deserialization should default PerMicInputs to null");
+            });
+        }
+
+        [Test]
+        public void ReplayFrame_V15PartyVocals_DiscardsMicBlock_StaysAligned()
+        {
+            // Test that v15 reading consumes exactly the legacy mic block bytes
+            // and leaves the stream positioned correctly for subsequent data.
+
+            using var memoryStream = new MemoryStream();
+            using var writer = new BinaryWriter(memoryStream);
+
+            // Write a minimal replay frame header
+            new FourCC('R', 'P', 'F', 'M').Serialize(writer);
+
+            // Write minimal profile (not PartyVocals to test legacy path)
+            var profile = new YargProfile(Guid.NewGuid())
+            {
+                CurrentInstrument = Instrument.Vocals,
+                GameMode = GameMode.Vocals,
+                                Version = 10
+            };
+            profile.Serialize(writer);
+
+            // Write minimal engine parameters
+            EngineParameters.Serialize(writer);
+
+            // Write minimal stats
+            var stats = new VocalsStats();
+            stats.Serialize(writer);
+
+            // Write inputs
+            writer.Write(1); // count
+            writer.Write(0.0); writer.Write((int)VocalsAction.Pitch); writer.Write(60);
+
+            // Write legacy mic block (v15 format): 2 mics with total 5 float values
+            writer.Write(2); // mic count
+            writer.Write(3); // mic 0 length
+            writer.Write(60f); writer.Write(62f); writer.Write(64f); // mic 0 pitches
+            writer.Write(2); // mic 1 length
+            writer.Write(64f); writer.Write(65f); // mic 1 pitches
+
+            // Write a marker after the legacy block
+            writer.Write((byte)0xFF); // sentinel byte
+
+            writer.Flush();
+
+            var bytes = memoryStream.ToArray();
+            var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
+            bytes.CopyTo(fixedArray.Span);
+            var stream = new FixedArrayStream(fixedArray);
+
+            // Deserialize at v15 (should consume legacy block and preserve sentinel)
+            var deserialized = new ReplayFrame(ref stream, 15);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(deserialized.PerMicInputs, Is.Null, "v15 should discard mic block and set PerMicInputs to null");
+
+                // The next byte should be our sentinel (proving correct alignment)
+                byte nextByte = stream.ReadByte();
+                Assert.That(nextByte, Is.EqualTo(0xFF), "Stream should be positioned after legacy block");
             });
         }
 
         [Test]
         public void PartyVocalsRoundTrip_DeterministicScore()
         {
-            var micPitches = new float[][]
+            var perMicInputs = new GameInput[][]
             {
-                new[] { 60f, 62f },
-                new[] { 64f, 65f },
+                new[]
+                {
+                    new GameInput(0.0, (int)VocalsAction.Pitch, 60f),
+                    new GameInput(0.5, (int)VocalsAction.Pitch, 62f),
+                },
+                new[]
+                {
+                    new GameInput(0.1, (int)VocalsAction.Pitch, 64f),
+                    new GameInput(0.6, (int)VocalsAction.Pitch, 65f),
+                },
             };
 
-            var frame1 = CreatePartyVocalsFrame(2, micPitches);
-            var deserialized1 = RoundTripV15(frame1);
-            var deserialized2 = RoundTripV15(frame1);
+            var frame1 = CreatePartyVocalsFrame(perMicInputs);
+            var deserialized1 = RoundTripV16(frame1);
+            var deserialized2 = RoundTripV16(frame1);
 
             Assert.Multiple(() =>
             {
-                Assert.That(deserialized1.MicCount, Is.EqualTo(deserialized2.MicCount), "MicCount should be deterministic");
-                Assert.That(deserialized1.MicPitches[0], Is.EqualTo(deserialized2.MicPitches[0]), "Mic 0 should be deterministic");
-                Assert.That(deserialized1.MicPitches[1], Is.EqualTo(deserialized2.MicPitches[1]), "Mic 1 should be deterministic");
+                Assert.That(deserialized1.PerMicInputs.Length, Is.EqualTo(deserialized2.PerMicInputs.Length), "PerMicInputs should have same length");
+                Assert.That(deserialized1.PerMicInputs[0], Is.EqualTo(deserialized2.PerMicInputs[0]), "Mic 0 should be deterministic");
+                Assert.That(deserialized1.PerMicInputs[1], Is.EqualTo(deserialized2.PerMicInputs[1]), "Mic 1 should be deterministic");
             });
         }
     }

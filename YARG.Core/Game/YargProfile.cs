@@ -12,7 +12,7 @@ namespace YARG.Core.Game
 {
     public partial class YargProfile
     {
-        private readonly int PROFILE_VERSION = 10;
+        private readonly int PROFILE_VERSION = 11;
 
         public int Version;
 
@@ -93,47 +93,19 @@ namespace YARG.Core.Game
         [JsonProperty("HarmonyIndex")]
         private byte _harmonyIndex;
 
-        [JsonProperty]
-        private bool _freeHarmony;
-
-        
-        /// <summary>
-        /// The harmony index, used for determining what harmony part the player selected.
-        /// Does nothing if <see cref="CurrentInstrument"/> is not a harmony.
-        /// </summary>
         [JsonIgnore]
         public byte HarmonyIndex
         {
-            // Expose the stored index when playing Harmony OR when Free Harmony is active
-            // (the Free Vocals engine uses HarmonyIndex as botPartIndex for bots and as the
-            // starting target index for humans — masking it to 0 means every Free bot
-            // sings HARM1 regardless of their menu selection).
-            get => (CurrentInstrument == Instrument.Harmony || _freeHarmony) ? _harmonyIndex : (byte) 0;
+            // Expose the stored index when playing Harmony OR Party Vocals.
+            get => (CurrentInstrument == Instrument.Harmony || CurrentInstrument == Instrument.PartyVocals) ? _harmonyIndex : (byte) 0;
             set => _harmonyIndex = value;
         }
 
-        /// <summary>
-        /// Whether free harmony vocals mode is enabled.
-        /// </summary>
-        [JsonIgnore]
-        public bool FreeHarmony
-        {
-            get => _freeHarmony;
-            set => _freeHarmony = value;
-        }
 
-        
         /// <summary>
         /// Checks if this profile is currently using free vocals mode.
         /// </summary>
-        // Free Vocals applies to either vocals-family instrument: Solo Vocals OR Harmony.
-        // The latter case happens on songs with HARM tracks but no separate Solo chart
-        // (e.g. Bohemian Rhapsody) — the menu forces CurrentInstrument to Harmony there
-        // because Vocals isn't in the song's possible-instruments list.
-        public bool IsFreeVocals =>
-            CurrentInstrument == Instrument.PartyVocals
-            || ((CurrentInstrument == Instrument.Vocals || CurrentInstrument == Instrument.Harmony)
-                && _freeHarmony);
+        public bool IsFreeVocals => CurrentInstrument == Instrument.PartyVocals;
 
         /// <summary>
         /// The currently selected modifiers as a flag.
@@ -203,13 +175,10 @@ namespace YARG.Core.Game
             CurrentModifiers = (Modifier) stream.Read<ulong>(Endianness.Little);
             _harmonyIndex = stream.ReadByte();
 
-            if (Version >= 9)
+            if (Version >= 9 && Version < 11)
             {
-                _freeHarmony = stream.ReadBoolean();
-            }
-            else
-            {
-                _freeHarmony = false;
+                // Consume and discard _freeHarmony for backward compatibility
+                stream.ReadBoolean();
             }
 
             NoteSpeed = stream.Read<float>(Endianness.Little);
@@ -495,7 +464,6 @@ namespace YARG.Core.Game
             writer.Write((byte) CurrentDifficulty);
             writer.Write((ulong) CurrentModifiers);
             writer.Write(_harmonyIndex);
-            writer.Write(_freeHarmony);
 
             writer.Write(NoteSpeed);
             writer.Write(HighwayLength);
