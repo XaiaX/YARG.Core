@@ -300,6 +300,7 @@ namespace YARG.Core.Chart
             {
                 Instrument.Vocals => Vocals,
                 Instrument.Harmony => Harmony,
+                Instrument.PartyVocals => Harmony,
                 _ => throw new ArgumentException($"Instrument {instrument} is not a vocals instrument!")
             };
         }
