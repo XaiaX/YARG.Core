@@ -35,12 +35,6 @@ namespace YARG.Core.Engine.Vocals.Engines
         protected readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
 
-        // When true, the engine prefers its assigned part (CurrentTargetHarmonyIndex)
-        // and only searches other parts when the assigned part has no active notes.
-        // Set by PartyVocalsCoordinatorEngine to prevent all sub-engines from
-        // converging on the same best-match part.
-        private readonly bool _stickyPartAssignment;
-
         // Resolved bot part for the current tick after applying the per-phrase fallback:
         // if the assigned _botPartIndex has no active phrase, fall back to the lowest-numbered
         // part that does. Updated in UpdateBot, consumed by CheckSingingHit so the bot scores
@@ -65,14 +59,12 @@ namespace YARG.Core.Engine.Vocals.Engines
             SyncTrack syncTrack,
             VocalsEngineParameters engineParameters,
             bool isBot,
-            int botPartIndex = 0,
-            bool stickyPartAssignment = false)
+            int botPartIndex = 0)
             : base(primaryChart, syncTrack, engineParameters, isBot)
         {
             _allParts = allParts;
             _botPartIndex = Math.Max(0, Math.Min(botPartIndex, allParts.Count - 1));
             _currentBotEffectivePartIndex = _botPartIndex;
-            _stickyPartAssignment = stickyPartAssignment;
 
             // Initialize fields for single-mic per-part accumulation
             _lastTickPartDeltas = new double[allParts.Count];
@@ -165,9 +157,9 @@ namespace YARG.Core.Engine.Vocals.Engines
                 // Drive the visual "on note" state for bots: VocalsPlayer's needle path
                 // anchors to _lastTargetNote when _lastHitTime is recent, otherwise it
                 // applies AnchorPitchToOctave which adds a 12-semitone offset when
-                // _lastTargetNote is null. CheckSingingHit's per-tick gating doesn't
-                // fire OnTargetNoteChanged for bots (bestPartIndex always matches the
-                // initial CurrentTargetHarmonyIndex of 0), so emit here unconditionally.
+                // _lastTargetNote is null. This is the *sole* OnTargetNoteChanged source
+                // for bots — CheckSingingHit deliberately skips its emit when IsBot (see
+                // there) so it can't fight this one and make the needle jump to harm1.
                 OnTargetNoteChanged?.Invoke(singNote);
                 OnHit?.Invoke(true);
             }
@@ -378,37 +370,9 @@ namespace YARG.Core.Engine.Vocals.Engines
             int bestPartIndex = CurrentTargetHarmonyIndex;
             VocalNote? bestNote = null;
 
-            // When sticky, restrict matching to the assigned part when it has active
-            // notes. This prevents all sub-engines in party vocals from converging on
-            // the same best-match part (e.g., all needles snapping to harm1). Mirrors
-            // the bot path's UpdateBot logic: prefer assigned, fallback to others only
-            // when the assigned part has nothing at this tick.
-            int assigned = CurrentTargetHarmonyIndex;
-            bool restrictToAssigned = false;
-
-            if (_stickyPartAssignment && assigned >= 0 && assigned < _allParts.Count)
-            {
-                foreach (var partPhrase in _allParts[assigned].NotePhrases)
-                {
-                    foreach (var note in partPhrase.PhraseParentNote.ChildNotes)
-                    {
-                        if (!note.IsPercussion &&
-                            CurrentTick >= note.Tick &&
-                            CurrentTick <= note.TotalTickEnd)
-                        {
-                            restrictToAssigned = true;
-                            break;
-                        }
-                    }
-                    if (restrictToAssigned) break;
-                }
-            }
-
             // Check each part for active notes
             for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
             {
-                if (restrictToAssigned && partIndex != assigned) continue;
-
                 var part = _allParts[partIndex];
 
                 // Get notes from this part's phrases
@@ -445,11 +409,21 @@ namespace YARG.Core.Engine.Vocals.Engines
                     CurrentTargetHarmonyIndex = bestPartIndex;
                 }
 
-                // Always fire target note change so visuals can snap to the current
-                // note. On solo-only charts the part index never changes (always 0),
-                // so the guard above would never fire — leaving slot.TargetNote null
-                // and suppressing the trail.
-                OnTargetNoteChanged?.Invoke(bestNote!);
+                // Real mics: always fire target note change so visuals can snap to the
+                // current note. On solo-only charts the part index never changes (always
+                // 0), so an on-change guard would never fire — leaving slot.TargetNote
+                // null and suppressing the trail (see dc6d4713).
+                //
+                // Bots are excluded: UpdateBot already emits OnTargetNoteChanged for the
+                // bot's assigned/effective part every tick. If CheckSingingHit also fired
+                // here — with the *globally* best-matching part, which is frequently harm1
+                // on unison/octave-equivalent pitches — the two emits fight and the bot's
+                // needle jumps between its own lane and harm1. Keeping this !IsBot is the
+                // invariant UpdateBot's emit relies on.
+                if (!IsBot)
+                {
+                    OnTargetNoteChanged?.Invoke(bestNote!);
+                }
 
                 // Scale the hit by chart ticks elapsed since the last sing, matching
                 // YargVocalsEngine. PhraseTicksTotal is in chart ticks (hundreds to
