@@ -258,7 +258,7 @@ namespace YARG.Core.Engine
             var tickTolerance = (chart.Resolution / 4) - 1;
 
             // Since vocals can't have unisons, we may as well pull the ripcord early
-            if (instrument is Instrument.Vocals or Instrument.Harmony)
+            if (instrument is Instrument.Vocals or Instrument.Harmony or Instrument.PartyVocals)
             {
                 return new List<Phrase>();
             }
