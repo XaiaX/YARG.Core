@@ -78,8 +78,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                     syncTrack,
                     engineParameters,
                     isBot,
-                    botPartIndex: i,
-                    stickyPartAssignment: true);
+                    botPartIndex: i);
             }
 
             for (int j = 0; j < partCount; j++)
