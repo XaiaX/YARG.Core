@@ -35,6 +35,12 @@ namespace YARG.Core.Engine.Vocals.Engines
         protected readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
 
+        // When true, the engine prefers its assigned part (CurrentTargetHarmonyIndex)
+        // and only searches other parts when the assigned part has no active notes.
+        // Set by PartyVocalsCoordinatorEngine to prevent all sub-engines from
+        // converging on the same best-match part.
+        private readonly bool _stickyPartAssignment;
+
         // Resolved bot part for the current tick after applying the per-phrase fallback:
         // if the assigned _botPartIndex has no active phrase, fall back to the lowest-numbered
         // part that does. Updated in UpdateBot, consumed by CheckSingingHit so the bot scores
@@ -59,12 +65,14 @@ namespace YARG.Core.Engine.Vocals.Engines
             SyncTrack syncTrack,
             VocalsEngineParameters engineParameters,
             bool isBot,
-            int botPartIndex = 0)
+            int botPartIndex = 0,
+            bool stickyPartAssignment = false)
             : base(primaryChart, syncTrack, engineParameters, isBot)
         {
             _allParts = allParts;
             _botPartIndex = Math.Max(0, Math.Min(botPartIndex, allParts.Count - 1));
             _currentBotEffectivePartIndex = _botPartIndex;
+            _stickyPartAssignment = stickyPartAssignment;
 
             // Initialize fields for single-mic per-part accumulation
             _lastTickPartDeltas = new double[allParts.Count];
@@ -370,14 +378,37 @@ namespace YARG.Core.Engine.Vocals.Engines
             int bestPartIndex = CurrentTargetHarmonyIndex;
             VocalNote? bestNote = null;
 
-            // Note: The primary chart (phrase.ChildNotes) is HARM1 from _allParts[0]
-            // We only need to check _allParts to avoid double-counting HARM1 notes
-            // For bot mode, check the part the bot is currently singing (fallback chosen in UpdateBot)
-            // For singer mode, check all parts
+            // When sticky, restrict matching to the assigned part when it has active
+            // notes. This prevents all sub-engines in party vocals from converging on
+            // the same best-match part (e.g., all needles snapping to harm1). Mirrors
+            // the bot path's UpdateBot logic: prefer assigned, fallback to others only
+            // when the assigned part has nothing at this tick.
+            int assigned = CurrentTargetHarmonyIndex;
+            bool restrictToAssigned = false;
+
+            if (_stickyPartAssignment && assigned >= 0 && assigned < _allParts.Count)
+            {
+                foreach (var partPhrase in _allParts[assigned].NotePhrases)
+                {
+                    foreach (var note in partPhrase.PhraseParentNote.ChildNotes)
+                    {
+                        if (!note.IsPercussion &&
+                            CurrentTick >= note.Tick &&
+                            CurrentTick <= note.TotalTickEnd)
+                        {
+                            restrictToAssigned = true;
+                            break;
+                        }
+                    }
+                    if (restrictToAssigned) break;
+                }
+            }
 
             // Check each part for active notes
             for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
             {
+                if (restrictToAssigned && partIndex != assigned) continue;
+
                 var part = _allParts[partIndex];
 
                 // Get notes from this part's phrases
