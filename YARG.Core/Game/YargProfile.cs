@@ -130,7 +130,7 @@ namespace YARG.Core.Game
 
         /// <summary>
         /// Sticky Solo-vs-HARM chart preference for Party Vocals. Defaults to
-        /// <see cref="PartyVocalsChartPreference.Auto"/>. Honored by
+        /// <see cref="PartyVocalsChartPreference.Harmony"/>. Honored by
         /// VocalChartSelection.ResolveMultitrack; has no effect outside Party Vocals.
         /// </summary>
         [JsonIgnore]
@@ -329,7 +329,7 @@ namespace YARG.Core.Game
             }
             else
             {
-                _partyVocalsChartPreference = (byte) PartyVocalsChartPreference.Auto;
+                _partyVocalsChartPreference = (byte) PartyVocalsChartPreference.Harmony;
             }
         }
 

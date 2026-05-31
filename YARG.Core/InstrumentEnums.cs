@@ -144,7 +144,7 @@ namespace YARG.Core
     public enum PartyVocalsChartPreference : byte
     {
         /// Prefer Harmony when the chart has HARM content, else Solo (default, today's behavior).
-        Auto = 0,
+        Harmony = 0,
         /// Prefer the Solo Vocals chart, falling back to Harmony only if there is no Solo content.
         Solo = 1,
     }
