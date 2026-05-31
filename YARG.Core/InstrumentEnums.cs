@@ -137,6 +137,19 @@ namespace YARG.Core
     }
 
     /// <summary>
+    /// Which vocal chart a Party Vocals profile prefers to sing. Resolution applies
+    /// graceful fallback when the preferred chart has no content (see
+    /// VocalChartSelection.ResolveMultitrack).
+    /// </summary>
+    public enum PartyVocalsChartPreference : byte
+    {
+        /// Prefer Harmony when the chart has HARM content, else Solo (default, today's behavior).
+        Auto = 0,
+        /// Prefer the Solo Vocals chart, falling back to Harmony only if there is no Solo content.
+        Solo = 1,
+    }
+
+    /// <summary>
     /// Potential entries in a drums highway ordering
     /// </summary>
     public enum DrumsHighwayItem : byte
