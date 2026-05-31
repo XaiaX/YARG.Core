@@ -50,94 +50,71 @@ namespace YARG.Core.UnitTests.Replays
             return RoundTrip(original, 15);
         }
 
-        private static ReplayFrame CreatePartyVocalsFrame(GameInput[][] perMicInputs)
+        private static ReplayFrame CreatePartyVocalsFrame(GameInput[] inputs)
         {
             var profile = new YargProfile(Guid.NewGuid())
             {
                 CurrentInstrument = Instrument.Vocals,
-                GameMode = GameMode.Vocals,
+                GameMode = GameMode.PartyVocals,
                 Version = 10
             };
 
             var stats = new VocalsStats();
-            var inputs = new GameInput[]
-            {
-                new(0.0, (int)VocalsAction.Pitch, 60),
-                new(0.5, (int)VocalsAction.Pitch, 62),
-                new(1.0, (int)VocalsAction.Pitch, 64),
-            };
-
-            var frame = new ReplayFrame(profile, EngineParameters, stats, inputs)
-            {
-                PerMicInputs = perMicInputs
-            };
-            return frame;
+            return new ReplayFrame(profile, EngineParameters, stats, inputs);
         }
 
         [Test]
-        public void PartyVocalsFrame_PerMicInputs_RoundTrip()
+        public void PartyVocalsFrame_FlatStream_RoundTrip()
         {
-            var perMicInputs = new GameInput[][]
+            // Test round-trip of flat mic-packed stream at v16
+            var inputs = new GameInput[]
             {
-                new[]
-                {
-                    new GameInput(0.0, (int)VocalsAction.Pitch, 60f),
-                    new GameInput(0.5, (int)VocalsAction.Pitch, 62f),
-                    new GameInput(1.0, (int)VocalsAction.Pitch, 64f),
-                },
-                new[]
-                {
-                    new GameInput(0.1, (int)VocalsAction.Pitch, 64f),
-                    new GameInput(0.6, (int)VocalsAction.Pitch, 65f),
-                    new GameInput(1.1, (int)VocalsAction.Pitch, 67f),
-                },
-                new[]
-                {
-                    new GameInput(0.2, (int)VocalsAction.Pitch, 67f),
-                    new GameInput(0.7, (int)VocalsAction.Pitch, 69f),
-                    new GameInput(1.2, (int)VocalsAction.Pitch, 71f),
-                },
+                // Mic 0 inputs
+                new(0.0, PartyVocalsInput.Pack(0, VocalsAction.Pitch), 60f),
+                new(0.5, PartyVocalsInput.Pack(0, VocalsAction.Hit), true),
+                new(1.0, PartyVocalsInput.Pack(0, VocalsAction.Pitch), 62f),
+
+                // Mic 1 inputs
+                new(0.1, PartyVocalsInput.Pack(1, VocalsAction.Pitch), 64f),
+                new(0.6, PartyVocalsInput.Pack(1, VocalsAction.Pitch), 65f),
+
+                // Mic 2 inputs
+                new(0.2, PartyVocalsInput.Pack(2, VocalsAction.Pitch), 67f),
+                new(0.7, PartyVocalsInput.Pack(2, VocalsAction.Hit), true),
+                new(1.2, PartyVocalsInput.Pack(2, VocalsAction.Pitch), 69f),
             };
 
-            var original = CreatePartyVocalsFrame(perMicInputs);
+            var original = CreatePartyVocalsFrame(inputs);
             var deserialized = RoundTripV16(original);
 
             Assert.Multiple(() =>
             {
-                Assert.That(deserialized.PerMicInputs, Is.Not.Null, "PerMicInputs should not be null");
-                Assert.That(deserialized.PerMicInputs.Length, Is.EqualTo(3), "PerMicInputs should have 3 arrays");
-                Assert.That(deserialized.PerMicInputs[0], Is.EqualTo(perMicInputs[0]), "Mic 0 inputs should match");
-                Assert.That(deserialized.PerMicInputs[1], Is.EqualTo(perMicInputs[1]), "Mic 1 inputs should match");
-                Assert.That(deserialized.PerMicInputs[2], Is.EqualTo(perMicInputs[2]), "Mic 2 inputs should match");
+                Assert.That(deserialized.Inputs, Is.EqualTo(inputs), "Flat mic-packed inputs should round-trip intact");
             });
         }
 
         [Test]
         public void PartyVocalsFrame_SingleMic_RoundTrip()
         {
-            var perMicInputs = new GameInput[][]
+            // Test round-trip with single mic packed inputs
+            var inputs = new GameInput[]
             {
-                new[]
-                {
-                    new GameInput(0.0, (int)VocalsAction.Pitch, 60f),
-                    new GameInput(0.5, (int)VocalsAction.Pitch, 62f),
-                    new GameInput(1.0, (int)VocalsAction.Pitch, 64f),
-                },
+                new(0.0, PartyVocalsInput.Pack(0, VocalsAction.Pitch), 60f),
+                new(0.5, PartyVocalsInput.Pack(0, VocalsAction.Pitch), 62f),
+                new(1.0, PartyVocalsInput.Pack(0, VocalsAction.Pitch), 64f),
             };
 
-            var original = CreatePartyVocalsFrame(perMicInputs);
+            var original = CreatePartyVocalsFrame(inputs);
             var deserialized = RoundTripV16(original);
 
             Assert.Multiple(() =>
             {
-                Assert.That(deserialized.PerMicInputs, Is.Not.Null, "PerMicInputs should not be null");
-                Assert.That(deserialized.PerMicInputs.Length, Is.EqualTo(1), "PerMicInputs should have 1 array");
-                Assert.That(deserialized.PerMicInputs[0], Is.EqualTo(perMicInputs[0]), "Mic 0 inputs should match");
+                Assert.That(deserialized.Inputs, Is.EqualTo(inputs), "Single mic inputs should round-trip intact");
             });
         }
 
         [Test]
-        public void NonPartyVocalsFrame_PerMicInputsIsNull()
+        public void NonPartyVocalsFrame_MicStreamNull()
         {
             var profile = new YargProfile(Guid.NewGuid())
             {
@@ -148,14 +125,11 @@ namespace YARG.Core.UnitTests.Replays
 
             var stats = new VocalsStats();
             var frame = new ReplayFrame(profile, EngineParameters, stats, Array.Empty<GameInput>());
-            Assert.That(frame.PerMicInputs, Is.Null);
 
-            var deserialized = RoundTripV15(frame);
+            var deserialized = RoundTripV16(frame);
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(deserialized.PerMicInputs, Is.Null, "Non-Party Vocals should have null PerMicInputs");
-            });
+            // Flat stream format - no mic-specific field to check
+            Assert.That(deserialized.Inputs, Is.Empty, "Non-Party Vocals should have empty inputs");
         }
 
         [Test]
@@ -188,10 +162,8 @@ namespace YARG.Core.UnitTests.Replays
             var stream = new FixedArrayStream(fixedArray);
             var deserialized = new ReplayFrame(ref stream, 14);
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(deserialized.PerMicInputs, Is.Null, "v14 deserialization should default PerMicInputs to null");
-            });
+            // Flat stream format - no mic-specific field to check
+            Assert.That(deserialized.Inputs.Length, Is.GreaterThan(0), "v14 should deserialize inputs");
         }
 
         [Test]
@@ -246,14 +218,9 @@ namespace YARG.Core.UnitTests.Replays
             // Deserialize at v15 (should consume legacy block and preserve sentinel)
             var deserialized = new ReplayFrame(ref stream, 15);
 
-            Assert.Multiple(() =>
-            {
-                Assert.That(deserialized.PerMicInputs, Is.Null, "v15 should discard mic block and set PerMicInputs to null");
-
-                // The next byte should be our sentinel (proving correct alignment)
+            // The next byte should be our sentinel (proving correct alignment)
                 byte nextByte = stream.ReadByte();
                 Assert.That(nextByte, Is.EqualTo(0xFF), "Stream should be positioned after legacy block");
-            });
         }
 
         [Test]
@@ -281,37 +248,29 @@ namespace YARG.Core.UnitTests.Replays
 
             Assert.Multiple(() =>
             {
-                Assert.That(deserialized.PerMicInputs, Is.Null, "Plain Vocals should have null PerMicInputs");
                 Assert.That(deserialized.Inputs, Is.EqualTo(inputs), "Inputs should round-trip intact");
             });
         }
 
         [Test]
-        public void PartyVocalsRoundTrip_DeterministicScore()
+        public void PartyVocalsRoundTrip_Deterministic()
         {
-            var perMicInputs = new GameInput[][]
+            // Test that flat stream serialization is deterministic
+            var inputs = new GameInput[]
             {
-                new[]
-                {
-                    new GameInput(0.0, (int)VocalsAction.Pitch, 60f),
-                    new GameInput(0.5, (int)VocalsAction.Pitch, 62f),
-                },
-                new[]
-                {
-                    new GameInput(0.1, (int)VocalsAction.Pitch, 64f),
-                    new GameInput(0.6, (int)VocalsAction.Pitch, 65f),
-                },
+                new(0.0, PartyVocalsInput.Pack(0, VocalsAction.Pitch), 60f),
+                new(0.5, PartyVocalsInput.Pack(1, VocalsAction.Pitch), 62f),
+                new(1.0, PartyVocalsInput.Pack(0, VocalsAction.Pitch), 64f),
             };
 
-            var frame1 = CreatePartyVocalsFrame(perMicInputs);
+            var frame1 = CreatePartyVocalsFrame(inputs);
             var deserialized1 = RoundTripV16(frame1);
             var deserialized2 = RoundTripV16(frame1);
 
             Assert.Multiple(() =>
             {
-                Assert.That(deserialized1.PerMicInputs.Length, Is.EqualTo(deserialized2.PerMicInputs.Length), "PerMicInputs should have same length");
-                Assert.That(deserialized1.PerMicInputs[0], Is.EqualTo(deserialized2.PerMicInputs[0]), "Mic 0 should be deterministic");
-                Assert.That(deserialized1.PerMicInputs[1], Is.EqualTo(deserialized2.PerMicInputs[1]), "Mic 1 should be deterministic");
+                Assert.That(deserialized1.Inputs.Length, Is.EqualTo(deserialized2.Inputs.Length), "Inputs should have same length");
+                Assert.That(deserialized1.Inputs, Is.EqualTo(deserialized2.Inputs), "Inputs should be deterministic");
             });
         }
     }
