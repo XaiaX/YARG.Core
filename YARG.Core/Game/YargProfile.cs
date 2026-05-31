@@ -121,6 +121,25 @@ namespace YARG.Core.Game
             set => _partyVocalsMicCountOverride = value;
         }
 
+        // Sticky Solo-vs-HARM preference for Party Vocals. Persisted in JSON AND in the
+        // binary replay (unlike the mic-count knob) because it determines which notes are
+        // scored. Resolution applies graceful fallback; this field is only ever written by
+        // an explicit user choice, never by a fallback.
+        [JsonProperty]
+        private byte _partyVocalsChartPreference;
+
+        /// <summary>
+        /// Sticky Solo-vs-HARM chart preference for Party Vocals. Defaults to
+        /// <see cref="PartyVocalsChartPreference.Auto"/>. Honored by
+        /// VocalChartSelection.ResolveMultitrack; has no effect outside Party Vocals.
+        /// </summary>
+        [JsonIgnore]
+        public PartyVocalsChartPreference PartyVocalsChartPreference
+        {
+            get => (PartyVocalsChartPreference) _partyVocalsChartPreference;
+            set => _partyVocalsChartPreference = (byte) value;
+        }
+
         /// <summary>
         /// Checks if this profile is currently using free vocals mode.
         /// </summary>
