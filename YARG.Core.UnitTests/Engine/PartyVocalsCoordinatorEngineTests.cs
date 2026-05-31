@@ -7,6 +7,7 @@ using YARG.Core.Chart;
 using YARG.Core.Engine;
 using YARG.Core.Engine.Vocals;
 using YARG.Core.Engine.Vocals.Engines;
+using YARG.Core.Input;
 
 namespace YARG.Core.UnitTests.Engine;
 
