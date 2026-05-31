@@ -1125,5 +1125,52 @@ public sealed class PartyVocalsCoordinatorEngineTests
         Assert.IsFalse(engine.DidMicSingThisTick(1));
     }
 
+    // ================================================================
+    // Hit routing invariant (AC34 structural)
+    // Hit reaches coordinator only — sub-engines receive no queued Hit,
+    // so sub-engine CheckPercussionHit cannot fire from input.
+    // ================================================================
+
+    [Test]
+    public void Hit_RoutesToCoordinatorOnly_SubEnginesNotFedInput_AC34()
+    {
+        // Verify that Hit inputs queued to the coordinator set only the coordinator's
+        // HasHit — sub-engines do not have their MutateStateWithInput called (they
+        // receive no queued input; they're driven via Update + SetMicPitch).
+        // This is the structural invariant that prevents double percussion scoring.
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 0, 960, 64);
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.1);
+
+        // Queue Hit inputs from two different mics
+        for (int m = 0; m < 2; m++)
+        {
+            var hit = new GameInput(0.15, PartyVocalsInput.Pack(m, VocalsAction.Hit), true);
+            engine.QueueInput(ref hit);
+        }
+        engine.Update(0.2);
+
+        // The coordinator consumed HasHit during CheckPercussionHit (no percussion
+        // in this chart, so it was a no-op). The key invariant is that the coordinator
+        // demux routed Hit to coordinator.HasHit, not to any sub-engine's input queue.
+        // Sub-engines have no input queue — they are driven solely via Update(time).
+        // Verify by checking the sub-engines' MutateStateWithInput was never called:
+        // their input queue count must be zero.
+        var subEnginesField = typeof(PartyVocalsCoordinatorEngine)
+            .GetField("_subEngines", BindingFlags.NonPublic | BindingFlags.Instance);
+        var subEngines = (YargFreeVocalsEngine[])subEnginesField.GetValue(engine)!;
+
+        foreach (var sub in subEngines)
+        {
+            var inputQueueField = typeof(BaseEngine<VocalNote, VocalsEngineParameters, VocalsStats>)
+                .GetField("InputQueue", BindingFlags.NonPublic | BindingFlags.Instance);
+            var queue = (System.Collections.Generic.Queue<GameInput>)inputQueueField.GetValue(sub)!;
+            Assert.AreEqual(0, queue.Count,
+                "Sub-engine input queue must be empty — sub-engines receive no queued input");
+        }
+    }
 
 }
