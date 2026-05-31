@@ -323,10 +323,10 @@ public sealed class YargProfileSerializationTests
     }
 
     [Test]
-    public void PartyVocalsChartPreference_Auto_RoundTrip()
+    public void PartyVocalsChartPreference_Harmony_RoundTrip()
     {
         var original = CreateTestProfile(instrument: Instrument.PartyVocals);
-        original.PartyVocalsChartPreference = PartyVocalsChartPreference.Auto;
+        original.PartyVocalsChartPreference = PartyVocalsChartPreference.Harmony;
 
         byte[] bytes;
         using (var ms = new MemoryStream())
@@ -341,12 +341,12 @@ public sealed class YargProfileSerializationTests
         var stream = new FixedArrayStream(fixedArray);
         var deserialized = new YargProfile(ref stream);
 
-        Assert.That(deserialized.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Auto));
+        Assert.That(deserialized.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Harmony));
     }
 
-    // Backward compatibility: pre-v12 profiles should default to Auto
+    // Backward compatibility: pre-v12 profiles should default to Harmony
     [Test]
-    public void DeserializeVersion10_DefaultsPartyVocalsChartPreferenceToAuto()
+    public void DeserializeVersion10_DefaultsPartyVocalsChartPreferenceToHarmony()
     {
         byte[] bytes = BuildVersion10Stream(
             name: "V10Profile",
@@ -359,7 +359,7 @@ public sealed class YargProfileSerializationTests
         var stream = new FixedArrayStream(fixedArray);
         var profile = new YargProfile(ref stream);
 
-        Assert.That(profile.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Auto));
+        Assert.That(profile.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Harmony));
     }
 
     // JSON persistence test
@@ -382,6 +382,6 @@ public sealed class YargProfileSerializationTests
     {
         var profile = new YargProfile();
 
-        Assert.That(profile.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Auto));
+        Assert.That(profile.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Harmony));
     }
 }
