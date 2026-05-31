@@ -1,6 +1,7 @@
 using NUnit.Framework;
 using System;
 using System.IO;
+using Newtonsoft.Json;
 using YARG.Core.Chart;
 using YARG.Core.Extensions;
 using YARG.Core.Game;
@@ -13,7 +14,7 @@ public sealed class YargProfileSerializationTests
 {
     // Round-trip a v11 profile (no _freeHarmony) through binary serialization.
     [Test]
-    public void V11Profile_RoundTrip_PreservesAllFields()
+    public void V12Profile_RoundTrip_PreservesAllFields()
     {
         var original = CreateTestProfile(instrument: Instrument.PartyVocals);
         original.CurrentDifficulty = Difficulty.Expert;
@@ -43,7 +44,7 @@ public sealed class YargProfileSerializationTests
             Assert.That(deserialized.LeftyFlip, Is.True);
             Assert.That(deserialized.RangeEnabled, Is.False);
             Assert.That(deserialized.Name, Is.EqualTo("TestProfile"));
-            Assert.That(deserialized.Version, Is.EqualTo(11));
+            Assert.That(deserialized.Version, Is.EqualTo(12));
         });
     }
 
@@ -296,5 +297,91 @@ public sealed class YargProfileSerializationTests
         foreach (var item in fiveLane) writer.Write((byte)item);
 
         return ms.ToArray();
+    }
+
+    // Round-trip PartyVocalsChartPreference through binary serialization
+    [Test]
+    public void PartyVocalsChartPreference_Solo_RoundTrip()
+    {
+        var original = CreateTestProfile(instrument: Instrument.PartyVocals);
+        original.PartyVocalsChartPreference = PartyVocalsChartPreference.Solo;
+
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        using (var writer = new BinaryWriter(ms))
+        {
+            original.Serialize(writer);
+            bytes = ms.ToArray();
+        }
+
+        var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
+        bytes.CopyTo(fixedArray.Span);
+        var stream = new FixedArrayStream(fixedArray);
+        var deserialized = new YargProfile(ref stream);
+
+        Assert.That(deserialized.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Solo));
+    }
+
+    [Test]
+    public void PartyVocalsChartPreference_Auto_RoundTrip()
+    {
+        var original = CreateTestProfile(instrument: Instrument.PartyVocals);
+        original.PartyVocalsChartPreference = PartyVocalsChartPreference.Auto;
+
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        using (var writer = new BinaryWriter(ms))
+        {
+            original.Serialize(writer);
+            bytes = ms.ToArray();
+        }
+
+        var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
+        bytes.CopyTo(fixedArray.Span);
+        var stream = new FixedArrayStream(fixedArray);
+        var deserialized = new YargProfile(ref stream);
+
+        Assert.That(deserialized.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Auto));
+    }
+
+    // Backward compatibility: pre-v12 profiles should default to Auto
+    [Test]
+    public void DeserializeVersion10_DefaultsPartyVocalsChartPreferenceToAuto()
+    {
+        byte[] bytes = BuildVersion10Stream(
+            name: "V10Profile",
+            instrument: Instrument.PartyVocals,
+            harmonyIndex: 0,
+            freeHarmony: true);
+
+        var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
+        bytes.CopyTo(fixedArray.Span);
+        var stream = new FixedArrayStream(fixedArray);
+        var profile = new YargProfile(ref stream);
+
+        Assert.That(profile.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Auto));
+    }
+
+    // JSON persistence test
+    [Test]
+    public void PartyVocalsChartPreference_JsonPersistence()
+    {
+        var original = CreateTestProfile(instrument: Instrument.PartyVocals);
+        original.PartyVocalsChartPreference = PartyVocalsChartPreference.Solo;
+
+        string json = JsonConvert.SerializeObject(original);
+
+        var deserialized = JsonConvert.DeserializeObject<YargProfile>(json);
+
+        Assert.That(deserialized.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Solo));
+    }
+
+    // Default value test
+    [Test]
+    public void NewProfile_HasDefaultPartyVocalsChartPreference()
+    {
+        var profile = new YargProfile();
+
+        Assert.That(profile.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Auto));
     }
 }
