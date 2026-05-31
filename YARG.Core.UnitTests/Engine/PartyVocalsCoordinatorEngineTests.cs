@@ -63,6 +63,15 @@ public sealed class PartyVocalsCoordinatorEngineTests
         part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, tickLength, note, lyrics));
     }
 
+    private static void AddPercussionPhrase(VocalsPart part, uint tickOffset, uint tickLength)
+    {
+        var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, tickLength);
+        var percussionNote = new VocalNote(-1, 0, VocalNoteType.Percussion, 0.0, 1.0, tickOffset, tickLength / 2);
+        note.AddChildNote(percussionNote);
+        var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.NonPitched, "Perc", 0.0, tickOffset) };
+        part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, tickLength, note, lyrics));
+    }
+
     private static void AddTalkiePhrase(VocalsPart part, uint tickOffset, uint tickLength)
     {
         var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, tickLength);
@@ -829,8 +838,123 @@ public sealed class PartyVocalsCoordinatorEngineTests
         Assert.AreEqual(1, grades.Count, "Bot phrase should be graded once");
         Assert.AreNotEqual(PhraseGrade.Miss, grades[0],
             "Bots should hit their assigned parts, not miss");
-        Assert.Greater(engine.EngineStats.TicksHit, 0u,
+        Assert.Greater(((VocalsStats)engine.BaseStats).TicksHit, 0u,
             "Bot hits should accumulate TicksHit");
     }
 
+    // ================================================================
+    // Coordinator Percussion Scoring Tests (18-22)
+    // percussion.AC1: Any mic tap scores
+    // percussion.AC2: No double-count
+    // percussion.AC5: No false hit
+    // ================================================================
+
+    [Test]
+    public void Percussion_TapWithDueNote_ScoresPercussionNote_AC1_1()
+    {
+        // AC1.1: A tap with a due percussion note scores it.
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPercussionPhrase(parts[0], 0, 960); // Percussion note at tick 0-960
+
+        var engine = CreateCoordinator(parts, 2);
+        var hitFired = false;
+        engine.OnNoteHit += (noteIndex, note) => hitFired = true;
+
+        // Drive to the note's time
+        engine.Update(0.5);
+
+        // Queue a single Hit input
+        var hitInput = GameInput.Create(0.5, VocalsAction.Hit, true);
+        engine.QueueInput(ref hitInput);
+
+        // Advance to process the hit (need to advance past phrase end)
+        engine.Update(1.5); // Phrase ends at tick 480 (t=1.0s)
+
+        // The percussion note should have been scored
+        Assert.IsTrue(hitFired, "OnNoteHit should have fired for the percussion note");
+        Assert.AreEqual(1, engine.BaseStats.NotesHit, "NotesHit should increase by 1");
+    }
+
+    [Test]
+    public void Percussion_TapScoresNextDueNote_AC1_2()
+    {
+        // AC1.2: The note scored is the next due percussion note per GetNextPercussionNote windowing.
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPercussionPhrase(parts[0], 0, 960);  // First percussion note at tick 0-960
+        AddPercussionPhrase(parts[0], 1920, 960); // Second percussion note at tick 1920-2880
+
+        var engine = CreateCoordinator(parts, 2);
+        var hitNoteIndex = -1;
+        engine.OnNoteHit += (noteIndex, note) => hitNoteIndex = noteIndex;
+
+        // Drive to the first note's time
+        engine.Update(0.5);
+
+        // Queue a single Hit input
+        var hitInput = GameInput.Create(0.5, VocalsAction.Hit, true);
+        engine.QueueInput(ref hitInput);
+
+        // Advance to process the hit (need to advance past phrase end)
+        engine.Update(1.5); // Phrase ends at tick 480 (t=1.0s)
+
+        // The first note (index 0) should have been scored, not the second
+        Assert.AreEqual(0, hitNoteIndex, "First note (index 0) should have been scored");
+        Assert.AreEqual(1, engine.BaseStats.NotesHit, "Only one note should have been scored");
+    }
+
+    [Test]
+    public void Percussion_TwoMicsSameNote_ScoreOnce_AC2_1()
+    {
+        // AC2.1: Multiple mics tapping the same due percussion note score it exactly once.
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPercussionPhrase(parts[0], 0, 960); // Percussion note at tick 0-960
+
+        var engine = CreateCoordinator(parts, 2);
+        var hitFired = false;
+        engine.OnNoteHit += (noteIndex, note) => hitFired = true;
+
+        // Drive to the note's time
+        engine.Update(0.5);
+
+        // Queue Hit inputs from both mics (coordinator aggregates into single HasHit)
+        var hitInput1 = GameInput.Create(0.5, VocalsAction.Hit, true);
+        var hitInput2 = GameInput.Create(0.5, VocalsAction.Hit, true);
+        engine.QueueInput(ref hitInput1);
+        engine.QueueInput(ref hitInput2);
+
+        // Advance to process the hits
+        engine.Update(1.5);
+
+        // The note should have been scored exactly once (HasHit is shared across mics)
+        Assert.IsTrue(hitFired, "OnNoteHit should have fired");
+        Assert.AreEqual(1, engine.BaseStats.NotesHit, "Note should be scored exactly once, not twice");
+    }
+
+    [Test]
+    public void Percussion_TapWithNoDueNote_NoScore_AC5_1()
+    {
+        // AC5.1: A tap with no due percussion note does not score; HasHit is consumed.
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 960, 960, 60); // Regular note (not percussion) at tick 960-1920
+
+        var engine = CreateCoordinator(parts, 2);
+        var hitFired = false;
+        engine.OnNoteHit += (noteIndex, note) => hitFired = true;
+
+        // Drive to time but no percussion note is due yet
+        engine.Update(0.5);
+
+        // Queue a Hit input
+        var hitInput = GameInput.Create(0.5, VocalsAction.Hit, true);
+        engine.QueueInput(ref hitInput);
+
+        // Advance to process the hit (need to advance past phrase end)
+        engine.Update(1.5); // Phrase ends at tick 480 (t=1.0s)
+
+        // No note should have been scored
+        Assert.IsFalse(hitFired, "OnNoteHit should not fire when no percussion note is due");
+        Assert.AreEqual(0, engine.BaseStats.NotesHit, "NotesHit should not increase");
+    }
+
+    
 }

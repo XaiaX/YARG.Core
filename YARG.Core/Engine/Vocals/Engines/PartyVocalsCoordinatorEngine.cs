@@ -541,8 +541,12 @@ namespace YARG.Core.Engine.Vocals.Engines
             var percussion = GetNextPercussionNote(phrase, CurrentTick);
             if (percussion is not null && CurrentTime >= percussion.Time)
             {
-                AddScore(percussion);
-                OnNoteHit?.Invoke(NoteIndex, percussion);
+                // Check if the current time is within the note's bounds
+                if (CurrentTime <= percussion.TimeEnd)
+                {
+                    AddScore(percussion);
+                    OnNoteHit?.Invoke(NoteIndex, percussion);
+                }
             }
         }
 
