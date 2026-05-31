@@ -95,13 +95,6 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         public IReadOnlyList<YargFreeVocalsEngine> SubEngines => _subEngines;
 
-        public void SetMicPitch(int mic, float pitch)
-        {
-            if (mic < 0 || mic >= _micCount)
-                throw new ArgumentOutOfRangeException(nameof(mic));
-            _subEngines[mic].SetMicPitch(pitch);
-        }
-
         public bool PartHasContent(int partIndex)
         {
             if (partIndex < 0 || partIndex >= _allParts.Length) return false;
