@@ -956,5 +956,157 @@ public sealed class PartyVocalsCoordinatorEngineTests
         Assert.AreEqual(0, engine.BaseStats.NotesHit, "NotesHit should not increase");
     }
 
-    
+    // ================================================================
+    // Tests for mic packing and input demux (Subcomponent A)
+    // ================================================================
+
+    private static void QueueAndUpdate(PartyVocalsCoordinatorEngine engine, GameInput input)
+    {
+        engine.QueueInput(ref input);
+        engine.Update(0.5);
+    }
+
+    [Test]
+    public void PitchRouting_PackedInput_RoutesToCorrectMic_AC32()
+    {
+        // AC32: Pitch input packed for mic k routes to sub-engine k
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60); // Note at tick 0-960
+
+        var engine = CreateCoordinator(parts, 2);
+
+        // Queue pitch for mic 0
+        var packedPitch0 = new GameInput(0.5, PartyVocalsInput.Pack(0, VocalsAction.Pitch), 100f);
+        QueueAndUpdate(engine, packedPitch0);
+
+        // Queue pitch for mic 1
+        var packedPitch1 = new GameInput(0.5, PartyVocalsInput.Pack(1, VocalsAction.Pitch), 200f);
+        QueueAndUpdate(engine, packedPitch1);
+
+        // Verify pitch values reached correct sub-engines
+        Assert.AreEqual(100f, engine.GetMicPitch(0), Epsilon);
+        Assert.AreEqual(200f, engine.GetMicPitch(1), Epsilon);
+    }
+
+    [Test]
+    public void PitchRouting_UnpackedInput_DegradesToMic0_AC32()
+    {
+        // AC32: Unpacked input (no mic bits) routes to mic 0
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var engine = CreateCoordinator(parts, 2);
+
+        // Queue unpacked pitch (mic 0 equivalent)
+        var unpackedPitch = GameInput.Create(0.5, VocalsAction.Pitch, 300f);
+        QueueAndUpdate(engine, unpackedPitch);
+
+        // Verify it routes to mic 0
+        Assert.AreEqual(300f, engine.GetMicPitch(0), Epsilon);
+        Assert.AreEqual(0f, engine.GetMicPitch(1), Epsilon);
+    }
+
+    [Test]
+    public void PitchRouting_OutOfRangeMic_DroppedWithoutException_AC32()
+    {
+        // AC32: Pitch packed for mic >= _micCount is dropped
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var engine = CreateCoordinator(parts, 2);
+
+        // Queue pitch for out-of-range mic (2, but we only have 2 mics: 0,1)
+        var packedPitchOutOfRange = new GameInput(0.5, PartyVocalsInput.Pack(2, VocalsAction.Pitch), 400f);
+        QueueAndUpdate(engine, packedPitchOutOfRange);
+
+        // Verify no state changed
+        Assert.AreEqual(0f, engine.GetMicPitch(0), Epsilon);
+        Assert.AreEqual(0f, engine.GetMicPitch(1), Epsilon);
+    }
+
+    [Test]
+    public void Hit_StarPower_PackedInput_SetsCoordinatorFlags_AC32()
+    {
+        // AC32: Hit/StarPower packed inputs set coordinator-level flags
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var engine = CreateCoordinator(parts, 2);
+
+        // Queue packed StarPower
+        var packedSP = new GameInput(1.0, PartyVocalsInput.Pack(1, VocalsAction.StarPower), true);
+        engine.QueueInput(ref packedSP);
+        engine.Update(1.0);
+
+        Assert.IsTrue(engine.IsStarPowerInputActive);
+    }
+
+    [Test]
+    public void ActionPack_RoundTrip_RecoversOriginalValues_AC32()
+    {
+        // AC32: Pack -> UnpackMic/UnpackAction round-trip preserves original values
+        for (int mic = 0; mic <= 6; mic++)
+        {
+            foreach (VocalsAction action in Enum.GetValues<VocalsAction>())
+            {
+                int packed = PartyVocalsInput.Pack(mic, action);
+                int unpackedMic = PartyVocalsInput.UnpackMic(packed);
+                VocalsAction unpackedAction = PartyVocalsInput.UnpackAction(packed);
+
+                Assert.AreEqual(mic, unpackedMic);
+                Assert.AreEqual(action, unpackedAction);
+            }
+        }
+    }
+
+    [Test]
+    public void SangFlag_SetByPitch_DidMicSingThisTick_AC32()
+    {
+        // AC32: _micSangThisTick set by Pitch, exposed via accessors
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var engine = CreateCoordinator(parts, 2);
+
+        // Initially all flags should be false
+        Assert.IsFalse(engine.DidMicSingThisTick(0));
+        Assert.IsFalse(engine.DidMicSingThisTick(1));
+
+        // Queue pitch for mic 1
+        var packedPitch1 = new GameInput(0.5, PartyVocalsInput.Pack(1, VocalsAction.Pitch), 200f);
+        QueueAndUpdate(engine, packedPitch1);
+
+        // Only mic 1 should have sang
+        Assert.IsFalse(engine.DidMicSingThisTick(0));
+        Assert.IsTrue(engine.DidMicSingThisTick(1));
+
+        // Reset flags
+        engine.ResetMicSangFlags();
+        Assert.IsFalse(engine.DidMicSingThisTick(0));
+        Assert.IsFalse(engine.DidMicSingThisTick(1));
+    }
+
+    [Test]
+    public void SangFlag_HitOrStarPower_DoesNotSetSangFlag_AC32()
+    {
+        // AC32: Hit/StarPower inputs do not set sang flag
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var engine = CreateCoordinator(parts, 2);
+
+        // Queue Hit
+        var packedHit = new GameInput(0.5, PartyVocalsInput.Pack(0, VocalsAction.Hit), true);
+        QueueAndUpdate(engine, packedHit);
+
+        Assert.IsFalse(engine.DidMicSingThisTick(0));
+
+        // Queue StarPower
+        var packedSP = new GameInput(1.0, PartyVocalsInput.Pack(1, VocalsAction.StarPower), true);
+        QueueAndUpdate(engine, packedSP);
+
+        Assert.IsFalse(engine.DidMicSingThisTick(1));
+    }
+
+
 }
