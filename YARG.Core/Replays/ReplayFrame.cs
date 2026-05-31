@@ -21,17 +21,7 @@ namespace YARG.Core.Replays
         public readonly BaseStats            Stats;
         public readonly GameInput[]          Inputs;
 
-        /// <summary>
-        /// Per-mic input streams for Party Vocals replays. PerMicInputs[i] is the
-        /// chronological sequence of GameInput values recorded from mic i during the
-        /// live session. Null for non-Party-Vocals replays.
-        ///
-        /// Each stream is replayed in PartyVocalsPlayer.UpdateInputs by queueing
-        /// the inputs into the corresponding sub-engine, matching how live mic input
-        /// would flow.
-        /// </summary>
-        public GameInput[][]? PerMicInputs;
-
+        
         public int InputCount => Inputs.Length;
 
         public ReplayFrame(YargProfile profile, BaseEngineParameters param, BaseStats stats, GameInput[] inputs)
@@ -40,7 +30,6 @@ namespace YARG.Core.Replays
             Stats = stats;
             EngineParameters = param;
             Inputs = inputs;
-            PerMicInputs = null;
         }
 
         public ReplayFrame(ref FixedArrayStream stream, int version)
@@ -88,31 +77,7 @@ namespace YARG.Core.Replays
                 Inputs[i] = new GameInput(time, action, value);
             }
 
-            if (version >= 16)
-            {
-                int micCount = stream.Read<int>(Endianness.Little);
-                if (micCount > 0)
-                {
-                    PerMicInputs = new GameInput[micCount][];
-                    for (int i = 0; i < micCount; i++)
-                    {
-                        int len = stream.Read<int>(Endianness.Little);
-                        PerMicInputs[i] = new GameInput[len];
-                        for (int j = 0; j < len; j++)
-                        {
-                            double time = stream.Read<double>(Endianness.Little);
-                            int action = stream.Read<int>(Endianness.Little);
-                            float axis = stream.Read<float>(Endianness.Little);
-                            PerMicInputs[i][j] = new GameInput(time, action, axis);
-                        }
-                    }
-                }
-                else
-                {
-                    PerMicInputs = null;
-                }
-            }
-            else if (version == 15)
+            if (version == 15)
             {
                 // Read and discard legacy MicCount/MicPitches
                 int micCount = stream.Read<int>(Endianness.Little);
@@ -125,11 +90,8 @@ namespace YARG.Core.Replays
                     }
                 }
             }
-            else
-            {
-                // Version < 15, no mic block existed
-                PerMicInputs = null;
-            }
+            // version >= 16: flat stream only — no trailing mic block.
+            // version < 15: never had a mic block.
         }
 
         public void Serialize(BinaryWriter writer)
@@ -147,21 +109,6 @@ namespace YARG.Core.Replays
                 writer.Write(Inputs[i].Integer);
             }
 
-            writer.Write(PerMicInputs?.Length ?? 0);
-            if (PerMicInputs != null)
-            {
-                foreach (var stream in PerMicInputs)
-                {
-                    writer.Write(stream.Length);
-                    foreach (var input in stream)
-                    {
-                        // Write fields inline, using Axis (float) for pitch
-                        writer.Write(input.Time);
-                        writer.Write(input.Action);
-                        writer.Write(input.Axis);
                     }
-                }
-            }
-        }
     }
 }
