@@ -24,6 +24,9 @@ namespace YARG.Core.Engine.Vocals.Engines
         // Populated by reading each sub-engine's GetMicHittingParts after driving its tick.
         private readonly uint[] _micCurrentlyHittingParts;
 
+        // Unified per-mic "sang this tick" flag - source of truth for needle visibility
+        private readonly bool[] _micSangThisTick;
+
         // Coordinator-specific ambiguity scoring state
         private readonly double[] _harmDirectTicks;
         private readonly double[] _ambiguityBuckets;
@@ -61,6 +64,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             _cumulativeAssignedTicks = new double[partCount];
             _lastTickMicDeltas = new double[micCount];
             _micCurrentlyHittingParts = new uint[micCount];
+            _micSangThisTick = new bool[micCount];
 
             _harmDirectTicks = new double[partCount];
             _ambiguityBuckets = new double[1 << partCount];
@@ -122,18 +126,36 @@ namespace YARG.Core.Engine.Vocals.Engines
             return _subEngines[micIndex].GetCurrentPitch();
         }
 
+        public void ResetMicSangFlags() => Array.Clear(_micSangThisTick, 0, _micSangThisTick.Length);
+        public bool DidMicSingThisTick(int mic) =>
+            mic >= 0 && mic < _micCount && _micSangThisTick[mic];
+
         #region VocalsEngine Abstract Implementations
 
         protected override void MutateStateWithInput(GameInput gameInput)
         {
-            var action = gameInput.GetAction<VocalsAction>();
-            if (action == VocalsAction.Hit && gameInput.Button)
+            int mic = PartyVocalsInput.UnpackMic(gameInput.Action);
+            var action = PartyVocalsInput.UnpackAction(gameInput.Action);
+
+            switch (action)
             {
-                HasHit = true;
-            }
-            else if (action == VocalsAction.StarPower)
-            {
-                IsStarPowerInputActive = gameInput.Button;
+                case VocalsAction.Pitch:
+                    // Guarded sub-engine call — mirrors the silent-default pattern of
+                    // GetMicPitch/GetMicHittingParts (a malformed/replayed mic index is
+                    // dropped, not thrown). Do NOT call the coordinator's own
+                    // SetMicPitch(int,float) here: it throws on out-of-range.
+                    if (mic >= 0 && mic < _micCount)
+                    {
+                        _subEngines[mic].SetMicPitch(gameInput.Axis);
+                        _micSangThisTick[mic] = true; // unified needle sang-state (see below)
+                    }
+                    break;
+                case VocalsAction.Hit when gameInput.Button:
+                    HasHit = true; // coordinator-level; percussion scored here (standalone fix)
+                    break;
+                case VocalsAction.StarPower:
+                    IsStarPowerInputActive = gameInput.Button;
+                    break;
             }
         }
 
