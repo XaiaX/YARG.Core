@@ -345,6 +345,10 @@
     /// <summary>
     /// The actions available when playing vocals modes.
     /// </summary>
+    /// <remarks>
+    /// CRITICAL: This enum MUST remain <: byte> for the Party Vocals action-packing scheme.
+    /// See PartyVocalsInput.cs and documentation for details.
+    /// </remarks>
     public enum VocalsAction : byte
     {
         /// <summary>The current pitch being sung.</summary>
