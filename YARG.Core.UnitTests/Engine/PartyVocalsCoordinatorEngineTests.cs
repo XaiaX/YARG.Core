@@ -112,13 +112,15 @@ public sealed class PartyVocalsCoordinatorEngineTests
             {
                 int idx = Math.Min(f, micPitchArrays[m].Length - 1);
                 float pitch = micPitchArrays[m][idx];
-                // float.NaN is the silence sentinel — don't call SetMicPitch, so the
-                // mic's _micHasSang stays false and it contributes nothing to scoring.
+                // float.NaN is the silence sentinel — don't feed a pitch input, so the
+                // mic contributes nothing to scoring.
                 // (Plain numeric "out of range" values like -1f don't work because the
                 // engine's pitch comparison is octave-equivalent — any value matches
                 // C4 if the modular distance is within the pitch window.)
                 if (float.IsNaN(pitch)) continue;
-                engine.SetMicPitch(m, pitch);
+                int packed = PartyVocalsInput.Pack(m, VocalsAction.Pitch);
+                var input = new GameInput(time, packed, pitch);
+                engine.QueueInput(ref input);
             }
             engine.Update(time);
         }
@@ -566,9 +568,14 @@ public sealed class PartyVocalsCoordinatorEngineTests
         // Feed for ~50ms (3 frames at 60fps)
         for (int i = 0; i < 3; i++)
         {
-            engine.SetMicPitch(0, 60f);
-            engine.SetMicPitch(1, -1f);
-            engine.Update(0.1 + (i + 1) / ApproximateVocalFps);
+            double t = 0.1 + (i + 1) / ApproximateVocalFps;
+            int packed0 = PartyVocalsInput.Pack(0, VocalsAction.Pitch);
+            var in0 = new GameInput(t, packed0, 60f);
+            engine.QueueInput(ref in0);
+            int packed1 = PartyVocalsInput.Pack(1, VocalsAction.Pitch);
+            var in1 = new GameInput(t, packed1, -1f);
+            engine.QueueInput(ref in1);
+            engine.Update(t);
         }
 
         var metersEarly = GetCanonicalMeters(engine);
@@ -582,9 +589,14 @@ public sealed class PartyVocalsCoordinatorEngineTests
         double startTime = 0.1 + 4.0 / ApproximateVocalFps;
         for (int i = 0; i < 7; i++)
         {
-            engine.SetMicPitch(0, 60f);
-            engine.SetMicPitch(1, -1f);
-            engine.Update(startTime + (i + 1) / ApproximateVocalFps);
+            double t = startTime + (i + 1) / ApproximateVocalFps;
+            int packed0 = PartyVocalsInput.Pack(0, VocalsAction.Pitch);
+            var in0 = new GameInput(t, packed0, 60f);
+            engine.QueueInput(ref in0);
+            int packed1 = PartyVocalsInput.Pack(1, VocalsAction.Pitch);
+            var in1 = new GameInput(t, packed1, -1f);
+            engine.QueueInput(ref in1);
+            engine.Update(t);
         }
 
         var metersLater = GetCanonicalMeters(engine);
@@ -637,8 +649,13 @@ public sealed class PartyVocalsCoordinatorEngineTests
         // re-derived for phrase 2 (480 ticks) — if the prior bug were present,
         // it would still hold phrase 1's value (960) because `??=` doesn't
         // overwrite a non-null value.
-        engine.SetMicPitch(0, -1f);
-        engine.SetMicPitch(1, -1f);
+        // Feed silent pitch to both mics via the queue
+        int packed0 = PartyVocalsInput.Pack(0, VocalsAction.Pitch);
+        var in0 = new GameInput(2.04, packed0, -1f);
+        engine.QueueInput(ref in0);
+        int packed1 = PartyVocalsInput.Pack(1, VocalsAction.Pitch);
+        var in1 = new GameInput(2.04, packed1, -1f);
+        engine.QueueInput(ref in1);
         engine.Update(2.05); // within phrase 2 (tick 1920-2400 → t=2.0-2.5s)
 
         // PhraseTicksTotal reflects the sum of lyric child-note ticks in the phrase.
