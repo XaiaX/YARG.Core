@@ -12,7 +12,7 @@ namespace YARG.Core.Game
 {
     public partial class YargProfile
     {
-        private readonly int PROFILE_VERSION = 11;
+        private readonly int PROFILE_VERSION = 12;
 
         public int Version;
 
@@ -322,6 +322,15 @@ namespace YARG.Core.Game
                     FiveLaneDrumsHighwayOrdering[i] = (DrumsHighwayItem) stream.ReadByte();
                 }
             }
+
+            if (Version >= 12)
+            {
+                _partyVocalsChartPreference = stream.ReadByte();
+            }
+            else
+            {
+                _partyVocalsChartPreference = (byte) PartyVocalsChartPreference.Auto;
+            }
         }
 
         public void AddSingleModifier(Modifier modifier)
@@ -537,6 +546,10 @@ namespace YARG.Core.Game
             {
                 writer.Write((byte) item);
             }
+
+            // Version 12+: Party Vocals chart preference (Solo vs HARM). Determines
+            // scored notes, so it must be captured for deterministic replay playback.
+            writer.Write(_partyVocalsChartPreference);
         }
 
         private static DrumsHighwayItem[] DEFAULT_FOUR_LANE_ORDERING = new DrumsHighwayItem[] {
