@@ -158,6 +158,11 @@ namespace YARG.Core.Engine.Vocals.Engines
             CurrentTime = _subEngines[0].CurrentTime;
             CurrentTick = _subEngines[0].CurrentTick;
 
+            // Score percussion taps at the band level. The coordinator aggregates
+            // any mic's Hit into a single HasHit (MutateStateWithInput), so this
+            // scores one band hit per tap with no double-count.
+            CheckPercussionHit();
+
             // Read per-tick credit from each sub-engine's LastTickPartDeltas and
             // per-mic hitting-parts bitmask.
             Array.Clear(_lastTickMicDeltas, 0, _lastTickMicDeltas.Length);
@@ -512,6 +517,33 @@ namespace YARG.Core.Engine.Vocals.Engines
                 break;
             }
             return totalTime;
+        }
+
+        #endregion
+
+        #region Percussion Scoring
+
+        private void CheckPercussionHit()
+        {
+            if (!HasHit)
+            {
+                return;
+            }
+
+            HasHit = false;
+
+            if (NoteIndex >= Notes.Count)
+            {
+                return;
+            }
+
+            var phrase = Notes[NoteIndex];
+            var percussion = GetNextPercussionNote(phrase, CurrentTick);
+            if (percussion is not null && CurrentTime >= percussion.Time)
+            {
+                AddScore(percussion);
+                OnNoteHit?.Invoke(NoteIndex, percussion);
+            }
         }
 
         #endregion
