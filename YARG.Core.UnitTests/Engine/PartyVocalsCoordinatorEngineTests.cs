@@ -1021,6 +1021,23 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     [Test]
+    public void CurrentPhraseDurationSeconds_ReflectsPhraseSpan()
+    {
+        // AddPhrase hardcodes the parent phrase note's Time=0.0 / TimeLength=2.0 (the same
+        // tick-vs-time helper artifact the percussion tests note), so TimeEnd-Time = 2.0s
+        // here. In real charts the parent note's time span is accurate; this just verifies
+        // the accessor returns TimeEnd - Time of the current phrase.
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.1);
+
+        Assert.That(engine.CurrentPhraseDurationSeconds, Is.EqualTo(2.0).Within(0.001),
+            "Duration should be the current phrase's time span (TimeEnd - Time)");
+    }
+
+    [Test]
     public void Bot_ThreeMicsThreeHarms_EachBotHitsItsPart()
     {
         // Regression guard: bot Party Vocals builds one sub-engine per HARM part
