@@ -1362,6 +1362,105 @@ public sealed class PartyVocalsCoordinatorEngineTests
             "SP must not activate via hit when SingToActivateStarPower is off");
     }
 
+    /// SP earning: singing a star power phrase should award SP ticks to the coordinator.
+    [Test]
+    public void SingingSpPhrase_AwardsStarPower_ToCoordinator()
+    {
+        // Create a part with a single phrase that has StarPower flags.
+        var part = CreateVocalsPart();
+        uint phraseTick = 0;
+        uint phraseTickLength = 960; // 2 beats at 480 ticks/beat
+        int midiPitch = 60; // C4
+
+        var note = new VocalNote(NoteFlags.StarPower, false, 0.0, 2.0, phraseTick, phraseTickLength);
+        var lyricNote = new VocalNote(midiPitch, 0, VocalNoteType.Lyric, 0.0, 1.0, phraseTick, phraseTickLength / 2);
+        note.AddChildNote(lyricNote);
+        var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.None, "La", 0.0, phraseTick) };
+        part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, phraseTick, phraseTickLength, note, lyrics));
+
+        var parts = new List<VocalsPart> { part };
+        var engine = CreateCoordinator(parts, 1);
+
+        // Verify the note track has SP flag via reflection (Notes is protected)
+        var notesField = typeof(BaseEngine<VocalNote, VocalsEngineParameters, VocalsStats>)
+            .GetField("Notes", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        Assert.NotNull(notesField, "Should find Notes field via reflection");
+        var notes = (System.Collections.Generic.List<VocalNote>)notesField!.GetValue(engine)!;
+        Assert.That(notes[0].IsStarPower, Is.True, "Phrase should have StarPower flag");
+
+        engine.Update(0.1);
+
+        // Feed pitch inputs matching the note for the entire phrase duration
+        float[] micPitches = { midiPitch };
+        FeedPitches(engine, 1, new[] { micPitches }, 0.1, 2.5);
+
+        // Process past phrase end
+        engine.Update(3.0);
+
+        // The coordinator should have earned star power
+        Assert.That(engine.EngineStats.StarPowerTickAmount, Is.GreaterThan(0),
+            "Coordinator should have earned star power from singing a SP phrase");
+        Assert.That(engine.EngineStats.StarPowerPhrasesHit, Is.EqualTo(1),
+            "Should have recorded exactly one SP phrase hit");
+    }
+
+    /// SP earning regression: a per-mic sub-engine that MISSES a star power phrase
+    /// must not strip the StarPower flag off the shared VocalNote before the
+    /// coordinator scores that phrase.
+    ///
+    /// The coordinator and every sub-engine are built from the same note track, so
+    /// they share the same VocalNote objects. The coordinator drives all sub-engines
+    /// (including their phrase-end logic) *before* running its own phrase-end. A
+    /// sub-engine that misses calls MissNote -> StripStarPower, clearing the flag on
+    /// the shared note; the coordinator then reads IsStarPower == false and awards
+    /// nothing — even though it graded the phrase a hit. This is why a real singer
+    /// never earned SP while a bot (whose sub-engines always hit, never strip) did.
+    ///
+    /// Repro: two mics on one SP phrase. Mic 0 sings it (coordinator aggregate hits);
+    /// mic 1 is silent (its sub-engine misses and strips). Expect SP still awarded.
+    [Test]
+    public void SubEngineMiss_DoesNotStripStarPower_FromCoordinatorScoring()
+    {
+        var part = CreateVocalsPart();
+        uint phraseTick = 0;
+        uint phraseTickLength = 960;
+        int midiPitch = 60; // C4
+
+        var note = new VocalNote(NoteFlags.StarPower, false, 0.0, 2.0, phraseTick, phraseTickLength);
+        var lyricNote = new VocalNote(midiPitch, 0, VocalNoteType.Lyric, 0.0, 1.0, phraseTick, phraseTickLength / 2);
+        note.AddChildNote(lyricNote);
+        var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.None, "La", 0.0, phraseTick) };
+        part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, phraseTick, phraseTickLength, note, lyrics));
+
+        var parts = new List<VocalsPart> { part };
+        var engine = CreateCoordinator(parts, 2); // two mics
+
+        var grades = new List<PhraseGrade>();
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) => grades.Add(grade);
+
+        engine.Update(0.1);
+
+        // Mic 0 sings the SP phrase; mic 1 stays silent (NaN sentinel = no input),
+        // so mic 1's sub-engine misses the phrase and runs StripStarPower.
+        FeedPitches(engine, 2,
+            new[] { new[] { (float) midiPitch }, new[] { float.NaN } },
+            0.1, 2.5);
+
+        engine.Update(3.0);
+
+        // Guard: the coordinator must actually grade the phrase a hit, so a failure
+        // below isolates the SP-award bug rather than a scoring miss.
+        Assert.That(grades, Has.Some.Not.EqualTo(PhraseGrade.Miss),
+            "Mic 0 sang the phrase, so the coordinator should grade it a hit");
+
+        Assert.That(engine.EngineStats.StarPowerTickAmount, Is.GreaterThan(0u),
+            "Coordinator must earn SP on a phrase it grades a hit, even though a silent " +
+            "mic's sub-engine missed it (the sub-engine's MissNote stripped the shared " +
+            "StarPower flag before the coordinator scored the phrase).");
+        Assert.That(engine.EngineStats.StarPowerPhrasesHit, Is.EqualTo(1),
+            "Should record exactly one SP phrase hit");
+    }
+
     /// overdrive.AC2.1: Manual button deploy still works.
     [Test]
     public void ManualDeploy_ActivatesStarPower_WhenSpBanked()

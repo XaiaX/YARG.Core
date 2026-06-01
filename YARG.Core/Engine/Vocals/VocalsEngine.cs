@@ -208,11 +208,21 @@ namespace YARG.Core.Engine.Vocals
             }
         }
 
+        /// <summary>
+        /// When false, <see cref="MissNote(VocalNote, double)"/> will not strip the
+        /// StarPower flag off the (shared) note on a miss. Coordinator sub-engines set
+        /// this so an individual mic's miss can't clear SP from notes that the
+        /// authoritative <see cref="Engines.PartyVocalsCoordinatorEngine"/> still needs
+        /// to score — the sub-engines and the coordinator share the same VocalNote
+        /// objects. Standalone engines (solo, single-mic free vocals) keep the default.
+        /// </summary>
+        protected bool StripStarPowerOnMiss { get; set; } = true;
+
         protected void MissNote(VocalNote note, double hitPercent)
         {
             note.SetMissState(true, false);
 
-            if (note.IsStarPower)
+            if (note.IsStarPower && StripStarPowerOnMiss)
             {
                 StripStarPower(note);
             }

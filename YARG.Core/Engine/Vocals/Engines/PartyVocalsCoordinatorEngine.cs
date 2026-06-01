@@ -84,7 +84,26 @@ namespace YARG.Core.Engine.Vocals.Engines
             _micHitMaskScratch = new uint[micCount];
             _bucketOrder = ComputeBucketOrder(partCount);
 
-            // Build one sub-engine per mic (composition)
+            // Build one sub-engine per mic (composition).
+            //
+            // NOTE (shared mutable note state): every sub-engine is constructed with the
+            // SAME `noteTrack` the coordinator scores on, so coordinator.Notes and each
+            // subEngine.Notes are the *same* VocalNote objects. CloneAsInstrumentDifficulty
+            // also reuses note references across players, so a bot and a live player share
+            // these objects too. Engine operations that mutate note flags (StripStarPower
+            // on miss, SetHitState) therefore leak between engines.
+            //
+            // `isSubEngine: true` is a targeted fix for the worst symptom: it stops a
+            // sub-engine's miss from stripping the StarPower flag off a phrase the
+            // coordinator hit (which made real singers earn no SP while bots did). It does
+            // NOT fix the residual cross-player leak (one player's coordinator missing an
+            // SP phrase can still strip it for another player sharing the same notes).
+            //
+            // The more correct fix is to give each engine its own copy of the notes (or
+            // make notes immutable), eliminating the whole class of cross-engine leakage.
+            // That touches shared, hot data across all instruments, so it's a broader change
+            // worth discussing with the wider project rather than doing here. See
+            // docs/bugs/party-vocals-sp-earning-broken.md.
             _subEngines = new YargFreeVocalsEngine[micCount];
             for (int i = 0; i < micCount; i++)
             {
@@ -94,7 +113,8 @@ namespace YARG.Core.Engine.Vocals.Engines
                     syncTrack,
                     engineParameters,
                     isBot,
-                    botPartIndex: i);
+                    botPartIndex: i,
+                    isSubEngine: true);
             }
 
             for (int j = 0; j < partCount; j++)

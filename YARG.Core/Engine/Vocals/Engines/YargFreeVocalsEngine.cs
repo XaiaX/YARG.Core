@@ -59,9 +59,16 @@ namespace YARG.Core.Engine.Vocals.Engines
             SyncTrack syncTrack,
             VocalsEngineParameters engineParameters,
             bool isBot,
-            int botPartIndex = 0)
+            int botPartIndex = 0,
+            bool isSubEngine = false)
             : base(primaryChart, syncTrack, engineParameters, isBot)
         {
+            // As a PartyVocalsCoordinatorEngine sub-engine, this instance shares its
+            // note objects with the coordinator (and the other mics). It is not
+            // authoritative for star power, so it must not strip SP flags on a miss —
+            // otherwise one mic's miss clears SP from a phrase the coordinator hit.
+            StripStarPowerOnMiss = !isSubEngine;
+
             _allParts = allParts;
             _botPartIndex = Math.Max(0, Math.Min(botPartIndex, allParts.Count - 1));
             _currentBotEffectivePartIndex = _botPartIndex;
