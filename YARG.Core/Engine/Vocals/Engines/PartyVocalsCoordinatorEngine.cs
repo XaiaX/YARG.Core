@@ -283,6 +283,19 @@ namespace YARG.Core.Engine.Vocals.Engines
             CurrentTime = _subEngines[0].CurrentTime;
             CurrentTick = _subEngines[0].CurrentTick;
 
+            // Bots queue no Hit inputs and the coordinator's UpdateBot is a no-op, so a bot
+            // would never set HasHit and never score percussion (real mics do, via
+            // MutateStateWithInput). Arm HasHit here when a percussion note is due, mirroring
+            // the solo bot path (YargVocalsEngine.UpdateBot's percussion branch).
+            if (IsBot)
+            {
+                var botPercussion = GetNextPercussionNote(Notes[NoteIndex], CurrentTick, _resolvedPercussion.Contains);
+                if (botPercussion is not null && CurrentTime >= botPercussion.Time)
+                {
+                    HasHit = true;
+                }
+            }
+
             // Score percussion taps at the band level. The coordinator aggregates
             // any mic's Hit into a single HasHit (MutateStateWithInput), so this
             // scores one band hit per tap with no double-count.
