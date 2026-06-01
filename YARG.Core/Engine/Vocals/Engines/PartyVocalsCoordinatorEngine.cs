@@ -20,9 +20,19 @@ namespace YARG.Core.Engine.Vocals.Engines
         private readonly double[] _cumulativeAssignedTicks;
         private readonly double[] _lastTickMicDeltas;
 
-        // Per-mic bitmask of which parts each mic is currently hitting.
-        // Populated by reading each sub-engine's GetMicHittingParts after driving its tick.
+        // Per-mic bitmask of which parts each mic is currently hitting THIS TICK.
+        // Populated by reading each sub-engine's GetMicHittingParts after driving its tick,
+        // and read per-tick by the ambiguity classifier for scoring. This is a single-tick
+        // transient (the sub-engine resets it every AccumulateMicPartHits call), so it is
+        // NOT suitable for the visual layer, which reads one frame later — see below.
         private readonly uint[] _micCurrentlyHittingParts;
+
+        // Per-mic bitmask of parts each mic hit at ANY point during the current visual frame.
+        // OR-accumulated across ticks and reset per frame (ResetMicSangFlags), mirroring
+        // _micSangThisTick. The visual-facing GetMicHittingParts returns this so the per-mic
+        // trail's on-note gate sees a stable per-frame signal instead of the single-tick
+        // transient above (which is 0 on most ticks and killed the trail).
+        private readonly uint[] _micHittingPartsThisFrame;
 
         // Unified per-mic "sang this tick" flag - source of truth for needle visibility
         private readonly bool[] _micSangThisTick;
@@ -64,6 +74,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             _cumulativeAssignedTicks = new double[partCount];
             _lastTickMicDeltas = new double[micCount];
             _micCurrentlyHittingParts = new uint[micCount];
+            _micHittingPartsThisFrame = new uint[micCount];
             _micSangThisTick = new bool[micCount];
 
             _harmDirectTicks = new double[partCount];
@@ -110,7 +121,10 @@ namespace YARG.Core.Engine.Vocals.Engines
         public uint GetMicHittingParts(int micIndex)
         {
             if (micIndex < 0 || micIndex >= _micCount) return 0u;
-            return _micCurrentlyHittingParts[micIndex];
+            // Per-frame accumulation, not the single-tick transient: the visual layer reads
+            // this a frame after the engine ticked, so it must reflect any hit during the
+            // frame, not just the last tick's (which is usually 0).
+            return _micHittingPartsThisFrame[micIndex];
         }
 
         public float GetMicPitch(int micIndex)
@@ -119,7 +133,13 @@ namespace YARG.Core.Engine.Vocals.Engines
             return _subEngines[micIndex].GetCurrentPitch();
         }
 
-        public void ResetMicSangFlags() => Array.Clear(_micSangThisTick, 0, _micSangThisTick.Length);
+        public void ResetMicSangFlags()
+        {
+            // Reset per-frame needle/trail signals together: both are accumulated across the
+            // frame's ticks and consumed by the visual layer after Update.
+            Array.Clear(_micSangThisTick, 0, _micSangThisTick.Length);
+            Array.Clear(_micHittingPartsThisFrame, 0, _micHittingPartsThisFrame.Length);
+        }
         public bool DidMicSingThisTick(int mic) =>
             mic >= 0 && mic < _micCount && _micSangThisTick[mic];
 
@@ -191,8 +211,12 @@ namespace YARG.Core.Engine.Vocals.Engines
                 }
                 _lastTickMicDeltas[i] = totalDelta;
 
-                // Read the sub-engine's per-mic hitting-parts bitmask
+                // Read the sub-engine's per-mic hitting-parts bitmask (single-tick).
                 _micCurrentlyHittingParts[i] = _subEngines[i].GetMicHittingParts();
+
+                // OR-accumulate into the per-frame signal the visual layer reads, so a hit
+                // on any tick this frame keeps the trail's on-note gate satisfied.
+                _micHittingPartsThisFrame[i] |= _micCurrentlyHittingParts[i];
             }
 
             var phrase = Notes[NoteIndex];
