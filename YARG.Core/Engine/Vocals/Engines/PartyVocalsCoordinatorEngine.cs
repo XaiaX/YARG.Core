@@ -150,6 +150,10 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         public int PartCount => _allParts.Length;
 
+        public bool PartInCurrentPhrase(int partIndex) =>
+            partIndex >= 0 && partIndex < _phraseTicksTotalPerPart.Length
+            && _phraseTicksTotalPerPart[partIndex] > 0u;
+
         public IReadOnlyList<double> CanonicalMeters => _canonicalMeters;
 
         public double AwesomeThreshold => EngineParameters.PhraseHitPercent;
