@@ -52,6 +52,14 @@ namespace YARG.Core.Engine.Vocals.Engines
         // Per-phrase tracking for the coordinator's own phrase-end logic
         private uint? _coordinatorPhraseTicksTotal;
 
+        // Percussion notes this coordinator has already scored or missed. Tracked locally
+        // instead of via VocalNote.WasHit/WasMissed: the note objects are shared with the
+        // sub-engines and other players' engines, so setting hit/miss state on them leaks
+        // across engines (the same hazard the SP-earning bug documents). This set is the
+        // coordinator's private "consumed" ledger, fed to GetNextPercussionNote so a note
+        // isn't re-offered after it's resolved. Cleared on Reset (rewind/practice).
+        private readonly HashSet<VocalNote> _resolvedPercussion = new();
+
         public PartyVocalsCoordinatorEngine(
             InstrumentDifficulty<VocalNote> noteTrack,
             IReadOnlyList<VocalsPart> allParts,
@@ -122,6 +130,14 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
 
             BuildCountdownsFromAllParts(allParts.ToList(), excludePercussion: true);
+        }
+
+        public override void Reset(bool keepCurrentButtons = false)
+        {
+            // Drop the local percussion ledger so notes are hittable again after a
+            // rewind/practice seek (mirrors how WasHit/WasMissed clear on note reset).
+            _resolvedPercussion.Clear();
+            base.Reset(keepCurrentButtons);
         }
 
         public IReadOnlyList<YargFreeVocalsEngine> SubEngines => _subEngines;
@@ -602,13 +618,34 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
 
             var phrase = Notes[NoteIndex];
-            var percussion = GetNextPercussionNote(phrase, CurrentTick);
-            if (percussion is not null && CurrentTime >= percussion.Time)
+            var percussion = GetNextPercussionNote(phrase, CurrentTick, _resolvedPercussion.Contains);
+            if (percussion is not null)
             {
-                if (CurrentTime <= percussion.TimeEnd && HasHit)
+                // Gate on the full hit window (front/back tolerance), mirroring solo
+                // YargVocalsEngine.CheckPercussionHit. The previous raw [Time, TimeEnd]
+                // span gave ZERO early tolerance (CurrentTime >= Time) and, for a short
+                // percussion note, almost no late tolerance — so real taps were dropped
+                // even though they reached the engine. See
+                // docs/bugs/party-vocals-percussion-broken.md (Problem 2).
+                if (IsNoteInWindow(percussion, out var missed))
                 {
-                    AddScore(percussion);
-                    OnNoteHit?.Invoke(NoteIndex, percussion);
+                    if (HasHit)
+                    {
+                        // Consume locally (no note.SetHitState) so the shared note isn't
+                        // mutated, then score exactly as before.
+                        _resolvedPercussion.Add(percussion);
+                        AddScore(percussion);
+                        OnNoteHit?.Invoke(NoteIndex, percussion);
+                    }
+                }
+                else if (missed)
+                {
+                    // Back-end miss: the window has passed without a tap. Resolve the note
+                    // locally so it stops being "next due" (instead of lingering) and fire
+                    // the miss event, mirroring solo's MissNote(percussion) minus the
+                    // shared-note SetMissState.
+                    _resolvedPercussion.Add(percussion);
+                    OnNoteMissed?.Invoke(NoteIndex, percussion);
                 }
             }
             else
