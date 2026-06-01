@@ -71,13 +71,23 @@ public sealed class PartyVocalsCoordinatorEngineTests
         part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, tickLength, note, lyrics));
     }
 
+    // 480 tpqn @ 120bpm => seconds = tick / 960.0. The percussion child note's Time tracks
+    // its tick. (Previously this hardcoded Time=0.0/TimeLength=1.0, giving every note the
+    // hit window [0.0, 1.0] — wide and zero-anchored, which masked the coordinator's
+    // percussion-window bug; see docs/bugs/party-vocals-percussion-broken.md.)
     private static void AddPercussionPhrase(VocalsPart part, uint tickOffset, uint tickLength)
     {
-        var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, tickLength);
-        var percussionNote = new VocalNote(-1, 0, VocalNoteType.Percussion, 0.0, 1.0, tickOffset, tickLength / 2);
+        const double secondsPerTick = 1.0 / 960.0;
+        double phraseTime = tickOffset * secondsPerTick;
+        double phraseLen = tickLength * secondsPerTick;
+        uint percTickLen = tickLength / 2;
+
+        var note = new VocalNote(NoteFlags.None, false, phraseTime, phraseLen, tickOffset, tickLength);
+        var percussionNote = new VocalNote(-1, 0, VocalNoteType.Percussion,
+            phraseTime, percTickLen * secondsPerTick, tickOffset, percTickLen);
         note.AddChildNote(percussionNote);
-        var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.NonPitched, "Perc", 0.0, tickOffset) };
-        part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, tickLength, note, lyrics));
+        var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.NonPitched, "Perc", phraseTime, tickOffset) };
+        part.NotePhrases.Add(new VocalsPhrase(phraseTime, phraseLen, tickOffset, tickLength, note, lyrics));
     }
 
     private static void AddTalkiePhrase(VocalsPart part, uint tickOffset, uint tickLength)
@@ -992,7 +1002,7 @@ public sealed class PartyVocalsCoordinatorEngineTests
     {
         // AC1.1: A tap with a due percussion note scores it.
         var parts = new List<VocalsPart> { CreateVocalsPart() };
-        AddPercussionPhrase(parts[0], 0, 960); // Percussion note at tick 0-960
+        AddPercussionPhrase(parts[0], 480, 960); // Percussion note at tick 480 (t=0.5s)
 
         var engine = CreateCoordinator(parts, 2);
         var hitFired = false;
@@ -1001,12 +1011,12 @@ public sealed class PartyVocalsCoordinatorEngineTests
         // Drive to the note's time
         engine.Update(0.5);
 
-        // Queue a single Hit input
+        // Queue a single Hit input within the note's hit window
         var hitInput = GameInput.Create(0.5, VocalsAction.Hit, true);
         engine.QueueInput(ref hitInput);
 
-        // Advance to process the hit (need to advance past phrase end)
-        engine.Update(1.5); // Phrase ends at tick 480 (t=1.0s)
+        // Advance to process the hit (phrase ends at tick 1440 = t=1.5s)
+        engine.Update(1.6);
 
         // The percussion note should have been scored
         Assert.IsTrue(hitFired, "OnNoteHit should have fired for the percussion note");
@@ -1014,12 +1024,43 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     [Test]
+    public void Percussion_EarlyTapWithinHitWindow_ScoresPercussionNote_WindowRepro()
+    {
+        // RED repro for docs/bugs/party-vocals-percussion-broken.md (Problem 2).
+        // A tap landing 0.03s EARLY on a short, realistically-timed percussion note is
+        // well inside the engine's ±0.05s hit window. Solo (YargVocalsEngine) scores it
+        // via IsNoteInWindow (front/back tolerance). The coordinator gates on the raw
+        // span CurrentTime >= percussion.Time, which gives ZERO early tolerance, so the
+        // tap is dropped. This is why runtime taps reach the engine (logs A+B fire) but
+        // never score (log C never fires).
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        // Percussion at tick 4800 = t=5.0s (480 tpqn @120bpm). The raw span is [5.0, 5.5];
+        // the engine hit window is [4.95, 5.05].
+        AddPercussionPhrase(parts[0], 4800, 960);
+
+        var engine = CreateCoordinator(parts, 2);
+        int percussionHits = 0;
+        engine.OnNoteHit += (_, note) => { if (note.IsPercussion) percussionHits++; };
+
+        engine.Update(4.9);
+        // Tap at t=4.97: inside the hit window [4.95, 5.05], but BEFORE the raw span
+        // [5.0, 5.5] the old code required (CurrentTime >= percussion.Time).
+        var hit = GameInput.Create(4.97, VocalsAction.Hit, true);
+        engine.QueueInput(ref hit);
+        engine.Update(6.5); // process the tap, then advance past phrase end
+
+        Assert.AreEqual(1, percussionHits,
+            "An early tap within the hit window should score the percussion note, " +
+            "matching solo YargVocalsEngine. The coordinator's raw [Time, TimeEnd] gate drops it.");
+    }
+
+    [Test]
     public void Percussion_TapScoresNextDueNote_AC1_2()
     {
         // AC1.2: The note scored is the next due percussion note per GetNextPercussionNote windowing.
         var parts = new List<VocalsPart> { CreateVocalsPart() };
-        AddPercussionPhrase(parts[0], 0, 960);  // First percussion note at tick 0-960
-        AddPercussionPhrase(parts[0], 1920, 960); // Second percussion note at tick 1920-2880
+        AddPercussionPhrase(parts[0], 480, 960);  // First percussion note at tick 480 (t=0.5s)
+        AddPercussionPhrase(parts[0], 1920, 960); // Second percussion note at tick 1920 (t=2.0s)
 
         var engine = CreateCoordinator(parts, 2);
         var hitNoteIndex = -1;
@@ -1028,12 +1069,12 @@ public sealed class PartyVocalsCoordinatorEngineTests
         // Drive to the first note's time
         engine.Update(0.5);
 
-        // Queue a single Hit input
+        // Queue a single Hit input within the first note's hit window
         var hitInput = GameInput.Create(0.5, VocalsAction.Hit, true);
         engine.QueueInput(ref hitInput);
 
-        // Advance to process the hit (need to advance past phrase end)
-        engine.Update(1.5); // Phrase ends at tick 480 (t=1.0s)
+        // Advance to process the hit (first phrase ends at tick 1440 = t=1.5s)
+        engine.Update(1.6);
 
         // The first note (index 0) should have been scored, not the second
         Assert.AreEqual(0, hitNoteIndex, "First note (index 0) should have been scored");
@@ -1045,7 +1086,7 @@ public sealed class PartyVocalsCoordinatorEngineTests
     {
         // AC2.1: Multiple mics tapping the same due percussion note score it exactly once.
         var parts = new List<VocalsPart> { CreateVocalsPart() };
-        AddPercussionPhrase(parts[0], 0, 960); // Percussion note at tick 0-960
+        AddPercussionPhrase(parts[0], 480, 960); // Percussion note at tick 480 (t=0.5s)
 
         var engine = CreateCoordinator(parts, 2);
         var hitFired = false;
@@ -1060,8 +1101,8 @@ public sealed class PartyVocalsCoordinatorEngineTests
         engine.QueueInput(ref hitInput1);
         engine.QueueInput(ref hitInput2);
 
-        // Advance to process the hits
-        engine.Update(1.5);
+        // Advance to process the hits (phrase ends at tick 1440 = t=1.5s)
+        engine.Update(1.6);
 
         // The note should have been scored exactly once (HasHit is shared across mics)
         Assert.IsTrue(hitFired, "OnNoteHit should have fired");
