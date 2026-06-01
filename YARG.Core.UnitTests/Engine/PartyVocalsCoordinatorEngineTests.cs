@@ -1482,4 +1482,32 @@ public sealed class PartyVocalsCoordinatorEngineTests
             "Manual StarPower button should deploy SP when banked");
     }
 
+    /// Bot deploy: a Party Vocals *bot* must self-activate star power once it has
+    /// enough banked, exactly like the solo bot (YargVocalsEngine.UpdateBot toggles
+    /// IsStarPowerInputActive). The coordinator's UpdateBot is a no-op and the per-mic
+    /// sub-engines only toggle their own (dead-data) IsStarPowerInputActive, so the
+    /// authoritative coordinator never set it for a bot — the bot never deployed.
+    [Test]
+    public void BotCoordinator_DeploysStarPower_WhenBanked()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        // A phrase so the coordinator's UpdateHitLogic doesn't early-return on "no notes".
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var engine = new PartyVocalsCoordinatorEngine(
+            primaryChart, parts, CreateSyncTrack(), EngineParams, isBot: true, micCount: 1);
+
+        BankStarPower(engine, engine.TicksPerHalfSpBar + 100);
+        engine.Update(0.1);
+        Assert.That(engine.CanStarPowerActivate, Is.True, "precondition: a half bar is banked");
+
+        // No input is fed — a bot must self-activate.
+        engine.Update(0.5);
+
+        Assert.That(engine.EngineStats.IsStarPowerActive, Is.True,
+            "A Party Vocals bot with banked SP should deploy it (like the solo bot). The " +
+            "coordinator never toggled IsStarPowerInputActive for bots, so it never fired.");
+    }
+
 }
