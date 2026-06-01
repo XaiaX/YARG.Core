@@ -532,6 +532,113 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     // ================================================================
+    // Visual-event Tests (real-mic OnTargetNoteChanged → trail)
+    // ================================================================
+
+    [Test]
+    public void RealMic_OnNote_SubEngineFiresOnTargetNoteChanged()
+    {
+        // Regression guard for the missing per-mic trail. PartyVocalsPlayer's trail
+        // gate requires slot.TargetNote, which is populated ONLY by each sub-engine's
+        // OnTargetNoteChanged. Bots emit it from UpdateBot; real mics must emit it from
+        // CheckSingingHit (YargFreeVocalsEngine line ~425). After live mic input was
+        // re-routed through the packed-input queue, the meters/scoring path kept working
+        // (AccumulateMicPartHits) but the trail's target-note emit must still fire.
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60); // C4
+
+        var engine = CreateCoordinator(parts, micCount: 1); // isBot = false → real-mic path
+        bool fired = false;
+        VocalNote? captured = null;
+        engine.SubEngines[0].OnTargetNoteChanged += note => { fired = true; captured = note; };
+
+        engine.Update(0.1);
+        // Real mic sings C4 on the note. Same packed-queue path the runtime uses.
+        FeedPitches(engine, 1, new[] { new[] { 60f } }, 0.1, 1.0);
+
+        Assert.IsTrue(fired,
+            "Real-mic sub-engine must fire OnTargetNoteChanged while on a note (drives the per-mic trail)");
+        Assert.IsNotNull(captured, "Emitted target note should be non-null");
+    }
+
+    [Test]
+    public void RealMic_TwoMics_BothSubEnginesFireOnTargetNoteChanged()
+    {
+        // Faithful to the reported repro: two real mics, two HARM parts. Each mic's own
+        // sub-engine must fire OnTargetNoteChanged so its needle's trail can render.
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60); // HARM0 C4
+        AddPhrase(parts[1], 0, 960, 64); // HARM1 E4
+
+        var engine = CreateCoordinator(parts, micCount: 2); // isBot = false
+        var fired = new bool[2];
+        engine.SubEngines[0].OnTargetNoteChanged += _ => fired[0] = true;
+        engine.SubEngines[1].OnTargetNoteChanged += _ => fired[1] = true;
+
+        engine.Update(0.1);
+        // Mic 0 sings C4 (HARM0), mic 1 sings E4 (HARM1) — each on its own line.
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 64f } }, 0.1, 1.0);
+
+        Assert.IsTrue(fired[0], "Mic 0 sub-engine must fire OnTargetNoteChanged");
+        Assert.IsTrue(fired[1], "Mic 1 sub-engine must fire OnTargetNoteChanged");
+    }
+
+    [Test]
+    public void RealMic_TwoMics_MicOneLagging_StillFiresOnTargetNoteChanged()
+    {
+        // Robustness guard for the runtime queue ORDER from PartyVocalsPlayer.RouteMicInputs:
+        // mic 0's input is queued, then mic 1's at an EARLIER timestamp (mic 1 lagging),
+        // which BaseEngine.QueueInput snaps forward. This was a suspected cause of the
+        // missing trail (echoing bugfix #10) but turned out NOT to be — the emit survives
+        // frame-granularity disorder. Kept as a guard so the per-mic emit stays robust to it.
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 0, 960, 64);
+
+        var engine = CreateCoordinator(parts, micCount: 2);
+        var fired = new bool[2];
+        engine.SubEngines[0].OnTargetNoteChanged += _ => fired[0] = true;
+        engine.SubEngines[1].OnTargetNoteChanged += _ => fired[1] = true;
+
+        engine.Update(0.1);
+        const double fps = 60.0;
+        int frames = (int)(0.9 * fps);
+        for (int f = 1; f <= frames; f++)
+        {
+            double t0 = 0.1 + f / fps;
+            double t1 = 0.1 + (f - 0.5) / fps; // mic 1 half a frame behind mic 0
+            var in0 = new GameInput(t0, PartyVocalsInput.Pack(0, VocalsAction.Pitch), 60f);
+            engine.QueueInput(ref in0);
+            var in1 = new GameInput(t1, PartyVocalsInput.Pack(1, VocalsAction.Pitch), 64f);
+            engine.QueueInput(ref in1); // queued after in0 but earlier time
+            engine.Update(t0);
+        }
+
+        Assert.IsTrue(fired[0], "Mic 0 fires OnTargetNoteChanged");
+        Assert.IsTrue(fired[1], "Mic 1 (lagging) must STILL fire OnTargetNoteChanged for its trail");
+    }
+
+    [Test]
+    public void RealMic_OnNote_GetMicHittingPartsNonZero()
+    {
+        // The trail's hitting-gate also requires LastOnNoteTime, refreshed from
+        // coordinator.GetMicHittingParts(mic). The fill meters use a DIFFERENT path
+        // (CanonicalMeters from the allocator/deltas), so meters filling does NOT prove
+        // this bitmask is non-zero. If it reads 0 while the mic is on a note, the trail
+        // dies even though the target-note emit fired and the meters moved.
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60); // C4, child note spans ticks 0..480 (0..0.5s)
+
+        var engine = CreateCoordinator(parts, micCount: 1);
+        engine.Update(0.1);
+        // Sing C4 squarely inside the note window.
+        FeedPitches(engine, 1, new[] { new[] { 60f } }, 0.1, 0.3);
+
+        Assert.AreNotEqual(0u, engine.GetMicHittingParts(0),
+            "GetMicHittingParts must be non-zero while on a note (refreshes the trail's LastOnNoteTime)");
+    }
+
+    // ================================================================
     // Event + Throttle Tests (16-17)
     // AC11: Grading and event emission, AC13: HUD reads
     // ================================================================
