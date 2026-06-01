@@ -952,6 +952,32 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     [Test]
+    public void PartInCurrentPhrase_ReflectsPerPartPresence()
+    {
+        // Three parts: HARM0 at tick 0-960, HARM2 at tick 0-960, HARM1 has no phrase.
+        // After running through the phrase, PartInCurrentPhrase(0) and (2) should be true,
+        // PartInCurrentPhrase(1) should be false.
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true)
+        };
+        AddPhrase(parts[0], 0, 960, 60); // HARM0
+        AddPhrase(parts[2], 0, 960, 67); // HARM2
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.1);
+
+        // Drive into the phrase so _phraseTicksTotalPerPart gets populated.
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.1, 0.3);
+
+        Assert.IsTrue(engine.PartInCurrentPhrase(0), "HARM0 has notes in this phrase");
+        Assert.IsFalse(engine.PartInCurrentPhrase(1), "HARM1 has no notes in this phrase");
+        Assert.IsTrue(engine.PartInCurrentPhrase(2), "HARM2 has notes in this phrase");
+        Assert.IsFalse(engine.PartInCurrentPhrase(-1), "Negative index → false");
+        Assert.IsFalse(engine.PartInCurrentPhrase(99), "Out-of-range index → false");
+    }
+
+    [Test]
     public void Bot_ThreeMicsThreeHarms_EachBotHitsItsPart()
     {
         // Regression guard: bot Party Vocals builds one sub-engine per HARM part
