@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Linq;
 using YARG.Core.Chart;
 using YARG.Core.Input;
-using YARG.Core.Logging;
 
 namespace YARG.Core.Engine.Vocals.Engines
 {
@@ -336,11 +335,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             if (hit)
             {
                 EngineStats.TicksHit += phraseTicksTotal;
-                YargLogger.LogFormatWarning("PartyVocals SP diag: ProcessPhraseEnd hit=true grade={0} IsStarPower={1} Flags={2} Tick={3} SP ticks={4} IsBot={5}",
-                    grade, phrase.IsStarPower, phrase.Flags, phrase.Tick, BaseStats.StarPowerTickAmount, IsBot);
                 HitNote(phrase);
-                YargLogger.LogFormatWarning("PartyVocals SP diag: after HitNote SP ticks={0} StarPowerPhrasesHit={1}",
-                    BaseStats.StarPowerTickAmount, EngineStats.StarPowerPhrasesHit);
             }
             else
             {
