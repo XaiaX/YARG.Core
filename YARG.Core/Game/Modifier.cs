@@ -18,7 +18,8 @@ namespace YARG.Core.Game
         NoDynamics    = 1 << 8,
         NoVocalPercussion = 1 << 9,
         RangeCompress = 1 << 10,
-        OpensToGreens = 1 << 11
+        OpensToGreens = 1 << 11,
+        ManualVocalStarPower = 1 << 12
     }
 
     public static class ModifierConflicts
@@ -81,7 +82,8 @@ namespace YARG.Core.Game
                 GameMode.Vocals or
                 GameMode.PartyVocals =>
                     Modifier.UnpitchedOnly |
-                    Modifier.NoVocalPercussion,
+                    Modifier.NoVocalPercussion |
+                    Modifier.ManualVocalStarPower,
 
                 GameMode.ProKeys =>
                     Modifier.RangeCompress |
