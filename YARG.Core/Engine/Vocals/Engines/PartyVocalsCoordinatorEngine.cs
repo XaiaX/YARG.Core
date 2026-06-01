@@ -201,6 +201,16 @@ namespace YARG.Core.Engine.Vocals.Engines
                 return;
             }
 
+            // Bot self-activation. Mirrors YargVocalsEngine.UpdateBot: a bot toggles its
+            // own StarPower input so UpdateStarPower deploys once it has half a bar. The
+            // coordinator's UpdateBot is a no-op (sub-engines run their own), and the
+            // sub-engines only toggle their own dead-data IsStarPowerInputActive — so
+            // without this the authoritative coordinator never deployed SP for a bot.
+            if (IsBot)
+            {
+                IsStarPowerInputActive = CanStarPowerActivate && !IsStarPowerInputActive;
+            }
+
             // Drive each sub-engine forward for this tick. Each sub-engine runs its
             // full single-mic lifecycle (MutateStateWithInput → UpdateHitLogic →
             // phrase-end). Sub-engine outputs nobody reads are dead data.
