@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using YARG.Core.Chart;
 using YARG.Core.Input;
+using YARG.Core.Logging;
 
 namespace YARG.Core.Engine.Vocals.Engines
 {
@@ -332,6 +333,18 @@ namespace YARG.Core.Engine.Vocals.Engines
             var metersSnapshot = new double[partCount];
             Array.Copy(_canonicalMeters, metersSnapshot, partCount);
 
+            // ── PV-SP-DIAG (temporary instrumentation) ──────────────────────────────
+            // Capture SP state immediately before the hit/miss decision so we can see
+            // exactly what HitNote does with this phrase. Logs for BOTH bot and live
+            // coordinators (distinguished by IsBot); compare the two on the same song.
+            // Key questions: does the SP-flagged phrase reach HitNote with hit=true, and
+            // is the award gated by the *raw* meter (theory: only a true 100% awards)?
+            uint spTicksBefore = EngineStats.StarPowerTickAmount;
+            int spPhrasesBefore = EngineStats.StarPowerPhrasesHit;
+            int noteIdxBefore = NoteIndex; // HitNote increments NoteIndex, so snapshot it now
+            string metersStr = string.Join(",", metersSnapshot.Select(m => m.ToString("0.###")));
+            // ────────────────────────────────────────────────────────────────────────
+
             if (hit)
             {
                 EngineStats.TicksHit += phraseTicksTotal;
@@ -344,6 +357,18 @@ namespace YARG.Core.Engine.Vocals.Engines
                 EngineStats.TicksMissed += phraseTicksTotal - ticksHit;
                 MissNote(phrase, bestMeter);
             }
+
+            // ── PV-SP-DIAG (temporary instrumentation) ──────────────────────────────
+            YargLogger.LogWarning(
+                $"PV-SP-DIAG IsBot={IsBot} NoteIdx={noteIdxBefore} Tick={phrase.Tick}-{phrase.TickEnd} " +
+                $"IsSP={phrase.IsStarPower} Flags={phrase.Flags} | " +
+                $"grade={grade} hit={hit} awesomeCount={awesomeCount} | " +
+                $"threshold={EngineParameters.PhraseHitPercent:0.###} bestMeter={bestMeter:0.###} " +
+                $"bestMeterPct={bestMeter * 100.0:0.#}% meters=[{metersStr}] | " +
+                $"spTicks {spTicksBefore}->{EngineStats.StarPowerTickAmount} " +
+                $"(+{EngineStats.StarPowerTickAmount - spTicksBefore}) " +
+                $"spPhrasesHit {spPhrasesBefore}->{EngineStats.StarPowerPhrasesHit}");
+            // ────────────────────────────────────────────────────────────────────────
 
             OnPhraseHit?.Invoke(bestMeter / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
             OnPartyVocalsPhrase?.Invoke(grade, metersSnapshot, isLastPhrase);
