@@ -182,6 +182,18 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
         }
 
+        // Duration of the current phrase in seconds. Lets the HUD convert a real-time
+        // count-in hold (e.g. 500ms) into a fraction of CurrentPhraseProgress.
+        public double CurrentPhraseDurationSeconds
+        {
+            get
+            {
+                if (NoteIndex < 0 || NoteIndex >= Notes.Count) return 0.0;
+                var phrase = Notes[NoteIndex];
+                return phrase.TimeEnd - phrase.Time;
+            }
+        }
+
         public IReadOnlyList<double> CanonicalMeters => _canonicalMeters;
 
         public double AwesomeThreshold => EngineParameters.PhraseHitPercent;
