@@ -25,6 +25,13 @@ public sealed class PartyVocalsCoordinatorEngineTests
         VocalsEngineTests.SoloBonusStarMultiplierThresholds,
         1.5f, 0.5f, AwesomeThreshold, 60.0, true, 1000);
 
+    private static readonly VocalsEngineParameters EngineParamsNoSingToActivate = new(
+        new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0),
+        4,
+        VocalsEngineTests.StarMultiplierThresholds,
+        VocalsEngineTests.SoloBonusStarMultiplierThresholds,
+        1.5f, 0.5f, AwesomeThreshold, 60.0, false, 1000);
+
     private static readonly FieldInfo HarmDirectTicksField =
         typeof(PartyVocalsCoordinatorEngine).GetField("_harmDirectTicks",
             BindingFlags.NonPublic | BindingFlags.Instance)
@@ -51,6 +58,7 @@ public sealed class PartyVocalsCoordinatorEngineTests
     {
         var sync = new SyncTrack(480);
         sync.Tempos.Add(new TempoChange(120.0, 0.0, 0));
+        sync.TimeSignatures.Add(new TimeSignatureChange(4, 4, 0.0, 0, 0, 0, 0, 0));
         return sync;
     }
 
@@ -84,9 +92,15 @@ public sealed class PartyVocalsCoordinatorEngineTests
     private static PartyVocalsCoordinatorEngine CreateCoordinator(
         List<VocalsPart> parts, int micCount)
     {
+        return CreateCoordinator(parts, micCount, EngineParams);
+    }
+
+    private static PartyVocalsCoordinatorEngine CreateCoordinator(
+        List<VocalsPart> parts, int micCount, VocalsEngineParameters engineParams)
+    {
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
         return new PartyVocalsCoordinatorEngine(
-            primaryChart, parts, CreateSyncTrack(), EngineParams, false, micCount);
+            primaryChart, parts, CreateSyncTrack(), engineParams, false, micCount);
     }
 
     private static (PartyVocalsCoordinatorEngine engine, List<PhraseGrade> grades) RunCoordinatorScenario(
@@ -1278,6 +1292,88 @@ public sealed class PartyVocalsCoordinatorEngineTests
             Assert.AreEqual(0, queue.Count,
                 "Sub-engine input queue must be empty — sub-engines receive no queued input");
         }
+    }
+
+    // ================================================================
+    // Sing-to-activate star power tests (overdrive.AC1, AC2)
+    // ================================================================
+
+    private static void BankStarPower(PartyVocalsCoordinatorEngine engine, uint ticks)
+    {
+        engine.EngineStats.StarPowerTickAmount += ticks;
+    }
+
+    /// overdrive.AC1.1: Singing deploys SP when sing-to-activate is on and SP is banked.
+    [Test]
+    public void SingToActivate_DeploysStarPower_WhenSingingAndSpBanked()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddTalkiePhrase(parts[0], 0, 960);
+        var engine = CreateCoordinator(parts, 2);
+
+        BankStarPower(engine, engine.TicksPerHalfSpBar + 100);
+        engine.Update(0.1);
+
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.1, 0.1);
+
+        Assert.That(engine.EngineStats.IsStarPowerActive, Is.True,
+            "Sing-to-activate should deploy SP when any mic sings and SP is banked");
+    }
+
+    /// overdrive.AC1.2: No deploy when CanStarPowerActivate is false.
+    [Test]
+    public void SingToActivate_DoesNotDeploy_WhenSpNotBanked()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddTalkiePhrase(parts[0], 0, 960);
+        var engine = CreateCoordinator(parts, 2);
+
+        engine.Update(0.1);
+        // Don't bank any SP
+        Assert.That(engine.CanStarPowerActivate, Is.False);
+
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.1, 0.1);
+
+        Assert.That(engine.EngineStats.IsStarPowerActive, Is.False,
+            "SP must not activate when CanStarPowerActivate is false");
+    }
+
+    /// overdrive.AC1.3: No deploy when sing-to-activate is off.
+    [Test]
+    public void SingToActivate_DoesNotDeploy_WhenFlagOff()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddTalkiePhrase(parts[0], 0, 960);
+        var engine = CreateCoordinator(parts, 2, EngineParamsNoSingToActivate);
+
+        BankStarPower(engine, engine.TicksPerHalfSpBar + 100);
+        engine.Update(0.1);
+
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.1, 0.1);
+
+        Assert.That(engine.EngineStats.IsStarPowerActive, Is.False,
+            "SP must not activate via singing when SingToActivateStarPower is off");
+    }
+
+    /// overdrive.AC2.1: Manual button deploy still works.
+    [Test]
+    public void ManualDeploy_ActivatesStarPower_WhenSpBanked()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddTalkiePhrase(parts[0], 0, 960);
+        var engine = CreateCoordinator(parts, 2);
+
+        BankStarPower(engine, engine.TicksPerHalfSpBar + 100);
+        engine.Update(0.1);
+        Assert.That(engine.CanStarPowerActivate, Is.True);
+
+        int packed = PartyVocalsInput.Pack(0, VocalsAction.StarPower);
+        var input = new GameInput(0.15, packed, true);
+        engine.QueueInput(ref input);
+        engine.Update(0.2);
+
+        Assert.That(engine.EngineStats.IsStarPowerActive, Is.True,
+            "Manual StarPower button should deploy SP when banked");
     }
 
 }

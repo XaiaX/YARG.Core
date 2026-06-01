@@ -198,6 +198,21 @@ namespace YARG.Core.Engine.Vocals.Engines
             // scores one band hit per tap with no double-count.
             CheckPercussionHit();
 
+            // Band-slot sing-to-activate: mirror YargVocalsEngine.cs:211.
+            // Manual deploy is handled separately via IsStarPowerInputActive
+            // in UpdateStarPower (BaseEngine.Generic.cs:911).
+            if (CanStarPowerActivate && EngineParameters.SingToActivateStarPower)
+            {
+                for (int i = 0; i < _micCount; i++)
+                {
+                    if (_micSangThisTick[i])
+                    {
+                        ActivateStarPower();
+                        break;
+                    }
+                }
+            }
+
             // Read per-tick credit from each sub-engine's LastTickPartDeltas and
             // per-mic hitting-parts bitmask.
             Array.Clear(_lastTickMicDeltas, 0, _lastTickMicDeltas.Length);
