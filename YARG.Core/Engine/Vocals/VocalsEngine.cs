@@ -154,8 +154,11 @@ namespace YARG.Core.Engine.Vocals
             {
                 if (note.IsStarPower)
                 {
+                    YargLogger.LogFormatWarning("VocalsEngine.HitNote: Awarding SP! note.Tick={0} SP ticks before={1} TicksPerQuarter={2}",
+                        note.Tick, BaseStats.StarPowerTickAmount, TicksPerQuarterSpBar);
                     AwardStarPower(note);
                     EngineStats.StarPowerPhrasesHit++;
+                    YargLogger.LogFormatWarning("VocalsEngine.HitNote: SP ticks after={0}", BaseStats.StarPowerTickAmount);
                 }
 
                 if (note.IsSoloStart)
