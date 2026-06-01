@@ -77,6 +77,68 @@ public sealed class VocalsEngineTests
         Assert.That(allocated, Is.EqualTo(0));
     }
 
+    private static SyncTrack Sync120()
+    {
+        var sync = new SyncTrack(480);
+        sync.Tempos.Add(new TempoChange(120.0, 0.0, 0));
+        sync.TimeSignatures.Add(new TimeSignatureChange(4, 4, 0.0, 0, 0, 0, 0, 0));
+        return sync;
+    }
+
+    // 480 tpqn @ 120bpm => seconds = tick / 960.
+    [Test]
+    public void Bot_HitsPercussionNote_PurePhrase()
+    {
+        // Pure percussion phrase at t=5.0 (tick 4800); percussion child at the phrase start.
+        var phrase = new VocalNote(NoteFlags.None, false, 5.0, 0.5, 4800, 480);
+        var percussion = new VocalNote(-1, 0, VocalNoteType.Percussion, 5.0, 0.1, 4800, 96);
+        phrase.AddChildNote(percussion);
+
+        var chart = new InstrumentDifficulty<VocalNote>(Instrument.Vocals, Difficulty.Expert,
+            new() { phrase }, new(), new());
+
+        var engine = new YargVocalsEngine(chart, Sync120(), EngineParameters, isBot: true);
+        int percussionHits = 0;
+        engine.OnNoteHit += (_, note) => { if (note.IsPercussion) percussionHits++; };
+
+        // Simulate frame-rate ticks across the percussion window.
+        for (double t = 4.8; t <= 6.0; t += 1.0 / 60.0)
+        {
+            engine.Update(t);
+        }
+
+        Assert.That(percussionHits, Is.EqualTo(1),
+            "A solo vocals bot should hit a percussion note in a pure percussion phrase.");
+    }
+
+    [Test]
+    public void Bot_HitsPercussionNote_MixedPhrase()
+    {
+        // Mixed phrase: lyric (t=5.0) then percussion (t=5.5) then lyric (t=6.0).
+        var phrase = new VocalNote(NoteFlags.None, false, 5.0, 1.5, 4800, 1440);
+        var firstLyric = new VocalNote(60, 0, VocalNoteType.Lyric, 5.0, 0.4, 4800, 384);
+        var percussion = new VocalNote(-1, 0, VocalNoteType.Percussion, 5.5, 0.1, 5280, 96);
+        var secondLyric = new VocalNote(62, 0, VocalNoteType.Lyric, 6.0, 0.4, 5760, 384);
+        phrase.AddChildNote(firstLyric);
+        phrase.AddChildNote(percussion);
+        phrase.AddChildNote(secondLyric);
+
+        var chart = new InstrumentDifficulty<VocalNote>(Instrument.Vocals, Difficulty.Expert,
+            new() { phrase }, new(), new());
+
+        var engine = new YargVocalsEngine(chart, Sync120(), EngineParameters, isBot: true);
+        int percussionHits = 0;
+        engine.OnNoteHit += (_, note) => { if (note.IsPercussion) percussionHits++; };
+
+        for (double t = 4.8; t <= 7.0; t += 1.0 / 60.0)
+        {
+            engine.Update(t);
+        }
+
+        Assert.That(percussionHits, Is.EqualTo(1),
+            "A solo vocals bot should hit a percussion note in a mixed phrase.");
+    }
+
     private static TestVocalsEngine CreateEngine(out VocalNote phrase, out VocalNote firstLyric,
         out VocalNote percussion, out VocalNote secondLyric)
     {

@@ -978,6 +978,31 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     [Test]
+    public void Bot_HitsPercussionNote()
+    {
+        // A Party Vocals bot should hit percussion notes. The coordinator scores percussion
+        // via HasHit, which is only set by a queued Hit input (MutateStateWithInput). Bots
+        // queue no inputs and the coordinator's UpdateBot is a no-op, so a bot currently
+        // never scores percussion (live mics do). Repro for the reported bug.
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPercussionPhrase(parts[0], 480, 960); // percussion at tick 480 (t=0.5s)
+
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var engine = new PartyVocalsCoordinatorEngine(
+            primaryChart, parts, CreateSyncTrack(), EngineParams, isBot: true, micCount: 1);
+
+        int percussionHits = 0;
+        engine.OnNoteHit += (_, note) => { if (note.IsPercussion) percussionHits++; };
+
+        int totalFrames = (int) (2.0 * ApproximateVocalFps);
+        for (int f = 0; f < totalFrames; f++)
+            engine.Update((f + 1) / ApproximateVocalFps);
+
+        Assert.That(percussionHits, Is.EqualTo(1),
+            "A Party Vocals bot should hit the percussion note.");
+    }
+
+    [Test]
     public void PartInNextPhrase_ReflectsNextPhrasePerPartPresence()
     {
         // Master (parts[0]) has TWO phrases: tick 0-960 and tick 1920-2880.
