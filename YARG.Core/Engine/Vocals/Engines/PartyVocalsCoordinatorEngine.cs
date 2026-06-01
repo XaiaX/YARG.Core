@@ -154,6 +154,34 @@ namespace YARG.Core.Engine.Vocals.Engines
             partIndex >= 0 && partIndex < _phraseTicksTotalPerPart.Length
             && _phraseTicksTotalPerPart[partIndex] > 0u;
 
+        // True if the part has a (non-percussion) note in the NEXT master phrase. Used by
+        // the HUD count-in drain so a meter can warn the player a phrase before their line
+        // returns. Computed on demand (the next phrase hasn't started, so the per-tick
+        // _phraseTicksTotalPerPart array doesn't cover it).
+        public bool PartInNextPhrase(int partIndex)
+        {
+            if (partIndex < 0 || partIndex >= _allParts.Length) return false;
+            int next = NoteIndex + 1;
+            if (next < 0 || next >= Notes.Count) return false;
+            return GetTicksInPhraseForPart(_allParts[partIndex], Notes[next]) > 0u;
+        }
+
+        // Progress 0..1 through the CURRENT phrase's tick span. Drives the count-in drain.
+        // Uses the phrase span (Tick..TickEnd), NOT PhraseTicksTotal — that is the sung-hit
+        // tick total and would drain far too fast on sparse phrases.
+        public double CurrentPhraseProgress
+        {
+            get
+            {
+                if (NoteIndex < 0 || NoteIndex >= Notes.Count) return 0.0;
+                var phrase = Notes[NoteIndex];
+                uint span = phrase.TickEnd - phrase.Tick;
+                if (span == 0) return 0.0;
+                double p = ((double) CurrentTick - phrase.Tick) / span;
+                return p < 0.0 ? 0.0 : (p > 1.0 ? 1.0 : p);
+            }
+        }
+
         public IReadOnlyList<double> CanonicalMeters => _canonicalMeters;
 
         public double AwesomeThreshold => EngineParameters.PhraseHitPercent;
@@ -587,9 +615,11 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         #region Helpers
 
-        private uint GetTicksInPhraseForPart(VocalsPart part)
+        private uint GetTicksInPhraseForPart(VocalsPart part) =>
+            GetTicksInPhraseForPart(part, Notes[NoteIndex]);
+
+        private uint GetTicksInPhraseForPart(VocalsPart part, VocalNote masterPhrase)
         {
-            var masterPhrase = Notes[NoteIndex];
             uint masterStart = masterPhrase.Tick;
             uint masterEnd = masterPhrase.TickEnd;
 

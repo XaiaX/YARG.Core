@@ -978,6 +978,49 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     [Test]
+    public void PartInNextPhrase_ReflectsNextPhrasePerPartPresence()
+    {
+        // Master (parts[0]) has TWO phrases: tick 0-960 and tick 1920-2880.
+        // While in the first phrase, "next phrase" is the tick 1920-2880 window.
+        //   HARM0: present in next (its own second phrase).
+        //   HARM1: present in next (charted at 1920-2880).
+        //   HARM2: present only in the FIRST phrase (0-960) → absent in next.
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true)
+        };
+        AddPhrase(parts[0], 0, 960, 60);     // HARM0 phrase 1
+        AddPhrase(parts[0], 1920, 960, 60);  // HARM0 phrase 2 (the "next" master phrase)
+        AddPhrase(parts[1], 1920, 960, 64);  // HARM1 only in the next phrase
+        AddPhrase(parts[2], 0, 960, 67);     // HARM2 only in the first phrase
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.1); // NoteIndex = 0 (first phrase)
+
+        Assert.IsTrue(engine.PartInNextPhrase(0), "HARM0 has a note in the next phrase");
+        Assert.IsTrue(engine.PartInNextPhrase(1), "HARM1 has a note in the next phrase");
+        Assert.IsFalse(engine.PartInNextPhrase(2), "HARM2 is only in the current phrase");
+        Assert.IsFalse(engine.PartInNextPhrase(-1), "Negative index → false");
+        Assert.IsFalse(engine.PartInNextPhrase(99), "Out-of-range index → false");
+    }
+
+    [Test]
+    public void CurrentPhraseProgress_TracksTickSpanOfCurrentPhrase()
+    {
+        // Phrase spans tick 0-960 = t 0.0..1.0 (480 tpqn @120bpm). At t=0.5 the engine is
+        // halfway through the phrase span, so progress ≈ 0.5 — driven by the SPAN, not by
+        // how much was sung.
+        var parts = new List<VocalsPart> { CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60);
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.5);
+
+        Assert.That(engine.CurrentPhraseProgress, Is.EqualTo(0.5).Within(0.05),
+            "Progress should reflect position within the phrase's tick span");
+    }
+
+    [Test]
     public void Bot_ThreeMicsThreeHarms_EachBotHitsItsPart()
     {
         // Regression guard: bot Party Vocals builds one sub-engine per HARM part
