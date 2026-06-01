@@ -196,22 +196,8 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Score percussion taps at the band level. The coordinator aggregates
             // any mic's Hit into a single HasHit (MutateStateWithInput), so this
             // scores one band hit per tap with no double-count.
+            // Also handles sing-to-activate (mirrors YargVocalsEngine.cs:188-218).
             CheckPercussionHit();
-
-            // Band-slot sing-to-activate: mirror YargVocalsEngine.cs:211.
-            // Manual deploy is handled separately via IsStarPowerInputActive
-            // in UpdateStarPower (BaseEngine.Generic.cs:911).
-            if (CanStarPowerActivate && EngineParameters.SingToActivateStarPower)
-            {
-                for (int i = 0; i < _micCount; i++)
-                {
-                    if (_micSangThisTick[i])
-                    {
-                        ActivateStarPower();
-                        break;
-                    }
-                }
-            }
 
             // Read per-tick credit from each sub-engine's LastTickPartDeltas and
             // per-mic hitting-parts bitmask.
@@ -579,15 +565,9 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         private void CheckPercussionHit()
         {
-            if (!HasHit)
-            {
-                return;
-            }
-
-            HasHit = false;
-
             if (NoteIndex >= Notes.Count)
             {
+                HasHit = false;
                 return;
             }
 
@@ -595,13 +575,23 @@ namespace YARG.Core.Engine.Vocals.Engines
             var percussion = GetNextPercussionNote(phrase, CurrentTick);
             if (percussion is not null && CurrentTime >= percussion.Time)
             {
-                // Check if the current time is within the note's bounds
-                if (CurrentTime <= percussion.TimeEnd)
+                if (CurrentTime <= percussion.TimeEnd && HasHit)
                 {
                     AddScore(percussion);
                     OnNoteHit?.Invoke(NoteIndex, percussion);
                 }
             }
+            else
+            {
+                // Mirror YargVocalsEngine.cs:210-214: singing (or any noise) can
+                // result in a percussion hit call, so check sing-to-activate here.
+                if (HasHit && CanStarPowerActivate && EngineParameters.SingToActivateStarPower)
+                {
+                    ActivateStarPower();
+                }
+            }
+
+            HasHit = false;
         }
 
         #endregion

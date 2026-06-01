@@ -1303,7 +1303,7 @@ public sealed class PartyVocalsCoordinatorEngineTests
         engine.EngineStats.StarPowerTickAmount += ticks;
     }
 
-    /// overdrive.AC1.1: Singing deploys SP when sing-to-activate is on and SP is banked.
+    /// overdrive.AC1.1: A hit (sing-to-activate noise) deploys SP when flag is on and SP is banked.
     [Test]
     public void SingToActivate_DeploysStarPower_WhenSingingAndSpBanked()
     {
@@ -1314,10 +1314,14 @@ public sealed class PartyVocalsCoordinatorEngineTests
         BankStarPower(engine, engine.TicksPerHalfSpBar + 100);
         engine.Update(0.1);
 
-        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.1, 0.1);
+        // Queue a Hit action (mirrors how solo engine triggers sing-to-activate
+        // via HasHit in CheckPercussionHit's else branch)
+        var hitInput = GameInput.Create(0.15, VocalsAction.Hit, true);
+        engine.QueueInput(ref hitInput);
+        engine.Update(0.2);
 
         Assert.That(engine.EngineStats.IsStarPowerActive, Is.True,
-            "Sing-to-activate should deploy SP when any mic sings and SP is banked");
+            "Sing-to-activate should deploy SP on hit when SP is banked");
     }
 
     /// overdrive.AC1.2: No deploy when CanStarPowerActivate is false.
@@ -1329,10 +1333,11 @@ public sealed class PartyVocalsCoordinatorEngineTests
         var engine = CreateCoordinator(parts, 2);
 
         engine.Update(0.1);
-        // Don't bank any SP
         Assert.That(engine.CanStarPowerActivate, Is.False);
 
-        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.1, 0.1);
+        var hitInput = GameInput.Create(0.15, VocalsAction.Hit, true);
+        engine.QueueInput(ref hitInput);
+        engine.Update(0.2);
 
         Assert.That(engine.EngineStats.IsStarPowerActive, Is.False,
             "SP must not activate when CanStarPowerActivate is false");
@@ -1349,10 +1354,12 @@ public sealed class PartyVocalsCoordinatorEngineTests
         BankStarPower(engine, engine.TicksPerHalfSpBar + 100);
         engine.Update(0.1);
 
-        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.1, 0.1);
+        var hitInput = GameInput.Create(0.15, VocalsAction.Hit, true);
+        engine.QueueInput(ref hitInput);
+        engine.Update(0.2);
 
         Assert.That(engine.EngineStats.IsStarPowerActive, Is.False,
-            "SP must not activate via singing when SingToActivateStarPower is off");
+            "SP must not activate via hit when SingToActivateStarPower is off");
     }
 
     /// overdrive.AC2.1: Manual button deploy still works.
