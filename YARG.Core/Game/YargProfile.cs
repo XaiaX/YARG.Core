@@ -123,8 +123,12 @@ namespace YARG.Core.Game
 
         // Sticky Solo-vs-HARM preference for Party Vocals. Persisted in JSON AND in the
         // binary replay (unlike the mic-count knob) because it determines which notes are
-        // scored. Resolution applies graceful fallback; this field is only ever written by
-        // an explicit user choice, never by a fallback.
+        // scored. Resolution (VocalChartSelection.ResolveMultitrack) applies graceful
+        // fallback but never writes this field, which is what lets it spring back when a
+        // later song supports the preferred chart. It is written only by an explicit user
+        // choice OR by the difficulty-select lock that copies the first Party Vocals
+        // player's choice onto later players (they share one VocalTrack, so the chart must
+        // match) — never by resolution fallback.
         [JsonProperty]
         private byte _partyVocalsChartPreference;
 
