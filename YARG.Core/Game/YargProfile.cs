@@ -90,15 +90,48 @@ namespace YARG.Core.Game
         /// </summary>
         public Difficulty DifficultyFallback;
 
+        /// <summary>
+        /// The harmony part the player last *explicitly* selected. Mirrors
+        /// <see cref="DifficultyFallback"/>: songs with fewer parts never overwrite it,
+        /// so the preference survives visiting a song where it isn't available.
+        /// Serialized as "HarmonyIndex" for compatibility with existing profiles.
+        /// </summary>
         [JsonProperty("HarmonyIndex")]
+        private byte _harmonyIndexFallback;
+
         private byte _harmonyIndex;
 
+        /// <summary>
+        /// The harmony index, used for determining what harmony part the player selected.
+        /// Does nothing if <see cref="CurrentInstrument"/> is not a harmony.
+        /// Setting this counts as an explicit selection and updates the fallback;
+        /// use <see cref="ResolveHarmonyIndex"/> for per-song adjustment.
+        /// </summary>
         [JsonIgnore]
         public byte HarmonyIndex
         {
             // Expose the stored index when playing Harmony OR Party Vocals.
             get => (CurrentInstrument == Instrument.Harmony || CurrentInstrument == Instrument.PartyVocals) ? _harmonyIndex : (byte) 0;
-            set => _harmonyIndex = value;
+            set => _harmonyIndex = _harmonyIndexFallback = value;
+        }
+
+        /// <summary>
+        /// Recomputes the effective harmony index for a song with
+        /// <paramref name="harmonyPartCount"/> parts from the player's last explicit
+        /// selection, clamping to the highest available part rather than resetting to
+        /// zero. The explicit selection itself is left untouched, so a song with fewer
+        /// parts doesn't erase the preference (same behavior as
+        /// <see cref="DifficultyFallback"/> for Expert+). Operates on the raw backing
+        /// field so it works regardless of <see cref="CurrentInstrument"/>.
+        /// </summary>
+        public void ResolveHarmonyIndex(int harmonyPartCount)
+        {
+            if (harmonyPartCount <= 0)
+                return;
+
+            _harmonyIndex = _harmonyIndexFallback < harmonyPartCount
+                ? _harmonyIndexFallback
+                : (byte) (harmonyPartCount - 1);
         }
 
         // 0 = Auto (one synthetic vocalist per HARM part in the chart, the default
@@ -215,7 +248,7 @@ namespace YARG.Core.Game
             CurrentInstrument = (Instrument) stream.ReadByte();
             CurrentDifficulty = (Difficulty) stream.ReadByte();
             CurrentModifiers = (Modifier) stream.Read<ulong>(Endianness.Little);
-            _harmonyIndex = stream.ReadByte();
+            _harmonyIndex = _harmonyIndexFallback = stream.ReadByte();
 
             if (Version >= 9 && Version < 11)
             {
@@ -479,6 +512,10 @@ namespace YARG.Core.Game
         [OnDeserialized]
         public void ValidateJsonDeserialization(StreamingContext context)
         {
+            // Seed the effective harmony index from the saved preference; it is
+            // re-resolved against each song's part count in difficulty select.
+            _harmonyIndex = _harmonyIndexFallback;
+
             ValidatePreferredInstrument();
         }
 
