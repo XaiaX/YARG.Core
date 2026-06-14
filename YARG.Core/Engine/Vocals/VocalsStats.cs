@@ -69,19 +69,5 @@ namespace YARG.Core.Engine.Vocals
         {
             return new VocalsReplayStats(name, isReplayPlayer, this);
         }
-
-        /// <summary>
-        /// Maps a phrase hit fraction (0–1) to a solo-vocal <see cref="PhraseGrade"/>
-        /// for score-screen display purposes only.
-        /// </summary>
-        public static PhraseGrade SoloGradeFromFraction(float fraction)
-        {
-            if (fraction >= 1f)  return PhraseGrade.Awesome;
-            if (fraction >= 0.8f) return PhraseGrade.Strong;
-            if (fraction >= 0.7f) return PhraseGrade.Good;
-            if (fraction >= 0.6f) return PhraseGrade.Okay;
-            if (fraction >= 0.1f) return PhraseGrade.Messy;
-            return PhraseGrade.Awful;
-        }
     }
 }

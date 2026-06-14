@@ -16,13 +16,5 @@ namespace YARG.Core.Engine.Vocals
         Awesome,
         DoubleAwesome,
         TripleAwesome,
-
-        // Solo-vocal specific grades (used on the score screen phrase histogram).
-        // These are derived from the phrase hit fraction via VocalsStats.SoloGradeFromFraction.
-        Strong,
-        Good,
-        Okay,
-        Messy,
-        Awful,
     }
 }
