@@ -24,18 +24,6 @@ namespace YARG.Core.Engine.Vocals
 
         public PhraseHitEvent? OnPhraseHit;
 
-        public delegate void PartyVocalsPhraseEvent(
-            PhraseGrade grade,
-            IReadOnlyList<double> canonicalMeters,
-            bool isLastPhrase);
-
-        /// <summary>
-        /// Fires at the end of each phrase for multi-mic Party Vocals players. Provides the
-        /// final N-awesome grade and per-HARM canonical meter values. For single-mic profiles,
-        /// OnPhraseHit fires instead (unchanged signature).
-        /// </summary>
-        public PartyVocalsPhraseEvent? OnPartyVocalsPhrase;
-
         /// <summary>
         /// Whether or not the player/bot has hit their mic in the current update.
         /// </summary>

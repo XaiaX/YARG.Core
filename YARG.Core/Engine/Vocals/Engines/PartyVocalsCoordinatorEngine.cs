@@ -405,7 +405,19 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         #endregion
 
-        // OnPartyVocalsPhrase is inherited from VocalsEngine — no re-declaration needed.
+        public delegate void PartyVocalsPhraseEvent(
+            PhraseGrade grade,
+            IReadOnlyList<double> canonicalMeters,
+            bool isLastPhrase);
+
+        /// <summary>
+        /// Fires at the end of each phrase for multi-mic Party Vocals players. Provides the
+        /// final N-awesome grade and per-HARM canonical meter values. For single-mic profiles,
+        /// the base engine's OnPhraseHit fires instead (unchanged signature). Declared here
+        /// rather than on VocalsEngine so the prototype's phrase-end event stays off the
+        /// upstream base engine.
+        /// </summary>
+        public PartyVocalsPhraseEvent? OnPartyVocalsPhrase;
 
         #region Phrase-End Logic
 
