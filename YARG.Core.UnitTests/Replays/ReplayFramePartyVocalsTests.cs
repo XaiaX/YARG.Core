@@ -14,7 +14,7 @@ namespace YARG.Core.UnitTests.Replays
     public class ReplayFramePartyVocalsTests
     {
         private static readonly VocalsEngineParameters EngineParameters = new(
-            new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0),
+            new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0, 0),
             4,
             new float[] { 0.05f, 0.11f, 0.19f, 0.46f, 0.77f, 1.06f },
             new float[] { 0.05f, 0.1f, 0.2f, 0.35f, 0.65f, 0.95f },
@@ -133,9 +133,14 @@ namespace YARG.Core.UnitTests.Replays
         }
 
         [Test]
-        public void V14Replay_PerMicInputsIsNull()
+        public void NonPartyVocalsFrame_CurrentVersion_DeserializesInputs()
         {
-            // Create a frame with no mic data (simulates pre-v15 replay)
+            // A non-Party-Vocals (solo) frame stores inputs as a flat stream with no
+            // trailing per-mic block. Round-trip it at the current replay version and
+            // confirm the inputs deserialize. (This previously read back as v14; current
+            // serialization always writes the lane proximity field added by the autohit
+            // lane rework, so v14 — which predates it — is no longer a format that current
+            // serialization can produce.)
             var profile = new YargProfile(Guid.NewGuid())
             {
                 CurrentInstrument = Instrument.Vocals,
@@ -150,20 +155,9 @@ namespace YARG.Core.UnitTests.Replays
             };
             var frame = new ReplayFrame(profile, EngineParameters, stats, inputs);
 
-            // Manually serialize only the pre-v15 fields
-            using var memoryStream = new MemoryStream();
-            using var writer = new BinaryWriter(memoryStream);
-            frame.Serialize(writer);
-            writer.Flush();
+            var deserialized = RoundTripV16(frame);
 
-            var bytes = memoryStream.ToArray();
-            var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
-            bytes.CopyTo(fixedArray.Span);
-            var stream = new FixedArrayStream(fixedArray);
-            var deserialized = new ReplayFrame(ref stream, 14);
-
-            // Flat stream format - no mic-specific field to check
-            Assert.That(deserialized.Inputs.Length, Is.GreaterThan(0), "v14 should deserialize inputs");
+            Assert.That(deserialized.Inputs.Length, Is.GreaterThan(0), "inputs should deserialize");
         }
 
         [Test]
