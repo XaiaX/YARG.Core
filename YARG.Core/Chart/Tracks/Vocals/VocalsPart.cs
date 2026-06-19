@@ -119,14 +119,19 @@ namespace YARG.Core.Chart
 
         /// <summary>
         /// Clones this VocalsPart as an InstrumentDifficulty for use in engine creation.
-        /// Used in Phase 4 when creating the primary chart for YargFreeVocalsEngine.
         /// </summary>
-        public InstrumentDifficulty<VocalNote> CloneAsInstrumentDifficulty()
+        /// <param name="deepClone">
+        /// When true, each phrase note is deep-cloned so the result shares no VocalNote
+        /// instances with this part (or with other clones). Party Vocals needs this because
+        /// multiple players sing the same part and each engine mutates hit/miss state on its
+        /// notes; sharing instances would leak state across engines. The default (false)
+        /// preserves the original upstream behaviour of reusing the phrase-parent notes.
+        /// </param>
+        public InstrumentDifficulty<VocalNote> CloneAsInstrumentDifficulty(bool deepClone = false)
         {
-            // Deep-clone the phrase notes: multiple players can sing the same part, and
-            // each engine mutates hit/miss state on its notes. Sharing instances would
-            // leak one player's hit/miss state into every other engine on this part.
-            var vocalNotes = NotePhrases.Select(i => i.PhraseParentNote.Clone()).ToList();
+            var vocalNotes = deepClone
+                ? NotePhrases.Select(i => i.PhraseParentNote.Clone()).ToList()
+                : NotePhrases.Select(i => i.PhraseParentNote).ToList();
             var instrument = IsHarmony ? Instrument.Harmony : Instrument.Vocals;
 
             var diff = new InstrumentDifficulty<VocalNote>(instrument, Difficulty.Expert,
