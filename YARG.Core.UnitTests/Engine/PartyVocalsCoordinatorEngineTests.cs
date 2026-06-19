@@ -19,14 +19,14 @@ public sealed class PartyVocalsCoordinatorEngineTests
     private const double ApproximateVocalFps = 60.0;
 
     private static readonly VocalsEngineParameters EngineParams = new(
-        new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0),
+        new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0, 0),
         4,
         VocalsEngineTests.StarMultiplierThresholds,
         VocalsEngineTests.SoloBonusStarMultiplierThresholds,
         1.5f, 0.5f, AwesomeThreshold, 60.0, true, 1000);
 
     private static readonly VocalsEngineParameters EngineParamsNoSingToActivate = new(
-        new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0),
+        new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0, 0),
         4,
         VocalsEngineTests.StarMultiplierThresholds,
         VocalsEngineTests.SoloBonusStarMultiplierThresholds,

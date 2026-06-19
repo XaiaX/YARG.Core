@@ -21,7 +21,7 @@ public sealed class EngineManagerRegistrationTests : EngineTester
         EnginePreset.Default.FiveFretGuitar.Create(StarMultiplierThresholds, SoloBonusStarMultiplierThresholds, false);
 
     private static readonly VocalsEngineParameters VocalsParams = new(
-        new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0),
+        new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0, 0),
         4,
         new float[] { 0.05f, 0.11f, 0.19f, 0.46f, 0.77f, 1.06f },
         new float[] { 0.05f, 0.1f, 0.2f, 0.35f, 0.65f, 0.95f },

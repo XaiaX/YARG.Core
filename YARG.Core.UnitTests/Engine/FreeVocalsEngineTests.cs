@@ -15,7 +15,7 @@ public sealed class FreeVocalsEngineTests
 {
     // Pitch window: perfect <= 0.5 semitones, total window = 1.5 semitones
     private static readonly VocalsEngineParameters EngineParameters = new(
-        new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0),
+        new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1, 1, 0, 0),
         4,
         VocalsEngineTests.StarMultiplierThresholds,
         VocalsEngineTests.SoloBonusStarMultiplierThresholds,
