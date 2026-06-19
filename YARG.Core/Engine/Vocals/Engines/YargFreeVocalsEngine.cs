@@ -544,6 +544,9 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         protected override bool CanNoteBeHit(VocalNote note) => throw new NotImplementedException();
 
+        // Vocals have no lanes (matches YargVocalsEngine).
+        protected override bool ProximalLaneForgivesInput(int inputNote, VocalNote laneNote) => throw new NotImplementedException();
+
         
         /// <summary>
         /// Get the current pitch for the single mic. Used by the coordinator to read
