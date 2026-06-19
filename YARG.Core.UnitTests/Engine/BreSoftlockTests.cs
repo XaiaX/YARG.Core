@@ -251,7 +251,10 @@ public class BreSoftlockTests : EngineTester
         // Fixed (non-dynamic), generous window so several densely-packed gems share a
         // hit window and timing is deterministic. The bug is about note-resolution
         // order, not window sizing, so a controlled window only removes a confound.
-        var hitWindow = new HitWindowSettings(0.2, 0.2, 1.0, false, 0, 1.0, 1.0, 0.15, 0.25);
+        // NOTE: this branch predates the lane-autohit-window rework, so the 8-arg
+        // HitWindowSettings ctor (tremoloWindow) is used instead of the lane-window
+        // form on the BRE source branch. The soft-lock repro does not depend on it.
+        var hitWindow = new HitWindowSettings(0.2, 0.2, 1.0, false, 0, 1.0, 1.0, 0.0);
         return new GuitarEngineParameters(hitWindow, 4, 0, 0,
             StarMultiplierThresholds, SoloBonusStarMultiplierThresholds,
             hopoLeniency: 0.08, strumLeniency: 0.05, strumLeniencySmall: 0.025,
