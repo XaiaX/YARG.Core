@@ -10,8 +10,8 @@ public class VocalsTrackTests
     {
         var part = CreatePartWithSungPhrase();
 
-        var first = part.CloneAsInstrumentDifficulty();
-        var second = part.CloneAsInstrumentDifficulty();
+        var first = part.CloneAsInstrumentDifficulty(deepClone: true);
+        var second = part.CloneAsInstrumentDifficulty(deepClone: true);
 
         first.Notes[0].SetHitState(true, true);
         first.Notes[0].SetMissState(true, true);
@@ -31,7 +31,7 @@ public class VocalsTrackTests
     {
         var part = CreatePartWithSungPhrase();
 
-        var cloned = part.CloneAsInstrumentDifficulty();
+        var cloned = part.CloneAsInstrumentDifficulty(deepClone: true);
         var phrase = cloned.Notes[0];
 
         using (Assert.EnterMultipleScope())
