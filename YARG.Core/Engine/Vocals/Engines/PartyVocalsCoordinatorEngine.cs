@@ -129,7 +129,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                 _partHasContent[j] = allParts[j].NotePhrases.Count > 0;
             }
 
-            BuildCountdownsFromAllParts(allParts.ToList(), excludePercussion: true);
+            GetWaitCountdowns(PartyVocalsCountdownNotes.ExcludingPercussion(allParts.ToList()));
         }
 
         public override void Reset(bool keepCurrentButtons = false)

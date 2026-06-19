@@ -94,30 +94,20 @@ namespace YARG.Core.Engine.Vocals
             base.Reset(keepCurrentButtons);
         }
 
-        public void BuildCountdownsFromSelectedPart(bool excludePercussion = false)
+        public void BuildCountdownsFromSelectedPart()
         {
             // Vocals selected, build countdowns from solo vocals line only
-            var notes = excludePercussion
-                ? Notes.Where(n => n.ChildNotes.Any(c => !c.IsPercussion)).ToList()
-                : Notes;
-            GetWaitCountdowns(notes);
+            GetWaitCountdowns(Notes);
         }
 
-        public void BuildCountdownsFromAllParts(List<VocalsPart> allParts, bool excludePercussion = false)
+        public void BuildCountdownsFromAllParts(List<VocalsPart> allParts)
         {
-            // Get notes from all available vocals parts. When excludePercussion is true,
-            // percussion-only phrases are dropped so they appear as gaps to the countdown
-            // wheel (used by Free Vocals, where percussion is ignored entirely).
+            // Get notes from all available vocals parts
             var allNotes = new List<VocalNote>();
 
             for (int p = 0; p < allParts.Count; p++)
             {
-                var partNotes = allParts[p].CloneAsInstrumentDifficulty().Notes;
-                if (excludePercussion)
-                {
-                    partNotes = partNotes.Where(n => n.ChildNotes.Any(c => !c.IsPercussion)).ToList();
-                }
-                allNotes.AddRange(partNotes);
+                allNotes.AddRange(allParts[p].CloneAsInstrumentDifficulty().Notes);
             }
 
             if (allParts.Count > 1)
