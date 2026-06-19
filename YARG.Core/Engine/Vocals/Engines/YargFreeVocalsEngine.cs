@@ -81,7 +81,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Build countdowns from all parts for free vocals; exclude percussion so
             // percussion-only stretches show the countdown wheel instead of being
             // hidden as a continuous note stream.
-            BuildCountdownsFromAllParts(allParts.ToList(), excludePercussion: true);
+            GetWaitCountdowns(PartyVocalsCountdownNotes.ExcludingPercussion(allParts.ToList()));
         }
 
         
