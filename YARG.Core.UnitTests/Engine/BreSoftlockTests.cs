@@ -7,6 +7,8 @@ using YARG.Core.Engine.Drums;
 using YARG.Core.Engine.Drums.Engines;
 using YARG.Core.Engine.Guitar;
 using YARG.Core.Engine.Guitar.Engines;
+using YARG.Core.Engine.Keys;
+using YARG.Core.Engine.Keys.Engines;
 using YARG.Core.Game;
 using YARG.Core.Input;
 
@@ -284,6 +286,195 @@ public class BreSoftlockTests : EngineTester
             Assert.That(successAtCodaEnd, Is.True,
                 "an end-tick finale the player cannot see must not forfeit the BRE bonus when missed");
         }
+    }
+
+    // Shared runner: advances the engine to endTime with NO input. BRE fill gems auto-resolve via
+    // the suppression gate (they are missed at their back-end and converted to a hit while the coda
+    // is active), and the end-tick finale is left unhit — the exact reported scenario (the player
+    // cannot see it). Returns whether OnCodaEnd fired and the CodaSuccess captured at that moment
+    // (read before CurrentCodaIndex advances in EndCoda; CodaSuccess is the faithful proxy for "the
+    // bonus would be banked" since the band-side AwardCodaBonus handler is absent in a headless engine).
+    private static (bool codaEnded, bool? success) RunWithoutHittingFinale(BaseEngine engine, double endTime)
+    {
+        bool codaEnded = false;
+        bool? success = null;
+        engine.OnCodaEnd += _ =>
+        {
+            codaEnded = true;
+            success = engine.CodaSuccess;
+        };
+
+        for (double time = 0; time <= endTime; time += 0.02)
+        {
+            engine.Update(time);
+        }
+
+        return (codaEnded, success);
+    }
+
+    private static void AssertEndTickFinaleBonus(bool codaEnded, bool? success, string instrument)
+    {
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(codaEnded, Is.True,
+                $"{instrument}: OnCodaEnd must fire to bank the BRE bonus (EndCoda -> OnCodaEnd -> AwardCodaBonus)");
+            Assert.That(success, Is.True,
+                $"{instrument}: an end-tick finale the player cannot see must not forfeit the BRE bonus when missed");
+        }
+    }
+
+    // ----- Five-lane keys (true repro: MissNote gate was IsCodaActive) -----
+    private static KeysEngineParameters KeysParams() =>
+        new(new HitWindowSettings(0.1, 0.1, 1.0, false, 0, 1.0, 1.0, 0.15, 0.25),
+            4, 0, 0, StarMultiplierThresholds, SoloBonusStarMultiplierThresholds, 0.05, 0, false, true);
+
+    private static (YargFiveLaneKeysEngine engine, GuitarNote finale) BuildKeysEndTickFinaleBre()
+    {
+        double TimeOf(uint tick) => tick / (double) RES * 0.5;
+
+        var notes = new List<GuitarNote>();
+        notes.Add(GuitarGem(FiveFretGuitarFret.Green, NoteFlags.None, TimeOf(0), 0));
+
+        var frets = new[] { FiveFretGuitarFret.Green, FiveFretGuitarFret.Red, FiveFretGuitarFret.Yellow, FiveFretGuitarFret.Blue };
+        uint breStart = 480, breEnd = 1440;
+        int p = 0;
+        for (uint t = breStart; t < breEnd; t += 120)
+        {
+            notes.Add(GuitarGem(frets[p++ % frets.Length], NoteFlags.BigRockEnding, TimeOf(t), t));
+        }
+
+        var finale = GuitarGem(FiveFretGuitarFret.Yellow, NoteFlags.BigRockEnding | NoteFlags.CodaEnd, TimeOf(breEnd), breEnd);
+        finale.AddChildNote(GuitarGem(FiveFretGuitarFret.Blue, NoteFlags.BigRockEnding, TimeOf(breEnd), breEnd));
+        notes.Add(finale);
+
+        for (int i = 1; i < notes.Count; i++)
+        {
+            notes[i].PreviousNote = notes[i - 1];
+            notes[i - 1].NextNote = notes[i];
+        }
+
+        var phrases = new List<Phrase>
+        {
+            new(PhraseType.BigRockEnding, TimeOf(breStart), TimeOf(breEnd) - TimeOf(breStart), breStart, breEnd - breStart),
+        };
+
+        var diff = new InstrumentDifficulty<GuitarNote>(Instrument.Keys, Difficulty.Expert, notes, phrases, new());
+
+        var syncTrack = new SyncTrack(RES);
+        syncTrack.Tempos.Add(new TempoChange(120, 0, 0));
+
+        var engine = new YargFiveLaneKeysEngine(diff, syncTrack, KeysParams(), isBot: false);
+        return (engine, finale);
+    }
+
+    [Test]
+    public void FiveLaneKeys_EndTickFinalChord_NotHit_StillAwardsBonus()
+    {
+        var (engine, finale) = BuildKeysEndTickFinaleBre();
+        var (codaEnded, success) = RunWithoutHittingFinale(engine, finale.Time + 2.0);
+        AssertEndTickFinaleBonus(codaEnded, success, "Five-lane keys");
+    }
+
+    // ----- Pro keys (true repro: MissNote gate was IsCodaActive) -----
+    private static ProKeysNote ProKeysGem(int key, NoteFlags flags, double time, uint tick) =>
+        new(key, ProKeysNoteFlags.None, flags, time, 0, tick, 0);
+
+    private static (YargProKeysEngine engine, ProKeysNote finale) BuildProKeysEndTickFinaleBre()
+    {
+        double TimeOf(uint tick) => tick / (double) RES * 0.5;
+
+        var notes = new List<ProKeysNote>();
+        notes.Add(ProKeysGem(0, NoteFlags.None, TimeOf(0), 0));
+
+        int[] keys = { 0, 2, 4, 6 };
+        uint breStart = 480, breEnd = 1440;
+        int p = 0;
+        for (uint t = breStart; t < breEnd; t += 120)
+        {
+            notes.Add(ProKeysGem(keys[p++ % keys.Length], NoteFlags.BigRockEnding, TimeOf(t), t));
+        }
+
+        var finale = ProKeysGem(4, NoteFlags.BigRockEnding | NoteFlags.CodaEnd, TimeOf(breEnd), breEnd);
+        finale.AddChildNote(ProKeysGem(6, NoteFlags.BigRockEnding, TimeOf(breEnd), breEnd));
+        notes.Add(finale);
+
+        for (int i = 1; i < notes.Count; i++)
+        {
+            notes[i].PreviousNote = notes[i - 1];
+            notes[i - 1].NextNote = notes[i];
+        }
+
+        var phrases = new List<Phrase>
+        {
+            new(PhraseType.BigRockEnding, TimeOf(breStart), TimeOf(breEnd) - TimeOf(breStart), breStart, breEnd - breStart),
+        };
+
+        var diff = new InstrumentDifficulty<ProKeysNote>(Instrument.ProKeys, Difficulty.Expert, notes, phrases, new());
+
+        var syncTrack = new SyncTrack(RES);
+        syncTrack.Tempos.Add(new TempoChange(120, 0, 0));
+
+        var engine = new YargProKeysEngine(diff, syncTrack, KeysParams(), isBot: false);
+        return (engine, finale);
+    }
+
+    [Test]
+    public void ProKeys_EndTickFinalChord_NotHit_StillAwardsBonus()
+    {
+        var (engine, finale) = BuildProKeysEndTickFinaleBre();
+        var (codaEnded, success) = RunWithoutHittingFinale(engine, finale.Time + 2.0);
+        AssertEndTickFinaleBonus(codaEnded, success, "Pro keys");
+    }
+
+    // ----- Five-fret guitar (regression guard) -----
+    // GuitarEngine.MissNote already keyed on CodaHasStarted before this fix, so a guitar miss can't
+    // reproduce the bug. This passes on unmodified code AND after the fix, and exercises the HitNote
+    // gate change (which WAS IsCodaActive on guitar).
+    private static (YargFiveFretGuitarEngine engine, GuitarNote finale) BuildGuitarEndTickFinaleBre()
+    {
+        double TimeOf(uint tick) => tick / (double) GUITAR_RES * 0.5;
+
+        var notes = new List<GuitarNote>();
+        notes.Add(GuitarGem(FiveFretGuitarFret.Green, NoteFlags.None, TimeOf(0), 0));
+
+        var frets = new[] { FiveFretGuitarFret.Green, FiveFretGuitarFret.Red };
+        uint breStart = 480, breEnd = 1440;
+        int p = 0;
+        for (uint t = breStart; t < breEnd; t += 120)
+        {
+            notes.Add(GuitarGem(frets[p++ % frets.Length], NoteFlags.BigRockEnding, TimeOf(t), t));
+        }
+
+        var finale = GuitarGem(FiveFretGuitarFret.Yellow, NoteFlags.BigRockEnding | NoteFlags.CodaEnd, TimeOf(breEnd), breEnd);
+        finale.AddChildNote(GuitarGem(FiveFretGuitarFret.Blue, NoteFlags.BigRockEnding, TimeOf(breEnd), breEnd));
+        notes.Add(finale);
+
+        for (int i = 1; i < notes.Count; i++)
+        {
+            notes[i].PreviousNote = notes[i - 1];
+            notes[i - 1].NextNote = notes[i];
+        }
+
+        var phrases = new List<Phrase>
+        {
+            new(PhraseType.BigRockEnding, TimeOf(breStart), TimeOf(breEnd) - TimeOf(breStart), breStart, breEnd - breStart),
+        };
+
+        var diff = new InstrumentDifficulty<GuitarNote>(Instrument.FiveFretGuitar, Difficulty.Expert, notes, phrases, new());
+
+        var syncTrack = new SyncTrack(GUITAR_RES);
+        syncTrack.Tempos.Add(new TempoChange(120, 0, 0));
+
+        var engine = new YargFiveFretGuitarEngine(diff, syncTrack, GuitarParams(), isBot: false);
+        return (engine, finale);
+    }
+
+    [Test]
+    public void Guitar_EndTickFinalChord_NotHit_StillAwardsBonus()
+    {
+        var (engine, finale) = BuildGuitarEndTickFinaleBre();
+        var (codaEnded, success) = RunWithoutHittingFinale(engine, finale.Time + 2.0);
+        AssertEndTickFinaleBonus(codaEnded, success, "Guitar (guard)");
     }
 
     [Test]
