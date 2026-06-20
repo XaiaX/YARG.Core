@@ -178,6 +178,114 @@ public class BreSoftlockTests : EngineTester
         Assert.That(success, Is.True, "hitting the entire final chord should award the coda bonus");
     }
 
+    // Builds a BRE whose finale chord is charted on the EXACT tick where the BRE phrase
+    // ends (phrase.TickEnd). Real parsing marks such a note IsBigRockEnding end-inclusively
+    // (MoonSongLoader), and the BRE lane visual hides any IsBigRockEnding note (TrackPlayer
+    // skips its spawn), so the player cannot see it. Unless they blindly hit it, the engine
+    // misses it — and the miss must not forfeit the BRE bonus.
+    //
+    // The bug: the suppression gate keys on IsCodaActive, but a note is *missed* at its
+    // back-end time (BitIncrement(note.Time + backEnd)), which is strictly after
+    // phrase.TimeEnd == CodaSection.EndTime, by which point IsCodaActive is already false
+    // (it deactivates at time >= EndTime). The miss therefore falls through to a normal
+    // miss, which calls CodaSection.MissNote() -> Success = false and banks nothing.
+    private static (YargDrumsEngine engine, InstrumentDifficulty<DrumNote> notes, DrumNote finale)
+        BuildBreWithEndTickFinalChord()
+    {
+        double TimeOf(uint tick) => tick / (double) RES * 0.5; // 120 bpm
+
+        var notes = new List<DrumNote>();
+
+        // Lead-in note (not part of the BRE). Missed, keeps combo at 0.
+        notes.Add(new DrumNote(FourLaneDrumPad.RedDrum, DrumNoteType.Neutral, DrumNoteFlags.None,
+            NoteFlags.None, TimeOf(0), 0));
+
+        // BRE fill gems, every 120 ticks. They are auto-resolved during the fill (the gate
+        // is active while IsCodaActive is true) and collect bonus as the player mashes.
+        var pads = new[] { FourLaneDrumPad.RedDrum, FourLaneDrumPad.YellowDrum, FourLaneDrumPad.BlueDrum, FourLaneDrumPad.GreenDrum };
+        uint breStart = 480;
+        uint breEnd = 1440;
+        int p = 0;
+        for (uint t = breStart; t < breEnd; t += 120)
+        {
+            notes.Add(new DrumNote(pads[p++ % pads.Length], DrumNoteType.Neutral, DrumNoteFlags.None,
+                NoteFlags.BigRockEnding, TimeOf(t), t));
+        }
+
+        // Finale chord charted EXACTLY on phrase.TickEnd (breEnd). Both notes are IsBigRockEnding
+        // (end-inclusive); the parent carries IsCodaEnd. Mirrors the [Yellow+Blue] finale of
+        // dirtydeeds_live (BRE phrase 288000..296160, finale at tick 296160).
+        var finale = new DrumNote(FourLaneDrumPad.YellowDrum, DrumNoteType.Neutral, DrumNoteFlags.None,
+            NoteFlags.BigRockEnding | NoteFlags.CodaEnd, TimeOf(breEnd), breEnd);
+        finale.AddChildNote(new DrumNote(FourLaneDrumPad.BlueDrum, DrumNoteType.Neutral, DrumNoteFlags.None,
+            NoteFlags.BigRockEnding, TimeOf(breEnd), breEnd));
+        notes.Add(finale);
+
+        // Wire neighbour links.
+        for (int i = 1; i < notes.Count; i++)
+        {
+            notes[i].PreviousNote = notes[i - 1];
+            notes[i - 1].NextNote = notes[i];
+        }
+
+        var phrases = new List<Phrase>
+        {
+            new(PhraseType.BigRockEnding, TimeOf(breStart), TimeOf(breEnd) - TimeOf(breStart), breStart, breEnd - breStart),
+        };
+
+        var diff = new InstrumentDifficulty<DrumNote>(Instrument.FourLaneDrums, Difficulty.Expert,
+            notes, phrases, new());
+
+        var syncTrack = new SyncTrack(RES);
+        syncTrack.Tempos.Add(new TempoChange(120, 0, 0));
+
+        var engine = new YargDrumsEngine(diff, syncTrack, Params(), isBot: false, isMidiDrumsInput: false);
+        return (engine, diff, finale);
+    }
+
+    [Test]
+    public void EndTickFinalChord_NotHit_StillAwardsBonus()
+    {
+        var (engine, notes, finale) = BuildBreWithEndTickFinalChord();
+
+        bool codaEnded = false;
+        bool? successAtCodaEnd = null;
+        engine.OnCodaEnd += _ =>
+        {
+            codaEnded = true;
+            // Read while CurrentCodaIndex still points at the just-ended coda: EndCoda fires
+            // OnCodaEnd before advancing the index. CodaSuccess is the faithful proxy for "the
+            // bonus would be banked" since the band-side AwardCodaBonus handler is absent in a
+            // headless engine.
+            successAtCodaEnd = engine.CodaSuccess;
+        };
+
+        // Mash the BRE fill so the coda collects a bonus, but never feed a hit to the
+        // end-tick finale (the player cannot see it).
+        var mash = new[] { DrumsAction.RedDrum, DrumsAction.YellowDrum, DrumsAction.BlueDrum, DrumsAction.GreenDrum };
+        int mp = 0;
+        double finaleTime = finale.Time;
+        double endTime = finaleTime + 2.0;
+        for (double time = 0; time <= endTime; time += 0.02)
+        {
+            if (time >= 0.5 && time < finaleTime)
+            {
+                var gi = GameInput.Create(time, mash[mp++ % mash.Length], 1.0f);
+                engine.QueueInput(ref gi);
+            }
+
+            engine.Update(time);
+        }
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(codaEnded, Is.True,
+                "OnCodaEnd must fire to bank the BRE bonus (EndCoda -> OnCodaEnd -> AwardCodaBonus)");
+            Assert.That(successAtCodaEnd, Is.True,
+                "an end-tick finale the player cannot see must not forfeit the BRE bonus when missed");
+        }
+    }
+
     [Test]
     public void MashingGemFilledBre_OutOfOrder_DoesNotSoftlock()
     {
