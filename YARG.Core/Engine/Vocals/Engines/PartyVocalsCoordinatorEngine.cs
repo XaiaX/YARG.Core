@@ -6,6 +6,27 @@ using YARG.Core.Input;
 
 namespace YARG.Core.Engine.Vocals.Engines
 {
+    /// <summary>
+    /// Per-HARM result for one phrase, delivered via
+    /// <see cref="PartyVocalsCoordinatorEngine.OnPartyVocalsPhrase"/>. Only parts that actually have
+    /// notes in the phrase ("available parts") are included, in ascending <see cref="PartIndex"/>
+    /// order (lowest HARM number first). A part is "Awesome" when <see cref="Meter"/> &gt;= the
+    /// engine's PhraseHitPercent threshold. Top-level (not nested) so Unity-side callers can reach
+    /// it via `using YARG.Core.Engine.Vocals.Engines;`.
+    /// </summary>
+    public readonly struct PartyPartResult
+    {
+        // 0 = HARM1, 1 = HARM2, 2 = HARM3 (ordinal position in the song's part list).
+        public int PartIndex { get; }
+        public double Meter { get; } // raw canonical meter; >= PhraseHitPercent = Awesome
+
+        public PartyPartResult(int partIndex, double meter)
+        {
+            PartIndex = partIndex;
+            Meter = meter;
+        }
+    }
+
     public sealed class PartyVocalsCoordinatorEngine : VocalsEngine
     {
         // Multi-mic state owned directly by the coordinator (was hoisted into
@@ -369,7 +390,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                 {
                     HitNote(phrase);
                     OnPartyVocalsPhrase?.Invoke(
-                        PhraseGrade.Awesome, new double[_allParts.Length], isLastPhrase);
+                        PhraseGrade.Awesome, Array.Empty<PartyPartResult>(), isLastPhrase);
                 }
                 else
                 {
@@ -411,7 +432,7 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         public delegate void PartyVocalsPhraseEvent(
             PhraseGrade grade,
-            IReadOnlyList<double> canonicalMeters,
+            IReadOnlyList<PartyPartResult> parts,
             bool isLastPhrase);
 
         /// <summary>
@@ -448,8 +469,16 @@ namespace YARG.Core.Engine.Vocals.Engines
             };
             bool hit = grade != PhraseGrade.Miss;
 
-            var metersSnapshot = new double[partCount];
-            Array.Copy(_canonicalMeters, metersSnapshot, partCount);
+            // Per-part results for parts that actually have notes in this phrase (available parts),
+            // ascending part order (lowest HARM number first = bottom of the summary bar).
+            var parts = new List<PartyPartResult>(partCount);
+            for (int j = 0; j < partCount; j++)
+            {
+                if (_phraseTicksTotalPerPart[j] > 0)
+                {
+                    parts.Add(new PartyPartResult(j, _canonicalMeters[j]));
+                }
+            }
 
             if (hit)
             {
@@ -465,7 +494,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
 
             OnPhraseHit?.Invoke(bestMeter / EngineParameters.PhraseHitPercent, hit, isLastPhrase);
-            OnPartyVocalsPhrase?.Invoke(grade, metersSnapshot, isLastPhrase);
+            OnPartyVocalsPhrase?.Invoke(grade, parts, isLastPhrase);
         }
 
         private void ResetPhraseState()
