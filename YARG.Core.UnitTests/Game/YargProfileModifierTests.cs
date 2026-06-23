@@ -1,5 +1,6 @@
 using Newtonsoft.Json;
 using NUnit.Framework;
+using YARG.Core.Chart;
 using YARG.Core.Game;
 
 namespace YARG.Core.UnitTests.Game;
@@ -151,4 +152,175 @@ public class YargProfileModifierTests
             Assert.That(rewritten.IsModifierActive(Modifier.UnpitchedOnly), Is.True);
         }
     }
+
+    #region Per-part unpitching (ApplyVocalModifiers partIndex)
+
+    private static VocalsPart CreatePartWithPitchedNote(int harmonyPart = 0)
+    {
+        var phraseParent = new VocalNote(NoteFlags.None, false, 0, 1.0, 0, 480);
+        phraseParent.AddChildNote(
+            new VocalNote(60f, harmonyPart, VocalNoteType.Lyric, 0, 0.5, 0, 240));
+        var phrase = new VocalsPhrase(0, 1.0, 0, 480, phraseParent, new());
+        return new VocalsPart(harmonyPart > 0, new() { phrase }, new(), new(), new());
+    }
+
+    private static VocalsPart CreatePartWithPercussion()
+    {
+        var phraseParent = new VocalNote(NoteFlags.None, false, 0, 2.0, 0, 960);
+        phraseParent.AddChildNote(
+            new VocalNote(60f, 0, VocalNoteType.Lyric, 0, 0.5, 0, 240));
+        phraseParent.AddChildNote(
+            new VocalNote(-1f, 0, VocalNoteType.Percussion, 0.1, 0.1, 100, 20));
+        var phrase = new VocalsPhrase(0, 2.0, 0, 960, phraseParent, new());
+        return new VocalsPart(false, new() { phrase }, new(), new(), new());
+    }
+
+    private static bool AllLyricNotesUnpitched(VocalsPart part)
+    {
+        foreach (var phrase in part.NotePhrases)
+        {
+            foreach (var note in phrase.PhraseParentNote.ChildNotes)
+            {
+                if (note.Type == VocalNoteType.Percussion) continue;
+                if (!note.IsNonPitched) return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool HasPercussion(VocalsPart part)
+    {
+        foreach (var phrase in part.NotePhrases)
+        {
+            foreach (var note in phrase.PhraseParentNote.ChildNotes)
+            {
+                if (note.Type == VocalNoteType.Percussion) return true;
+            }
+        }
+        return false;
+    }
+
+    [Test]
+    public void ApplyVocalModifiers_UnpitchedOnly_ConvertsPart0()
+    {
+        var profile = CreateVocalsProfile("player");
+        profile.AddSingleModifier(Modifier.UnpitchedOnly);
+        var part = CreatePartWithPitchedNote();
+
+        profile.ApplyVocalModifiers(part, 0);
+
+        Assert.That(AllLyricNotesUnpitched(part), Is.True);
+    }
+
+    [Test]
+    public void ApplyVocalModifiers_UnpitchedOnly_DoesNotConvertPart1()
+    {
+        var profile = CreateVocalsProfile("player");
+        profile.AddSingleModifier(Modifier.UnpitchedOnly);
+        var part = CreatePartWithPitchedNote(1);
+
+        profile.ApplyVocalModifiers(part, 1);
+
+        Assert.That(AllLyricNotesUnpitched(part), Is.False);
+    }
+
+    [Test]
+    public void ApplyVocalModifiers_UnpitchedHarm2_ConvertsPart1()
+    {
+        var profile = CreateVocalsProfile("player");
+        profile.AddSingleModifier(Modifier.UnpitchedHarm2);
+        var part = CreatePartWithPitchedNote(1);
+
+        profile.ApplyVocalModifiers(part, 1);
+
+        Assert.That(AllLyricNotesUnpitched(part), Is.True);
+    }
+
+    [Test]
+    public void ApplyVocalModifiers_UnpitchedHarm2_DoesNotConvertPart0()
+    {
+        var profile = CreateVocalsProfile("player");
+        profile.AddSingleModifier(Modifier.UnpitchedHarm2);
+        var part = CreatePartWithPitchedNote();
+
+        profile.ApplyVocalModifiers(part, 0);
+
+        Assert.That(AllLyricNotesUnpitched(part), Is.False);
+    }
+
+    [Test]
+    public void ApplyVocalModifiers_UnpitchedHarm3_ConvertsPart2()
+    {
+        var profile = CreateVocalsProfile("player");
+        profile.AddSingleModifier(Modifier.UnpitchedHarm3);
+        var part = CreatePartWithPitchedNote(2);
+
+        profile.ApplyVocalModifiers(part, 2);
+
+        Assert.That(AllLyricNotesUnpitched(part), Is.True);
+    }
+
+    [Test]
+    public void ApplyVocalModifiers_AllThreeToggles_ConvertMatchingParts()
+    {
+        var profile = CreateVocalsProfile("player");
+        profile.AddSingleModifier(Modifier.UnpitchedOnly);
+        profile.AddSingleModifier(Modifier.UnpitchedHarm2);
+        profile.AddSingleModifier(Modifier.UnpitchedHarm3);
+
+        var part0 = CreatePartWithPitchedNote(0);
+        var part1 = CreatePartWithPitchedNote(1);
+        var part2 = CreatePartWithPitchedNote(2);
+
+        profile.ApplyVocalModifiers(part0, 0);
+        profile.ApplyVocalModifiers(part1, 1);
+        profile.ApplyVocalModifiers(part2, 2);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(AllLyricNotesUnpitched(part0), Is.True);
+            Assert.That(AllLyricNotesUnpitched(part1), Is.True);
+            Assert.That(AllLyricNotesUnpitched(part2), Is.True);
+        }
+    }
+
+    [Test]
+    public void ApplyVocalModifiers_MixedToggles_OnlyMatchingPartsConverted()
+    {
+        // Part 1 off, Parts 2+3 on
+        var profile = CreateVocalsProfile("player");
+        profile.AddSingleModifier(Modifier.UnpitchedHarm2);
+        profile.AddSingleModifier(Modifier.UnpitchedHarm3);
+
+        var part0 = CreatePartWithPitchedNote(0);
+        var part1 = CreatePartWithPitchedNote(1);
+        var part2 = CreatePartWithPitchedNote(2);
+
+        profile.ApplyVocalModifiers(part0, 0);
+        profile.ApplyVocalModifiers(part1, 1);
+        profile.ApplyVocalModifiers(part2, 2);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(AllLyricNotesUnpitched(part0), Is.False);
+            Assert.That(AllLyricNotesUnpitched(part1), Is.True);
+            Assert.That(AllLyricNotesUnpitched(part2), Is.True);
+        }
+    }
+
+    [Test]
+    public void ApplyVocalModifiers_NoVocalPercussion_RemovesRegardlessOfPartIndex()
+    {
+        var profile = CreateVocalsProfile("player");
+        profile.AddSingleModifier(Modifier.NoVocalPercussion);
+
+        var part1 = CreatePartWithPercussion();
+
+        // Percussion removal must work for every part index, not just 0.
+        profile.ApplyVocalModifiers(part1, 1);
+
+        Assert.That(HasPercussion(part1), Is.False);
+    }
+
+    #endregion
 }

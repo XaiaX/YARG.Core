@@ -14,12 +14,14 @@ namespace YARG.Core.Game
         TapsToHopos   = 1 << 4,
         NoteShuffle   = 1 << 5,
         NoKicks       = 1 << 6,
-        UnpitchedOnly = 1 << 7,
+        UnpitchedOnly = 1 << 7,  // Lead/HARM1 line only. See ApplyVocalModifiers(partIndex).
         NoDynamics    = 1 << 8,
         NoVocalPercussion = 1 << 9,
         RangeCompress = 1 << 10,
         OpensToGreens = 1 << 11,
-        ManualVocalStarPower = 1 << 12
+        ManualVocalStarPower = 1 << 12,
+        UnpitchedHarm2 = 1 << 13,
+        UnpitchedHarm3 = 1 << 14
     }
 
     public static class ModifierConflicts
@@ -81,8 +83,10 @@ namespace YARG.Core.Game
 
                 GameMode.Vocals or
                 GameMode.PartyVocals =>
-                    Modifier.UnpitchedOnly |
-                    Modifier.NoVocalPercussion |
+                    Modifier.UnpitchedOnly      |
+                    Modifier.UnpitchedHarm2     |
+                    Modifier.UnpitchedHarm3     |
+                    Modifier.NoVocalPercussion  |
                     Modifier.ManualVocalStarPower,
 
                 GameMode.ProKeys =>
