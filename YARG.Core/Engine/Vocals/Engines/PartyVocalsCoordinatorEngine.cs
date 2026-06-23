@@ -345,14 +345,19 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
 
             var phrase = Notes[NoteIndex];
-            _coordinatorPhraseTicksTotal ??= GetTicksInPhrase(phrase);
-            PhraseTicksTotal ??= _coordinatorPhraseTicksTotal;
 
-            // Populate per-part tick totals for the current phrase
+            // Populate per-part tick totals for the current phrase. The coordinator's
+            // phrase total sums across ALL harmony parts — not just Parts[0]/HARM1 — so
+            // phrases that only have HARM2/HARM3 notes are not treated as empty.
+            uint allPartsTotal = 0;
             for (int j = 0; j < _allParts.Length; j++)
             {
                 _phraseTicksTotalPerPart[j] = GetTicksInPhraseForPart(_allParts[j]);
+                allPartsTotal += _phraseTicksTotalPerPart[j];
             }
+
+            _coordinatorPhraseTicksTotal ??= allPartsTotal;
+            PhraseTicksTotal ??= _coordinatorPhraseTicksTotal;
 
             // Run the coordinator's per-tick ambiguity classifier
             AccumulateAmbiguityScoring();
@@ -389,6 +394,10 @@ namespace YARG.Core.Engine.Vocals.Engines
                 if (phraseTicksTotal == 0)
                 {
                     HitNote(phrase);
+                    // Fire OnPhraseHit so _phrasePercents stays aligned with
+                    // _phraseGrades/_phrasePartResults (populated by the
+                    // OnPartyVocalsPhrase handler below).
+                    OnPhraseHit?.Invoke(1.0, true, isLastPhrase);
                     OnPartyVocalsPhrase?.Invoke(
                         PhraseGrade.Awesome, Array.Empty<PartyPartResult>(), isLastPhrase);
                 }
