@@ -523,9 +523,17 @@ namespace YARG.Core.Game
                         }
         }
 
-        public void ApplyVocalModifiers(VocalsPart vocalsPart)
+        public void ApplyVocalModifiers(VocalsPart vocalsPart, int partIndex)
         {
-            if (IsModifierActive(Modifier.UnpitchedOnly))
+            var unpitchedForPart = partIndex switch
+            {
+                0 => Modifier.UnpitchedOnly,
+                1 => Modifier.UnpitchedHarm2,
+                2 => Modifier.UnpitchedHarm3,
+                _ => Modifier.None,
+            };
+
+            if (IsModifierActive(unpitchedForPart))
             {
                 vocalsPart.ConvertAllToUnpitched();
             }

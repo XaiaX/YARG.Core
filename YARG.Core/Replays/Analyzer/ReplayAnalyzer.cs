@@ -322,7 +322,7 @@ namespace YARG.Core.Replays.Analyzer
                     // Get the notes
                     var notes = _chart.GetVocalsTrack(profile.CurrentInstrument)
                         .Parts[profile.HarmonyIndex].Clone();
-                    profile.ApplyVocalModifiers(notes);
+                    profile.ApplyVocalModifiers(notes, profile.HarmonyIndex);
 
                     // Create engine
                     return new YargVocalsEngine(
