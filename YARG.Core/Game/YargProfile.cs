@@ -124,6 +124,29 @@ namespace YARG.Core.Game
         /// <see cref="DifficultyFallback"/> for Expert+). Operates on the raw backing
         /// field so it works regardless of <see cref="CurrentInstrument"/>.
         /// </summary>
+        /// <summary>
+        /// The explicitly saved harmony preference, independent of the effective index
+        /// resolved for the current song.
+        /// </summary>
+        public byte HarmonyIndexFallback => _harmonyIndexFallback;
+
+        /// <summary>
+        /// The effective harmony index resolved for the current song, including when
+        /// the profile is temporarily on a non-vocal instrument.
+        /// </summary>
+        public byte EffectiveHarmonyIndex => _harmonyIndex;
+
+        /// <summary>
+        /// Restores both harmony-index values after a transactional setup attempt.
+        /// Normal gameplay/menu code should use <see cref="HarmonyIndex"/> and
+        /// <see cref="ResolveHarmonyIndex"/> instead.
+        /// </summary>
+        public void RestoreHarmonyIndexState(byte effectiveIndex, byte fallbackIndex)
+        {
+            _harmonyIndex = effectiveIndex;
+            _harmonyIndexFallback = fallbackIndex;
+        }
+
         public void ResolveHarmonyIndex(int harmonyPartCount)
         {
             if (harmonyPartCount <= 0)
@@ -417,6 +440,15 @@ namespace YARG.Core.Game
         public void ApplySessionModifiers(YargProfile profile)
         {
             CurrentModifiers = profile.CurrentModifiers;
+        }
+
+        /// <summary>
+        /// Restores the gameplay-only modifier value after a transactional setup attempt.
+        /// The saved modifier selection remains unchanged.
+        /// </summary>
+        public void RestoreSessionModifiers(Modifier modifiers)
+        {
+            CurrentModifiers = modifiers;
         }
 
         /// <summary>
