@@ -32,6 +32,9 @@
         Start = 9,
         /// <summary>Select action button.</summary>
         Select = 10,
+
+        /// <summary>Search action button.</summary>
+        Search = 11,
     }
 
     /// <summary>
