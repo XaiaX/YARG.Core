@@ -21,6 +21,12 @@ namespace YARG.Core.Game
 
         public bool IsBot;
 
+        /// <summary>
+        /// Whether Maestro should keep this profile out of newly started songs.
+        /// This is a local profile preference, not replay state.
+        /// </summary>
+        public bool MaestroSittingOut;
+
         public GameMode GameMode;
 
         public float NoteSpeed;
