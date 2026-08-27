@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using YARG.Core.Chart;
+using YARG.Core.Diagnostics;
 using YARG.Core.Input;
 using YARG.Core.Logging;
 
@@ -231,8 +232,12 @@ namespace YARG.Core.Engine.Guitar.Engines
 
         protected override void CheckForNoteHit()
         {
+            using var diagnostics = CorePerformanceDiagnostics.Scope(CoreDiagnosticMarker.GuitarCheckForNoteHit);
+            CorePerformanceDiagnostics.RecordHitCheck();
+            int inspectedNotes = 0;
             for (int i = NoteIndex; i < Notes.Count; i++)
             {
+                inspectedNotes++;
                 bool isFirstNoteInWindow = i == NoteIndex;
                 var note = Notes[i];
 
@@ -328,6 +333,8 @@ namespace YARG.Core.Engine.Guitar.Engines
                     break;
                 }
             }
+
+            CorePerformanceDiagnostics.RecordInspectedNotes(inspectedNotes);
         }
 
         protected override bool CanNoteBeHit(GuitarNote note)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using YARG.Core.Chart;
+using YARG.Core.Diagnostics;
 using YARG.Core.Input;
 using YARG.Core.Logging;
 
@@ -195,6 +196,7 @@ namespace YARG.Core.Engine
 
         public void Update(double time)
         {
+            using var diagnostics = CorePerformanceDiagnostics.Scope(CoreDiagnosticMarker.BaseEngineUpdate);
             YargLogger.LogFormatTrace("---- Starting update loop with time {0} ----", time);
 
             if (!IsBot)
@@ -263,6 +265,8 @@ namespace YARG.Core.Engine
 
         private void RunQueuedUpdates(double time)
         {
+            using var diagnostics = CorePerformanceDiagnostics.Scope(CoreDiagnosticMarker.BaseEngineRunQueuedUpdates);
+            CorePerformanceDiagnostics.RecordRunQueuedUpdates(_scheduledUpdates.Count);
             GenerateAndSortQueuedUpdates(time);
 
             if (_scheduledUpdates.Count > 0)
@@ -315,8 +319,12 @@ namespace YARG.Core.Engine
 
         private void GenerateAndSortQueuedUpdates(double nextTime)
         {
+            using var diagnostics = CorePerformanceDiagnostics.Scope(CoreDiagnosticMarker.BaseEngineGenerateAndSortQueuedUpdates);
+            int scheduledBefore = _scheduledUpdates.Count;
             GenerateQueuedUpdates(nextTime);
+            CorePerformanceDiagnostics.RecordScheduledGenerated(_scheduledUpdates.Count - scheduledBefore);
             _scheduledUpdates.Sort((x, y) => x.Time.CompareTo(y.Time));
+            CorePerformanceDiagnostics.RecordScheduledAfter(_scheduledUpdates.Count);
         }
 
         protected abstract void UpdateBot(double time);
@@ -394,8 +402,10 @@ namespace YARG.Core.Engine
 
         private void RunEngineLoop(double time)
         {
+            using var diagnostics = CorePerformanceDiagnostics.Scope(CoreDiagnosticMarker.BaseEngineRunEngineLoop);
             do
             {
+                CorePerformanceDiagnostics.RecordEngineLoopIteration();
                 ReRunHitLogic = false;
                 UpdateTimeVariables(time);
 
