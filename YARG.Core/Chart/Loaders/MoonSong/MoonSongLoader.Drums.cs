@@ -18,13 +18,26 @@ namespace YARG.Core.Chart
 
         public InstrumentTrack<DrumNote> LoadDrumsTrack(Instrument instrument, InstrumentTrack<EliteDrumNote>? eliteDrumsFallback)
         {
-            _discoFlip = false;
+            ResetDrumMixState();
             return instrument.ToNativeGameMode() switch
             {
                 GameMode.FourLaneDrums => LoadDrumsTrack(instrument, CreateFourLaneDrumNote, eliteDrumsFallback),
                 GameMode.FiveLaneDrums => LoadDrumsTrack(instrument, CreateFiveLaneDrumNote, eliteDrumsFallback),
                 _ => throw new ArgumentException($"Instrument {instrument} is not a drums instrument!", nameof(instrument))
             };
+        }
+
+        private void ResetDrumMixState()
+        {
+            _discoFlip = false;
+            _mixSetting = DrumsMixSetting.None;
+        }
+
+        private InstrumentDifficulty<DrumNote> LoadDrumDifficulty(Instrument instrument, Difficulty difficulty,
+            CreateNoteDelegate<DrumNote> createNote, ProcessTextDelegate processText, FinalPassDelegate<DrumNote> finalPass)
+        {
+            ResetDrumMixState();
+            return LoadDifficulty(instrument, difficulty, createNote, processText, finalPassDelegate: finalPass);
         }
 
         private InstrumentTrack<DrumNote> LoadDrumsTrack(Instrument instrument, CreateNoteDelegate<DrumNote> createNote, InstrumentTrack<EliteDrumNote>? eliteDrumsFallback)
@@ -35,12 +48,12 @@ namespace YARG.Core.Chart
 
             var difficulties = new Dictionary<Difficulty, InstrumentDifficulty<DrumNote>>()
             {
-                { Difficulty.Beginner, LoadDifficulty(instrument, Difficulty.Beginner, beginnerNoteDelegate, HandleTextEvent) }, // No lanes on Beginner, so no final pass
-                { Difficulty.Easy, LoadDifficulty(instrument, Difficulty.Easy, createNote, HandleTextEvent, finalPassDelegate: DrumsFinalPass) }, // Drum lanes on Easy are possible in .chart, so we do need the final pass
-                { Difficulty.Medium, LoadDifficulty(instrument, Difficulty.Medium, createNote, HandleTextEvent, finalPassDelegate: DrumsFinalPass) }, // Drum lanes on Medium are possible in .chart, so we do need the final pass
-                { Difficulty.Hard, LoadDifficulty(instrument, Difficulty.Hard, createNote, HandleTextEvent, finalPassDelegate: DrumsFinalPass) },
-                { Difficulty.Expert, LoadDifficulty(instrument, Difficulty.Expert, createNote, HandleTextEvent, finalPassDelegate: DrumsFinalPass) },
-                { Difficulty.ExpertPlus, LoadDifficulty(instrument, Difficulty.ExpertPlus, createNote, HandleTextEvent, finalPassDelegate: DrumsFinalPass) },
+                { Difficulty.Beginner, LoadDrumDifficulty(instrument, Difficulty.Beginner, beginnerNoteDelegate, HandleTextEvent, DrumsFinalPass) },
+                { Difficulty.Easy, LoadDrumDifficulty(instrument, Difficulty.Easy, createNote, HandleTextEvent, DrumsFinalPass) }, // Drum lanes on Easy are possible in .chart, so we do need the final pass
+                { Difficulty.Medium, LoadDrumDifficulty(instrument, Difficulty.Medium, createNote, HandleTextEvent, DrumsFinalPass) }, // Drum lanes on Medium are possible in .chart, so we do need the final pass
+                { Difficulty.Hard, LoadDrumDifficulty(instrument, Difficulty.Hard, createNote, HandleTextEvent, DrumsFinalPass) },
+                { Difficulty.Expert, LoadDrumDifficulty(instrument, Difficulty.Expert, createNote, HandleTextEvent, DrumsFinalPass) },
+                { Difficulty.ExpertPlus, LoadDrumDifficulty(instrument, Difficulty.ExpertPlus, createNote, HandleTextEvent, DrumsFinalPass) },
             };
 
             foreach (var difficulty in difficulties)
@@ -148,7 +161,10 @@ namespace YARG.Core.Chart
 
         private DrumNote CreateFourLaneDrumBeginnerNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
         {
-            const FourLaneDrumPad pad = FourLaneDrumPad.Wildcard;
+            var pad = currentPhrases.TryGetValue(MoonPhrase.Type.ProDrums_KickLane, out var kickLane) &&
+                IsEventInPhrase(moonNote, kickLane, inclusiveEnd: true) && moonNote.drumPad is DrumPad.Kick
+                ? FourLaneDrumPad.Kick
+                : FourLaneDrumPad.Wildcard;
             const DrumNoteType noteType = DrumNoteType.Neutral;
 
             var generalFlags = GetGeneralFlags(moonNote, currentPhrases) & NO_LANE_FLAGS;
@@ -160,7 +176,10 @@ namespace YARG.Core.Chart
 
         private DrumNote CreateFiveLaneDrumBeginnerNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
         {
-            const FiveLaneDrumPad pad = FiveLaneDrumPad.Wildcard;
+            var pad = currentPhrases.TryGetValue(MoonPhrase.Type.ProDrums_KickLane, out var kickLane) &&
+                IsEventInPhrase(moonNote, kickLane, inclusiveEnd: true) && moonNote.drumPad is DrumPad.Kick
+                ? FiveLaneDrumPad.Kick
+                : FiveLaneDrumPad.Wildcard;
             const DrumNoteType noteType = DrumNoteType.Neutral;
             var generalFlags = GetGeneralFlags(moonNote, currentPhrases) & NO_LANE_FLAGS;
             var drumFlags = GetDrumNoteFlags(moonNote, currentPhrases);
@@ -467,12 +486,23 @@ namespace YARG.Core.Chart
         private InstrumentDifficulty<DrumNote> LoadFromEliteDrumsDownchartDifficulty(Instrument instrument,
             Difficulty difficulty, CreateNoteDelegate<DrumNote> createNote, ProcessTextDelegate? processText = null)
         {
+            _currentMode = instrument.ToNativeGameMode();
+            _currentInstrument = instrument;
+            _currentDifficulty = difficulty;
+
+            _currentMoonMode = YargGameModeToMoonGameMode(_currentMode);
+            _currentMoonInstrument = YargInstrumentToMoonInstrument(_currentInstrument);
+            _currentMoonDifficulty = YargDifficultyToMoonDifficulty(_currentDifficulty);
+
+            ResetDrumMixState();
             var downchart = _downCharts![difficulty];
 
             var notes = GetNotes(downchart, difficulty, createNote, processText);
             var phrases = GetPhrases(downchart);
             var textEvents = GetTextEvents(downchart);
-            return new(instrument, difficulty, notes, phrases, textEvents);
+            var chart = new InstrumentDifficulty<DrumNote>(instrument, difficulty, notes, phrases, textEvents);
+            DrumsFinalPass(chart);
+            return chart;
         }
 
         private static void DrumsFinalPass(InstrumentDifficulty<DrumNote> chart)
