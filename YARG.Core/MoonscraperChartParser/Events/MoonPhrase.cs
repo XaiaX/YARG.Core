@@ -25,6 +25,7 @@ namespace MoonscraperChartEditor.Song
             // RB Pro Drums
 
             ProDrums_Activation,
+            ProDrums_KickLane,
 
             // Vocals
 

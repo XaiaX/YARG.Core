@@ -15,6 +15,13 @@ namespace YARG.Core.Chart
 
         private int _padMask;
 
+        // Base class lane fields reflect only hand lanes (regular trills and tremolos).
+        public bool IsKickLane => (DrumFlags & DrumNoteFlags.KickLane) != 0;
+        public bool IsKickLaneStart => (DrumFlags & DrumNoteFlags.KickLaneStart) != 0;
+        public bool IsKickLaneEnd => (DrumFlags & DrumNoteFlags.KickLaneEnd) != 0;
+
+        public override bool IsAnyLane => IsLane || IsKickLane;
+
         public bool IsNeutral => Type == DrumNoteType.Neutral;
         public bool IsAccent  => Type == DrumNoteType.Accent;
         public bool IsGhost   => Type == DrumNoteType.Ghost;
@@ -82,6 +89,12 @@ namespace YARG.Core.Chart
             DrumFlags |= drumNoteFlag;
         }
 
+        public void ClearFlag(DrumNoteFlags drumNoteFlag)
+        {
+            _drumFlags &= ~drumNoteFlag;
+            DrumFlags &= ~drumNoteFlag;
+        }
+
         protected override void CopyFlags(DrumNote other)
         {
             _drumFlags = other._drumFlags;
@@ -138,5 +151,8 @@ namespace YARG.Core.Chart
         None = 0,
 
         StarPowerActivator = 1 << 0,
+        KickLane = 1 << 1,
+        KickLaneStart = 1 << 2,
+        KickLaneEnd = 1 << 3,
     }
 }
