@@ -41,6 +41,9 @@ namespace YARG.Core.Chart
         EliteDrums_KickLane,
         EliteDrums_HatPedalLane,
         EliteDrums_DiscoFlip,
+
+        // (Non-Elite) Drums-exclusive phrases
+        KickLane,
     }
 
     /// <summary>

@@ -240,6 +240,7 @@ namespace YARG.Core.Chart
                     MoonPhrase.Type.Coda                => PhraseType.Coda,
 
                     MoonPhrase.Type.ProDrums_Activation => PhraseType.DrumFill,
+                    MoonPhrase.Type.ProDrums_KickLane   => PhraseType.KickLane,
 
                     MoonPhrase.Type.ProKeys_RangeShift0 => PhraseType.ProKeys_RangeShift0,
                     MoonPhrase.Type.ProKeys_RangeShift1 => PhraseType.ProKeys_RangeShift1,
@@ -556,7 +557,7 @@ namespace YARG.Core.Chart
             _ => throw new InvalidOperationException($"Invalid difficulty {difficulty}!")
         };
 
-        private static List<TNote> GetNotesInLanePhrase<TNote>(List<Phrase> phrases, int phraseIndex, List<TNote> allNotes, int startingIndex, out int nextIndex) where TNote : Note<TNote>
+        private static List<TNote> GetNotesInLanePhrase<TNote>(List<Phrase> phrases, int phraseIndex, List<TNote> allNotes, int startingIndex, out int nextIndex, bool lanesCanOverlap) where TNote : Note<TNote>
         {
             var phrase = phrases[phraseIndex];
 
@@ -605,7 +606,13 @@ namespace YARG.Core.Chart
                     break;
                 }
 
-                nextIndex = i + 1; // This is where the next GetNotesInPhrase call will start iterating from, so we don't waste time rescanning earlier notes again
+                if (!lanesCanOverlap)
+                {
+                    // Lanes that cannot overlap can resume scanning from the end of the current phrase.
+                    // Drum kick lanes may overlap hand lanes, so those callers deliberately rescan.
+                    nextIndex = i + 1;
+                }
+
                 notesInPhrase.Add(note);
             }
 
