@@ -242,6 +242,8 @@ namespace YARG.Core.Chart
                     MoonPhrase.Type.ProDrums_Activation => PhraseType.DrumFill,
                     MoonPhrase.Type.ProDrums_KickLane   => PhraseType.KickLane,
 
+                    MoonPhrase.Type.EliteDrums_KickLane => PhraseType.EliteDrums_KickLane,
+
                     MoonPhrase.Type.ProKeys_RangeShift0 => PhraseType.ProKeys_RangeShift0,
                     MoonPhrase.Type.ProKeys_RangeShift1 => PhraseType.ProKeys_RangeShift1,
                     MoonPhrase.Type.ProKeys_RangeShift2 => PhraseType.ProKeys_RangeShift2,

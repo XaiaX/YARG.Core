@@ -95,6 +95,9 @@ namespace YARG.Core.Chart
                     case PhraseType.VersusPlayer2:
                         phrases.Add(new(phrase.Tick, phrase.TickLength, MoonPhrase.Type.Versus_Player2));
                         break;
+                    case PhraseType.EliteDrums_KickLane:
+                        phrases.Add(new(phrase.Tick, phrase.TickLength, MoonPhrase.Type.ProDrums_KickLane));
+                        break;
                     case PhraseType.BigRockEnding:
                         // TODO
                         break;
