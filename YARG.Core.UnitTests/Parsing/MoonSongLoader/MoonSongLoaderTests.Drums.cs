@@ -98,5 +98,92 @@ namespace YARG.Core.UnitTests.Parsing
                 }
             }
         }
+
+        [Test]
+        public void ForcedEliteDrumsDownchart_ReturnsDownchartEvenWhenNativeChartExists()
+        {
+            var song = CreateSong();
+
+            // A native four-lane chart, which normally wins over the Elite fallback
+            var nativeChart = song.GetChart(MoonSong.MoonInstrument.Drums, MoonSong.Difficulty.Expert);
+            nativeChart.Add(new MoonNote(TICKS(1), (int) DrumPad.Red));
+
+            foreach (var difficulty in new[] { MoonSong.Difficulty.Easy, MoonSong.Difficulty.Medium, MoonSong.Difficulty.Hard, MoonSong.Difficulty.Expert })
+            {
+                var eliteSongChart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, difficulty);
+                eliteSongChart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.Snare));
+                eliteSongChart.Add(new MoonNote(TICKS(2), (int) EliteDrumNote.EliteDrumPad.Snare));
+            }
+
+            var eliteSettings = ParseSettings.Default;
+            eliteSettings.DrumsType = DrumsType.FourLane;
+            var eliteTrack = new MoonSongLoader(song, eliteSettings).LoadEliteDrumsTrack(Instrument.EliteDrums);
+
+            var settings = ParseSettings.Default;
+            settings.DrumsType = DrumsType.FourLane;
+            settings.EliteDrumsDownchartOutputs = new[] { Instrument.ProDrums };
+            var loader = new MoonSongLoader(song, settings);
+
+            // The native track is unaffected by the downchart request
+            var native = loader.LoadDrumsTrack(Instrument.ProDrums, eliteTrack);
+            Assert.That(native.GetDifficulty(Difficulty.Expert).Notes, Has.Count.EqualTo(1));
+
+            // The forced downchart is generated even though the native chart exists
+            var downcharts = loader.LoadEliteDrumsDownchartTracks(eliteTrack);
+            Assert.That(downcharts, Does.ContainKey(Instrument.ProDrums));
+
+            var downchart = downcharts[Instrument.ProDrums];
+            using (Assert.EnterMultipleScope())
+            {
+                foreach (var difficulty in new[] { Difficulty.Easy, Difficulty.Medium, Difficulty.Hard, Difficulty.Expert })
+                {
+                    var notes = downchart.GetDifficulty(difficulty).Notes;
+                    Assert.That(notes, Has.Count.EqualTo(2));
+                    Assert.That(notes[0].Pad, Is.EqualTo((int) FourLaneDrumPad.RedDrum));
+                    Assert.That(notes[1].Pad, Is.EqualTo((int) FourLaneDrumPad.RedDrum));
+                }
+            }
+        }
+
+        [Test]
+        public void ForcedEliteDrumsDownchart_FiveLaneOutput_UsesFiveLanePads()
+        {
+            var song = CreateSong();
+
+            var eliteSongChart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            eliteSongChart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.Snare));
+
+            var eliteSettings = ParseSettings.Default;
+            eliteSettings.DrumsType = DrumsType.FourLane;
+            var eliteTrack = new MoonSongLoader(song, eliteSettings).LoadEliteDrumsTrack(Instrument.EliteDrums);
+
+            var settings = ParseSettings.Default;
+            settings.DrumsType = DrumsType.FourLane;
+            settings.EliteDrumsDownchartOutputs = new[] { Instrument.FiveLaneDrums };
+            var loader = new MoonSongLoader(song, settings);
+
+            var downcharts = loader.LoadEliteDrumsDownchartTracks(eliteTrack);
+            Assert.That(downcharts, Does.ContainKey(Instrument.FiveLaneDrums));
+
+            var notes = downcharts[Instrument.FiveLaneDrums].GetDifficulty(Difficulty.Expert).Notes;
+            Assert.That(notes, Has.Count.EqualTo(1));
+            Assert.That(notes[0].Pad, Is.EqualTo((int) FiveLaneDrumPad.Red));
+        }
+
+        [Test]
+        public void ForcedEliteDrumsDownchart_NoEliteChart_ReturnsNoDowncharts()
+        {
+            var song = CreateSong();
+
+            var settings = ParseSettings.Default;
+            settings.DrumsType = DrumsType.FourLane;
+            settings.EliteDrumsDownchartOutputs = new[] { Instrument.ProDrums };
+            var loader = new MoonSongLoader(song, settings);
+
+            var downcharts = loader.LoadEliteDrumsDownchartTracks(
+                new MoonSongLoader(song, ParseSettings.Default).LoadEliteDrumsTrack(Instrument.EliteDrums));
+
+            Assert.That(downcharts, Is.Empty);
+        }
     }
 }

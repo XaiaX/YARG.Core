@@ -83,6 +83,16 @@ namespace YARG.Core.Game
         public Instrument PreferredInstrument;
 
         /// <summary>
+        /// When true, this player's current drums selection plays the Elite Drums chart downcharted
+        /// to <see cref="CurrentInstrument"/> instead of that instrument's native chart (the
+        /// experimental "Elite (Downchart)" option in difficulty select). The output format is
+        /// simply whatever <see cref="CurrentInstrument"/> is at play time.
+        /// Transient session state: never serialized to the profile or to replays.
+        /// </summary>
+        [JsonIgnore]
+        public bool UseEliteDrumsDownchart { get; set; }
+
+        /// <summary>
         /// The selected difficulty.
         /// </summary>
         public Difficulty CurrentDifficulty;

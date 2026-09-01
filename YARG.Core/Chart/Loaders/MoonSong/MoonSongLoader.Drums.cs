@@ -66,28 +66,92 @@ namespace YARG.Core.Chart
             }
 
             // No native chart. Do we have an Elite Drums chart to fall back on?
-            if (eliteDrumsFallback is not null)
+            if (TryLoadEliteDrumsDownchart(instrument, createNote, beginnerNoteDelegate, eliteDrumsFallback,
+                out InstrumentTrack<DrumNote> downchart))
             {
-                // Generate downcharts if we haven't already
-                _downCharts ??= DownchartEliteDrumsTrack(eliteDrumsFallback);
-
-                if (_downCharts is not null)
-                {
-                    _settings.DrumsType = DrumsType.FourLane;
-
-                    difficulties = new Dictionary<Difficulty, InstrumentDifficulty<DrumNote>>()
-                    {
-                        { Difficulty.Beginner, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, beginnerNoteDelegate, HandleTextEvent) },
-                        { Difficulty.Easy, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, createNote, HandleTextEvent)},
-                        { Difficulty.Medium, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Medium, createNote, HandleTextEvent)},
-                        { Difficulty.Hard, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Hard, createNote, HandleTextEvent)},
-                        { Difficulty.Expert, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Expert, createNote, HandleTextEvent)},
-                        { Difficulty.ExpertPlus, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.ExpertPlus, createNote, HandleTextEvent)},
-                    };
-                }
+                return downchart;
             }
 
             return new(instrument, difficulties, GetAnimationTrack(instrument));
+        }
+
+        public IReadOnlyDictionary<Instrument, InstrumentTrack<DrumNote>> LoadEliteDrumsDownchartTracks(
+            InstrumentTrack<EliteDrumNote> eliteDrumsTrack)
+        {
+            var downcharts = new Dictionary<Instrument, InstrumentTrack<DrumNote>>();
+
+            if (_settings.EliteDrumsDownchartOutputs is null)
+            {
+                return downcharts;
+            }
+
+            foreach (var instrument in _settings.EliteDrumsDownchartOutputs)
+            {
+                var track = LoadEliteDrumsDownchartTrack(instrument, eliteDrumsTrack);
+
+                // Only expose downcharts that actually contain notes; otherwise callers
+                // fall back to the native drums tracks
+                if (!track.IsEmpty)
+                {
+                    downcharts.Add(instrument, track);
+                }
+            }
+
+            return downcharts;
+        }
+
+        public InstrumentTrack<DrumNote> LoadEliteDrumsDownchartTrack(Instrument instrument,
+            InstrumentTrack<EliteDrumNote>? eliteDrumsTrack)
+        {
+            CreateNoteDelegate<DrumNote> createNote = instrument.ToNativeGameMode() switch
+            {
+                GameMode.FourLaneDrums => CreateFourLaneDrumNote,
+                GameMode.FiveLaneDrums => CreateFiveLaneDrumNote,
+                _ => throw new ArgumentException($"Instrument {instrument} is not a drums instrument!", nameof(instrument))
+            };
+
+            CreateNoteDelegate<DrumNote> beginnerNoteDelegate = instrument is Instrument.FourLaneDrums
+                ? CreateFourLaneDrumBeginnerNote
+                : CreateFiveLaneDrumBeginnerNote;
+
+            _ = TryLoadEliteDrumsDownchart(instrument, createNote, beginnerNoteDelegate, eliteDrumsTrack,
+                out InstrumentTrack<DrumNote> track);
+            return track;
+        }
+
+        private bool TryLoadEliteDrumsDownchart(Instrument instrument, CreateNoteDelegate<DrumNote> createNote,
+            CreateNoteDelegate<DrumNote> beginnerNoteDelegate, InstrumentTrack<EliteDrumNote>? eliteDrumsTrack,
+            out InstrumentTrack<DrumNote> track)
+        {
+            track = new(instrument, new Dictionary<Difficulty, InstrumentDifficulty<DrumNote>>(), GetAnimationTrack(instrument));
+
+            if (eliteDrumsTrack is null)
+            {
+                return false;
+            }
+
+            // Generate downcharts if we haven't already
+            _downCharts ??= DownchartEliteDrumsTrack(eliteDrumsTrack);
+
+            if (_downCharts is null)
+            {
+                return false;
+            }
+
+            _settings.DrumsType = DrumsType.FourLane;
+
+            var difficulties = new Dictionary<Difficulty, InstrumentDifficulty<DrumNote>>()
+            {
+                { Difficulty.Beginner, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, beginnerNoteDelegate, HandleTextEvent) },
+                { Difficulty.Easy, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, createNote, HandleTextEvent)},
+                { Difficulty.Medium, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Medium, createNote, HandleTextEvent)},
+                { Difficulty.Hard, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Hard, createNote, HandleTextEvent)},
+                { Difficulty.Expert, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Expert, createNote, HandleTextEvent)},
+                { Difficulty.ExpertPlus, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.ExpertPlus, createNote, HandleTextEvent)},
+            };
+
+            track = new(instrument, difficulties, GetAnimationTrack(instrument));
+            return true;
         }
 
         // "Hand chords" are ineligible for drum trills, but chords consisting of one hand gem and a kick are eligible

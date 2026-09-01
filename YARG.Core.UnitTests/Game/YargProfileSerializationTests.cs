@@ -376,6 +376,35 @@ public sealed class YargProfileSerializationTests
         Assert.That(deserialized.PartyVocalsChartPreference, Is.EqualTo(PartyVocalsChartPreference.Solo));
     }
 
+    // The Elite (Downchart) selection is transient session state: it must never reach
+    // the JSON profile or the binary (replay) profile serialization.
+    [Test]
+    public void UseEliteDrumsDownchart_IsNotSerialized()
+    {
+        var original = CreateTestProfile(instrument: Instrument.ProDrums);
+        original.UseEliteDrumsDownchart = true;
+
+        string json = JsonConvert.SerializeObject(original);
+        Assert.That(json, Does.Not.Contain("UseEliteDrumsDownchart"));
+
+        var jsonDeserialized = JsonConvert.DeserializeObject<YargProfile>(json);
+        Assert.That(jsonDeserialized.UseEliteDrumsDownchart, Is.False);
+
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        using (var writer = new BinaryWriter(ms))
+        {
+            original.Serialize(writer);
+            bytes = ms.ToArray();
+        }
+
+        var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
+        bytes.CopyTo(fixedArray.Span);
+        var stream = new FixedArrayStream(fixedArray);
+        var binaryDeserialized = new YargProfile(ref stream);
+        Assert.That(binaryDeserialized.UseEliteDrumsDownchart, Is.False);
+    }
+
     // Default value test
     [Test]
     public void NewProfile_HasDefaultPartyVocalsChartPreference()

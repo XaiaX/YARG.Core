@@ -141,7 +141,7 @@ public class PreviewContextTests
 
         public override DateTime GetLastWriteTime() => DateTime.UnixEpoch;
 
-        public override SongChart? LoadChart() => null;
+        public override SongChart? LoadChart(IReadOnlyCollection<Instrument>? eliteDrumsDownchartOutputs = null) => null;
 
         public override StemMixer? LoadAudio(float speed, double volume, params SongStem[] ignoreStems) => null;
 

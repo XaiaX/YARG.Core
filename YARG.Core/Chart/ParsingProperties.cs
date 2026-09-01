@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 
 namespace YARG.Core.Chart
 {
@@ -127,5 +128,13 @@ namespace YARG.Core.Chart
         /// Defaults to 0. Should never go beyond the [-50,50] range, but can still be honored if it does.
         /// </remarks>
         public int TuningOffsetCents;
+
+        /// <summary>
+        /// Drum instruments to build forced Elite Drums downchart tracks for (experimental).
+        /// The native drums tracks are always loaded as usual; these request *additional*
+        /// tracks generated from the Elite Drums chart, regardless of whether a native
+        /// chart exists. Null or empty when no downcharts are requested.
+        /// </summary>
+        public IReadOnlyCollection<Instrument>? EliteDrumsDownchartOutputs;
     }
 }
