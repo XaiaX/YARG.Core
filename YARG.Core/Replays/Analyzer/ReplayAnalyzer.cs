@@ -323,6 +323,10 @@ namespace YARG.Core.Replays.Analyzer
                     var notes = _chart.GetVocalsTrack(profile.CurrentInstrument)
                         .Parts[profile.HarmonyIndex].Clone();
                     profile.ApplyVocalModifiers(notes, profile.HarmonyIndex);
+                    if (profile.CurrentInstrument == Instrument.Harmony && notes.IsHarmony)
+                    {
+                        notes.InheritStarPowerFlagsFromSolo(_chart.Vocals.Parts[0]);
+                    }
 
                     // Create engine
                     return new YargVocalsEngine(

@@ -150,6 +150,53 @@ public class VocalsTrackTests
         Assert.That(trimmed.RangeShifts.Select(e => e.Tick), Is.EqualTo(new uint[] { 75, 125, 175 }));
     }
 
+    [Test]
+    public void InheritStarPowerFlagsFromSolo_CopiesSoloIntervalToHarmonyClone()
+    {
+        var solo = CreatePartWithStarPowerPhrase(NoteFlags.StarPower, 100, 40);
+        var harmony = CreatePartWithStarPowerPhrase(NoteFlags.None, 100, 40);
+        var harmonyClone = harmony.Clone();
+
+        harmonyClone.InheritStarPowerFlagsFromSolo(solo);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(harmonyClone.NotePhrases[0].IsStarPower, Is.True);
+            Assert.That(harmony.NotePhrases[0].IsStarPower, Is.False);
+        }
+    }
+
+    [Test]
+    public void InheritStarPowerFlagsFromSolo_DoesNotFabricateWithoutSoloStarPower()
+    {
+        var solo = CreatePartWithStarPowerPhrase(NoteFlags.None, 100, 40);
+        var harmony = CreatePartWithStarPowerPhrase(NoteFlags.None, 100, 40);
+
+        harmony.InheritStarPowerFlagsFromSolo(solo);
+
+        Assert.That(harmony.NotePhrases[0].IsStarPower, Is.False);
+    }
+
+    [Test]
+    public void InheritStarPowerFlagsFromSolo_PreservesHarmonyStarPower()
+    {
+        var solo = CreatePartWithStarPowerPhrase(NoteFlags.StarPower, 100, 40);
+        var harmony = CreatePartWithStarPowerPhrase(NoteFlags.StarPower, 100, 40);
+
+        harmony.InheritStarPowerFlagsFromSolo(solo);
+
+        Assert.That(harmony.NotePhrases[0].IsStarPower, Is.True);
+    }
+
+    private static VocalsPart CreatePartWithStarPowerPhrase(NoteFlags flags, uint tick, uint tickLength)
+    {
+        var parentNote = new VocalNote(flags, false, tick / 100.0, tickLength / 100.0, tick, tickLength);
+        parentNote.AddChildNote(new VocalNote(60, 0, VocalNoteType.Lyric,
+            tick / 100.0, tickLength / 100.0, tick, tickLength));
+        var phrase = new VocalsPhrase(parentNote.Time, parentNote.TimeLength, tick, tickLength, parentNote, []);
+        return new VocalsPart(false, [phrase], [], [], []);
+    }
+
     private static VocalsPart CreatePartWithSungPhrase()
     {
         var parentNote = new VocalNote(NoteFlags.None, false, 1.0, 0.4, 100, 40);
