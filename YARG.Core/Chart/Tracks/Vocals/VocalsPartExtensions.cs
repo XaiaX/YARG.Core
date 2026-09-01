@@ -1,7 +1,42 @@
-﻿namespace YARG.Core.Chart
+﻿using System.Linq;
+
+namespace YARG.Core.Chart
 {
     public static class VocalsPartExtensions
     {
+        /// <summary>
+        /// Copies Solo vocal Star Power intervals onto a Harmony part that has no
+        /// Star Power of its own. Harmony charts commonly omit the Star Power phrase
+        /// events that are present on the Solo track.
+        /// </summary>
+        /// <param name="harmonyPart">A cloned Harmony part to prepare for analysis.</param>
+        /// <param name="soloPart">The Solo vocal part containing the source intervals.</param>
+        public static void InheritStarPowerFlagsFromSolo(this VocalsPart harmonyPart, VocalsPart soloPart)
+        {
+            if (harmonyPart.NotePhrases.Any(phrase => phrase.IsStarPower))
+            {
+                return;
+            }
+
+            var soloStarPowerNotes = soloPart.NotePhrases
+                .Where(phrase => phrase.IsStarPower)
+                .Select(phrase => phrase.PhraseParentNote)
+                .ToList();
+            if (soloStarPowerNotes.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var phrase in harmonyPart.NotePhrases)
+            {
+                var note = phrase.PhraseParentNote;
+                if (soloStarPowerNotes.Any(sp => note.Tick >= sp.Tick && note.Tick < sp.Tick + sp.TickLength))
+                {
+                    note.Flags |= NoteFlags.StarPower;
+                }
+            }
+        }
+
         public static void ConvertAllToUnpitched(this VocalsPart vocalsTrack)
         {
             for (int i = 0; i < vocalsTrack.NotePhrases.Count; i++)
