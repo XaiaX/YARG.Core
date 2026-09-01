@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using YARG.Core.Audio;
 using YARG.Core.Chart;
@@ -38,7 +39,11 @@ namespace YARG.Core.Song
 
     public abstract partial class SongEntry
     {
-        public abstract SongChart? LoadChart();
+        /// <param name="eliteDrumsDownchartOutputs">
+        /// Optional (experimental) drum instruments to build forced Elite Drums downchart
+        /// tracks for, in addition to the native drums tracks. Null for normal loads.
+        /// </param>
+        public abstract SongChart? LoadChart(IReadOnlyCollection<Instrument>? eliteDrumsDownchartOutputs = null);
         public abstract StemMixer? LoadAudio(float speed, double volume, params SongStem[] ignoreStems);
         public abstract StemMixer? LoadPreviewAudio(float speed);
         public abstract YARGImage? LoadAlbumData();

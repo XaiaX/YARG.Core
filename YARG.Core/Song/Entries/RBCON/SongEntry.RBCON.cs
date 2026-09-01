@@ -104,7 +104,7 @@ namespace YARG.Core.Song
             WriteAudio(in _panning, stream);
         }
 
-        public override SongChart? LoadChart()
+        public override SongChart? LoadChart(IReadOnlyCollection<Instrument>? eliteDrumsDownchartOutputs = null)
         {
             MidiFile midi;
             var readingSettings = MidiSettingsLatin1.Instance; // RBCONs are always Latin-1
@@ -158,7 +158,8 @@ namespace YARG.Core.Song
                 TuningOffsetCents = _settings.TuningOffsetCents,
                 DrumsType = DrumsType.FourLane,
                 ChordHopoCancellation = true,
-                NoteSnapThreshold = NOTE_SNAP_THRESHOLD
+                NoteSnapThreshold = NOTE_SNAP_THRESHOLD,
+                EliteDrumsDownchartOutputs = eliteDrumsDownchartOutputs,
             };
             return SongChart.FromMidi(in parseSettings, midi);
         }

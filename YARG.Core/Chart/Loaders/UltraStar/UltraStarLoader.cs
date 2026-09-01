@@ -235,6 +235,12 @@ namespace YARG.Core.Chart.Loaders.UltraStar
         public InstrumentTrack<DrumNote> LoadDrumsTrack(Instrument i, InstrumentTrack<EliteDrumNote>? e) => throw new NotSupportedException();
         public InstrumentTrack<EliteDrumNote> LoadEliteDrumsTrack(Instrument i) => throw new NotSupportedException();
 
+        // UltraStar charts never contain drums, so there is never an Elite Drums chart
+        // to downchart. Return nothing rather than throwing so callers can fall back
+        // to the (empty) native drums tracks.
+        public IReadOnlyDictionary<Instrument, InstrumentTrack<DrumNote>> LoadEliteDrumsDownchartTracks(
+            InstrumentTrack<EliteDrumNote> eliteDrumsTrack) => new Dictionary<Instrument, InstrumentTrack<DrumNote>>();
+
         public SyncTrack LoadSyncTrack()
         {
             if (_syncTrack != null)

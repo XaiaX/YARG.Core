@@ -81,7 +81,7 @@ namespace YARG.Core.Song
             stream.Write(_cover);
         }
 
-        public override SongChart? LoadChart()
+        public override SongChart? LoadChart(IReadOnlyCollection<Instrument>? eliteDrumsDownchartOutputs = null)
         {
             using var data = GetChartData(CHART_FILE_TYPES[(int) _chartFormat].Filename);
 
@@ -97,7 +97,8 @@ namespace YARG.Core.Song
                 StarPowerNote = _settings.OverdiveMidiNote,
                 TuningOffsetCents = _settings.TuningOffsetCents,
                 DrumsType = ParseDrumsType(in _parts),
-                ChordHopoCancellation = _chartFormat != ChartFormat.Chart
+                ChordHopoCancellation = _chartFormat != ChartFormat.Chart,
+                EliteDrumsDownchartOutputs = eliteDrumsDownchartOutputs,
             };
 
             if (_chartFormat == ChartFormat.UltraStar)

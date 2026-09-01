@@ -70,6 +70,17 @@ namespace YARG.Core.Chart
 
         public InstrumentTrack<EliteDrumNote> EliteDrums { get; set; } = new(Instrument.EliteDrums);
 
+        /// <summary>
+        /// Forced Elite Drums downchart tracks (experimental), keyed by the output instrument.
+        /// Only populated when requested at load time (see
+        /// <see cref="ParseSettings.EliteDrumsDownchartOutputs"/>), and only for
+        /// instruments whose downchart actually contains notes. Unlike the native drums
+        /// tracks above, these are always generated from the Elite Drums chart, even when
+        /// a native chart exists, so a native and a downchart variant can coexist.
+        /// </summary>
+        public IReadOnlyDictionary<Instrument, InstrumentTrack<DrumNote>> EliteDrumsDowncharts { get; internal set; }
+            = new Dictionary<Instrument, InstrumentTrack<DrumNote>>();
+
         public IEnumerable<InstrumentTrack<DrumNote>> DrumsTracks
         {
             get
@@ -141,6 +152,10 @@ namespace YARG.Core.Chart
             FourLaneDrums = loader.LoadDrumsTrack(Instrument.FourLaneDrums, EliteDrums);
             ProDrums = loader.LoadDrumsTrack(Instrument.ProDrums, EliteDrums);
             FiveLaneDrums = loader.LoadDrumsTrack(Instrument.FiveLaneDrums, EliteDrums);
+
+            // Experimental forced downcharts are built last, because downchart generation
+            // flips the loader's drums type to four-lane for subsequent note conversion
+            EliteDrumsDowncharts = loader.LoadEliteDrumsDownchartTracks(EliteDrums);
 
             ProGuitar_17Fret = loader.LoadProGuitarTrack(Instrument.ProGuitar_17Fret);
             ProGuitar_22Fret = loader.LoadProGuitarTrack(Instrument.ProGuitar_22Fret);
@@ -280,6 +295,21 @@ namespace YARG.Core.Chart
                 Instrument.FiveLaneDrums => FiveLaneDrums,
                 _ => throw new ArgumentException($"Instrument {instrument} is not a drums instrument!")
             };
+        }
+
+        /// <summary>
+        /// Gets the drums track for an instrument, preferring the forced Elite Drums
+        /// downchart variant (experimental) when one was built for it. Falls back to the
+        /// native track when no downchart variant exists for the instrument.
+        /// </summary>
+        public InstrumentTrack<DrumNote> GetDrumsTrack(Instrument instrument, bool eliteDrumsDownchart)
+        {
+            if (eliteDrumsDownchart && EliteDrumsDowncharts.TryGetValue(instrument, out var downchart))
+            {
+                return downchart;
+            }
+
+            return GetDrumsTrack(instrument);
         }
 
         public InstrumentTrack<ProGuitarNote> GetProGuitarTrack(Instrument instrument)
