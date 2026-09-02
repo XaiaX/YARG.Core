@@ -185,5 +185,148 @@ namespace YARG.Core.UnitTests.Parsing
 
             Assert.That(downcharts, Is.Empty);
         }
+
+        [Test]
+        public void ForcedEliteDrumsDownchart_HatPedalOnlyChart_BuildsNoDownchart()
+        {
+            // The loader half of the rules/loader agreement (scan half:
+            // EliteDrumsDownchartScanTests): an Elite chart whose every note is an
+            // unforced hat pedal downcharts to nothing, so no downchart variant is
+            // exposed at all — the menu rules must not offer a target for such a song
+            // when it has no native drums either.
+            var song = CreateSong();
+            var eliteSongChart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            eliteSongChart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.HatPedal));
+            eliteSongChart.Add(new MoonNote(TICKS(2), (int) EliteDrumNote.EliteDrumPad.HatPedal));
+
+            var downcharts = LoadDowncharts(song);
+            Assert.That(downcharts, Is.Empty,
+                "an Elite chart of only unforced hat pedals must generate no downchart");
+
+            // The implicit native fallback path agrees: with no native drums and no
+            // convertible notes, the drums track loads empty difficulties.
+            var eliteTrack = new MoonSongLoader(song, ParseSettings.Default).LoadEliteDrumsTrack(Instrument.EliteDrums);
+            var native = new MoonSongLoader(song, ParseSettings.Default)
+                .LoadDrumsTrack(Instrument.FourLaneDrums, eliteTrack);
+            Assert.That(native.GetDifficulty(Difficulty.Expert).Notes, Is.Empty,
+                "the implicit elite fallback must not invent notes either");
+        }
+
+        [Test]
+        public void ForcedEliteDrumsDownchart_InvisibleTerminatorHatPedalOnlyChart_BuildsNoDownchart()
+        {
+            // Same shape, but the hat pedals carry the invisible-terminator flag
+            // (ghost velocity in MIDI): they are dropped even when channel flagged,
+            // so the downchart is empty and the preparser mask must stay empty too.
+            var song = CreateSong();
+            var eliteSongChart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            eliteSongChart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.HatPedal, 0,
+                Flags.EliteDrums_InvisibleTerminator | Flags.EliteDrums_ChannelFlagYellow));
+            eliteSongChart.Add(new MoonNote(TICKS(2), (int) EliteDrumNote.EliteDrumPad.HatPedal, 0,
+                Flags.EliteDrums_InvisibleTerminator));
+
+            var downcharts = LoadDowncharts(song);
+            Assert.That(downcharts, Is.Empty,
+                "invisible-terminator hat pedals must never keep a downchart alive, even when channel flagged");
+        }
+
+        [Test]
+        public void ForcedEliteDrumsDownchart_ChannelFlaggedHatPedalOnlyChart_BuildsADownchart()
+        {
+            // The mirror image: channel-flagged hat pedals convert to cymbal gems, so
+            // the downchart exists — and the scan-time mask must record it (see
+            // EliteDrumsDownchartScanTests.ChannelFlaggedHatPedal_CountsAsDownchart).
+            var song = CreateSong();
+            var eliteSongChart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            eliteSongChart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.HatPedal, 0,
+                Flags.EliteDrums_ChannelFlagYellow));
+
+            var downcharts = LoadDowncharts(song);
+            Assert.That(downcharts, Does.ContainKey(Instrument.ProDrums));
+            Assert.That(downcharts[Instrument.ProDrums].GetDifficulty(Difficulty.Expert).Notes, Is.Not.Empty,
+                "a channel-flagged hat pedal converts to a cymbal gem");
+        }
+
+        [Test]
+        public void ForcedEliteDrumsDownchart_SuppressedHatPedalChord_ConvertsOnlyTheHiHat()
+        {
+            // The loader half of the chord-context regression (scan half:
+            // EliteDrumsDownchartScanTests.ChordedFlaggedHatPedalWithPlainHiHat_AdvertisesOnlyViaTheHiHat):
+            // the full reader suppresses a channel-flagged pedal chorded with a
+            // non-indifferent hi-hat into an invisible terminator, and the downchart
+            // builder drops that pedal — but the hi-hat partner itself converts to a
+            // yellow cymbal, so the difficulty stays playable and both sides must
+            // advertise it. A "suppressed pedals only" chart cannot exist: the
+            // suppression requires the chorded hi-hat, which converts.
+            var song = CreateSong();
+            var eliteSongChart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            eliteSongChart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.HatPedal, 0,
+                Flags.EliteDrums_InvisibleTerminator | Flags.EliteDrums_ChannelFlagYellow));
+            eliteSongChart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.HiHat));
+
+            var downcharts = LoadDowncharts(song);
+            Assert.That(downcharts, Does.ContainKey(Instrument.ProDrums),
+                "the chorded hi-hat keeps the downchart alive");
+
+            var notes = downcharts[Instrument.ProDrums].GetDifficulty(Difficulty.Expert).Notes;
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(notes, Has.Count.EqualTo(1),
+                    "the suppressed pedal must not convert; only the hi-hat's gem remains");
+                Assert.That(notes[0].Pad, Is.EqualTo((int) FourLaneDrumPad.YellowCymbal),
+                    "the hi-hat converts to a yellow cymbal gem");
+            }
+        }
+
+        [Test]
+        public void ForcedEliteDrumsDownchart_InvalidTargetsAreSkippedAndFailClosed()
+        {
+            // MINOR regression: downchart output requests can come from serialized
+            // data (e.g. replay profiles), so malformed or non-drum values must be
+            // skipped before loading / fail closed at the loader boundary instead
+            // of reaching ToNativeGameMode() and throwing.
+            var song = CreateSong();
+            var eliteSongChart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            eliteSongChart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.Snare));
+
+            var eliteTrack = new MoonSongLoader(song, ParseSettings.Default).LoadEliteDrumsTrack(Instrument.EliteDrums);
+
+            var malformedTarget = unchecked((Instrument) 1234);
+            var settings = ParseSettings.Default;
+            settings.DrumsType = DrumsType.FourLane;
+            settings.EliteDrumsDownchartOutputs = new[]
+            {
+                Instrument.FiveFretGuitar, // well-formed, but not a drums target
+                malformedTarget,           // malformed serialized value
+                Instrument.EliteDrums,     // drums, but not a downchart output format
+                Instrument.ProDrums,       // valid target
+            };
+            var loader = new MoonSongLoader(song, settings);
+
+            var downcharts = loader.LoadEliteDrumsDownchartTracks(eliteTrack);
+            Assert.That(downcharts.Keys, Is.EqualTo(new[] { Instrument.ProDrums }),
+                "only the valid target may be built; invalid ones are skipped, not thrown");
+
+            // The single-track boundary fails closed instead of throwing
+            var malformed = loader.LoadEliteDrumsDownchartTrack(malformedTarget, eliteTrack);
+            Assert.That(malformed.IsEmpty, Is.True,
+                "an invalid target yields an empty track so callers fall back to the native track");
+
+            // Valid target and native fallback behavior are preserved
+            Assert.That(downcharts[Instrument.ProDrums].GetDifficulty(Difficulty.Expert).Notes, Is.Not.Empty);
+            var native = loader.LoadDrumsTrack(Instrument.ProDrums, eliteTrack);
+            Assert.That(native.GetDifficulty(Difficulty.Expert).Notes, Is.Not.Empty,
+                "the native fallback path is unaffected by invalid downchart outputs");
+        }
+
+        private static IReadOnlyDictionary<Instrument, InstrumentTrack<DrumNote>> LoadDowncharts(MoonSong song)
+        {
+            var eliteTrack = new MoonSongLoader(song, ParseSettings.Default).LoadEliteDrumsTrack(Instrument.EliteDrums);
+
+            var settings = ParseSettings.Default;
+            settings.DrumsType = DrumsType.FourLane;
+            settings.EliteDrumsDownchartOutputs = new[] { Instrument.ProDrums };
+            return new MoonSongLoader(song, settings).LoadEliteDrumsDownchartTracks(eliteTrack);
+        }
     }
 }

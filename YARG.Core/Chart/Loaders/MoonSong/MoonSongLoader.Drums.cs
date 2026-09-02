@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using MoonscraperChartEditor.Song;
 using MoonscraperChartEditor.Song.IO;
 using YARG.Core.Extensions;
+using YARG.Core.Game;
 using YARG.Core.Logging;
 using YARG.Core.Parsing;
 using static MoonscraperChartEditor.Song.MoonNote;
@@ -87,6 +88,18 @@ namespace YARG.Core.Chart
 
             foreach (var instrument in _settings.EliteDrumsDownchartOutputs)
             {
+                // Skip invalid targets before loading: the request collection can
+                // originate from serialized data (e.g. replay profiles), so a
+                // malformed or non-drum value must never reach the loader's
+                // game-mode boundary and throw. This is the same fail-closed
+                // target domain EliteDrumsDownchartRules defines.
+                if (!EliteDrumsDownchartRules.IsValidTarget(instrument))
+                {
+                    YargLogger.LogFormatWarning(
+                        "Skipping invalid Elite Drums downchart output target: {0}", instrument);
+                    continue;
+                }
+
                 var track = LoadEliteDrumsDownchartTrack(instrument, eliteDrumsTrack);
 
                 // Only expose downcharts that actually contain notes; otherwise callers
@@ -103,6 +116,18 @@ namespace YARG.Core.Chart
         public InstrumentTrack<DrumNote> LoadEliteDrumsDownchartTrack(Instrument instrument,
             InstrumentTrack<EliteDrumNote>? eliteDrumsTrack)
         {
+            // Fail-closed boundary guard: anything outside the valid downchart
+            // target domain (malformed serialized values, non-drum instruments)
+            // must not reach ToNativeGameMode(), which throws for such values.
+            // Returning an empty track preserves callers' native fallback, since
+            // they only expose downcharts that contain notes.
+            if (!EliteDrumsDownchartRules.IsValidTarget(instrument))
+            {
+                YargLogger.LogFormatWarning(
+                    "Refusing to build an Elite Drums downchart for invalid target: {0}", instrument);
+                return new(instrument);
+            }
+
             CreateNoteDelegate<DrumNote> createNote = instrument.ToNativeGameMode() switch
             {
                 GameMode.FourLaneDrums => CreateFourLaneDrumNote,

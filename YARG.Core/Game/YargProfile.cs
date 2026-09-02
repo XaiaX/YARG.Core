@@ -12,7 +12,10 @@ namespace YARG.Core.Game
 {
     public partial class YargProfile
     {
-        private readonly int PROFILE_VERSION = 12;
+        // Version 13 added EliteDrumsDownchartTarget (see the property below). This is the
+        // *replay* profile version — it only ever appears inside ReplayFrame serialization,
+        // never in the JSON profile persistence.
+        private readonly int PROFILE_VERSION = 13;
 
         public int Version;
 
@@ -83,14 +86,24 @@ namespace YARG.Core.Game
         public Instrument PreferredInstrument;
 
         /// <summary>
-        /// When true, this player's current drums selection plays the Elite Drums chart downcharted
-        /// to <see cref="CurrentInstrument"/> instead of that instrument's native chart (the
-        /// experimental "Elite (Downchart)" option in difficulty select). The output format is
-        /// simply whatever <see cref="CurrentInstrument"/> is at play time.
-        /// Transient session state: never serialized to the profile or to replays.
+        /// The output format explicitly chosen through the experimental "Elite (To …)"
+        /// options in difficulty select (<see cref="Instrument.FourLaneDrums"/>,
+        /// <see cref="Instrument.ProDrums"/>, or <see cref="Instrument.FiveLaneDrums"/>),
+        /// or null when the player is on a native chart. When set, the player plays the
+        /// Elite Drums chart downcharted to this instrument, and <see cref="CurrentInstrument"/>
+        /// is kept equal to it so gameplay (engine mode, highway, visuals, scoring) follows
+        /// the chosen output. Songs without an Elite Drums chart fall back to native
+        /// resolution for that song.
+        /// <para>
+        /// Transient session state as far as the <b>profile</b> is concerned: the property
+        /// is <c>[JsonIgnore]</c>, so it never reaches normal profile persistence. It *is*
+        /// written to the replay-only binary form (<see cref="Serialize(BinaryWriter)"/>),
+        /// because it determines which chart a replay of this session must load in order to
+        /// reproduce the run deterministically.
+        /// </para>
         /// </summary>
         [JsonIgnore]
-        public bool UseEliteDrumsDownchart { get; set; }
+        public Instrument? EliteDrumsDownchartTarget { get; set; }
 
         /// <summary>
         /// The selected difficulty.
@@ -419,6 +432,35 @@ namespace YARG.Core.Game
             {
                 _partyVocalsChartPreference = (byte) PartyVocalsChartPreference.Harmony;
             }
+
+            if (Version >= 13)
+            {
+                // Written as a presence flag followed by the instrument byte because
+                // 0 is a valid Instrument value (FiveFretGuitar) and must not be
+                // mistaken for "no target". Profiles from older replays predate the
+                // explicit "Elite (To …)" options entirely, so they read as null and
+                // keep loading whatever native track CurrentInstrument names. A value
+                // outside the valid target domain (only 4-lane/Pro/5-lane — see
+                // EliteDrumsDownchartRules) is a malformed or stale value, not a
+                // playable target: it is read and discarded rather than trusted.
+                EliteDrumsDownchartTarget = stream.ReadBoolean()
+                    ? ReadValidDownchartTarget(ref stream)
+                    : null;
+            }
+        }
+
+        /// <summary>
+        /// Reads one serialized downchart target byte, accepting it only when it names
+        /// a real target format (see <see cref="EliteDrumsDownchartRules.IsValidTarget"/>).
+        /// Malformed or stale bytes read as "no target" so they can never pin gameplay
+        /// to a track that does not exist. The stream is passed by ref because
+        /// FixedArrayStream is a struct — a by-value copy would silently desynchronize
+        /// the caller's read position.
+        /// </summary>
+        private static Instrument? ReadValidDownchartTarget(ref FixedArrayStream stream)
+        {
+            var target = (Instrument) stream.ReadByte();
+            return EliteDrumsDownchartRules.IsValidTarget(target) ? target : null;
         }
 
         public void AddSingleModifier(Modifier modifier)
@@ -688,6 +730,19 @@ namespace YARG.Core.Game
             // Version 12+: Party Vocals chart preference (Solo vs HARM). Determines
             // scored notes, so it must be captured for deterministic replay playback.
             writer.Write(_partyVocalsChartPreference);
+
+            // Version 13+: the explicit "Elite (To …)" downchart output target, when one
+            // is active. It selects which drums track the run was played on, so a replay
+            // must reproduce it or it would re-simulate against a different chart.
+            if (EliteDrumsDownchartTarget is { } downchartTarget)
+            {
+                writer.Write(true);
+                writer.Write((byte) downchartTarget);
+            }
+            else
+            {
+                writer.Write(false);
+            }
         }
 
         private static DrumsHighwayItem[] DEFAULT_FOUR_LANE_ORDERING = new DrumsHighwayItem[] {

@@ -118,6 +118,19 @@ internal sealed class TestSongEntry : SongEntry
         return parts;
     }
 
+    /// <summary>
+    /// Runs the real MIDI scan (SongEntry.ParseMidi) over raw MIDI file bytes and
+    /// returns the parts it recorded, so tests can pin scan-time metadata — in
+    /// particular the Elite Drums downchart mask — against actual scanner behavior.
+    /// </summary>
+    public static AvailableParts ParseMidiForTest(FixedArray<byte> file)
+    {
+        var parts = AvailableParts.Default;
+        var drumsType = DrumsType.FourOrFive;
+        ParseMidi(file, ref parts, ref drumsType);
+        return parts;
+    }
+
     public static bool IsValidForTest(in AvailableParts parts)
     {
         return IsValid(in parts);

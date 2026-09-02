@@ -84,6 +84,43 @@ namespace YARG.Core.Replays
             return new ReadOnlySpan<byte>(stream.GetBuffer(), 0, (int) stream.Length);
         }
 
+        /// <summary>
+        /// Collects the explicit "Elite (To …)" downchart output formats recorded by the
+        /// players in this replay, so a chart can be loaded with the same downchart variants
+        /// that were built when the replay was recorded.
+        /// </summary>
+        /// <returns>
+        /// The distinct output instruments, or null when no player used one — which keeps
+        /// chart loading byte-for-byte identical to a normal load for every other replay.
+        /// </returns>
+        /// <remarks>
+        /// Frames are filtered through the centralized profile-consistency guard
+        /// (<see cref="EliteDrumsDownchartRules.IsDownchartTargetActive"/>): a recorded
+        /// target that is malformed, stale (not the frame's current instrument), or not on
+        /// a drum game mode is ignored rather than trusted, so a corrupted-but-well-formed
+        /// value can never request a mismatched variant.
+        /// </remarks>
+        public IReadOnlyCollection<Instrument>? GetEliteDrumsDownchartOutputs()
+        {
+            List<Instrument>? outputs = null;
+            foreach (var frame in Frames)
+            {
+                if (!EliteDrumsDownchartRules.IsDownchartTargetActive(frame.Profile))
+                {
+                    continue;
+                }
+
+                var target = frame.Profile.EliteDrumsDownchartTarget!.Value;
+                outputs ??= new List<Instrument>();
+                if (!outputs.Contains(target))
+                {
+                    outputs.Add(target);
+                }
+            }
+
+            return outputs;
+        }
+
         /// <returns>
         /// The color profile if it's in this container, otherwise, <c>null</c>.
         /// </returns>
