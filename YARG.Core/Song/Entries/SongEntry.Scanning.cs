@@ -6,7 +6,11 @@ namespace YARG.Core.Song
 {
     public abstract partial class SongEntry
     {
-        private protected static ScanExpected<long> ParseMidi(FixedArray<byte> file, ref AvailableParts parts, ref DrumsType drumsType)
+        // Internal (not private protected) so the unit-test assembly — which has
+        // InternalsVisibleTo — can exercise MIDI scanning end-to-end and pin the
+        // Elite Drums downchart metadata against the loader. Matches how
+        // MoonSongLoader is already internal-for-tests.
+        internal static ScanExpected<long> ParseMidi(FixedArray<byte> file, ref AvailableParts parts, ref DrumsType drumsType)
         {
             var midiFile = YARGMidiFile.Load(file);
             if (midiFile.Resolution == 0)
@@ -48,6 +52,14 @@ namespace YARG.Core.Song
                         if (!parts.EliteDrums.IsActive())
                         {
                             parts.EliteDrums.Difficulties = difficulties.eliteDrumsDifficulties;
+
+                            // Record which difficulties the Elite chart actually downcharts
+                            // to (at least one converted note). This is the metadata
+                            // EliteDrumsDownchartRules consults so Difficulty Select and
+                            // Maestro can never offer a target/difficulty whose generated
+                            // downchart would be empty (e.g. an Elite chart made only of
+                            // unforced/invisible hat pedal notes).
+                            parts.EliteDrumsDownchart.Difficulties = difficulties.downchartDifficulties;
                         }
 
                         if (parts.FourLaneDrums.Difficulties is DifficultyMask.None)

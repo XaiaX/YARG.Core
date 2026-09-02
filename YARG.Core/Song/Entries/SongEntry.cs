@@ -349,6 +349,41 @@ namespace YARG.Core.Song
 
         internal void MarkAsDuplicate() { _isDuplicate = true; }
 
+        /// <summary>
+        /// Whether the song's Elite Drums chart produces at least one non-empty generated
+        /// downchart difficulty (the same "usable downchart" notion the chart loader uses:
+        /// <see cref="Chart.Loaders.MoonSong.MoonSongLoader"/> only exposes downchart
+        /// variants that contain notes). This is the representation
+        /// <see cref="Game.EliteDrumsDownchartRules"/> consults; it lives in scan metadata
+        /// so the menu rules never duplicate the downchart conversion logic.
+        /// </summary>
+        /// <remarks>
+        /// The scan-time preparser is chord-aware: a channel-flagged hat pedal that
+        /// the full reader suppresses into an "invisible terminator" because it is
+        /// chorded with a non-indifferent hi-hat does not count here, matching the
+        /// loader's downchart conversion (see
+        /// <c>Midi_EliteDrums_Preparser</c> and
+        /// <c>MidReader.ProcessLists.SuppressNonStrictStompsAndSplashes</c>).
+        /// Residual divergence (pathological charts only): for sources parsed with
+        /// a non-zero note snap threshold (CON files), the full reader also marks
+        /// hi-hats up to that many ticks *before* an indifferent-hat marker's start
+        /// as forced-indifferent; the preparser ignores that lookback window, which
+        /// can only make it *more* conservative (never advertising a difficulty the
+        /// loader leaves empty).
+        /// </remarks>
+        public bool HasEliteDrumsDownchart() => _parts.EliteDrumsDownchart.IsActive();
+
+        /// <summary>
+        /// Whether the song's Elite Drums chart downcharts to (at least one note on) the
+        /// given difficulty. Beginner is never authored; it is synthesized from Easy by
+        /// the downchart loader, so callers map Beginner to Easy before checking.
+        /// </summary>
+        public bool HasEliteDrumsDownchartDifficulty(Difficulty difficulty)
+        {
+            var source = difficulty is Difficulty.Beginner ? Difficulty.Easy : difficulty;
+            return _parts.EliteDrumsDownchart[source];
+        }
+
         internal virtual void Serialize(MemoryStream stream, CacheWriteIndices node)
         {
             _hash.Serialize(stream);

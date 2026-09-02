@@ -127,6 +127,108 @@ public class MidReaderProcessListsTests
     }
 
     [Test]
+    public void EliteDrumsNonStrictHatPedalChordedWithHiHat_SuppressedAsInvisibleTerminator()
+    {
+        // The loader-side rule the scan-time preparser must mirror (see
+        // EliteDrumsDownchartScanTests): a non-strict hat pedal chorded with a
+        // hi-hat that is not forced-indifferent becomes an invisible terminator,
+        // which the downchart builder never converts — even when channel flagged.
+        var hatPedal = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert] - 2;
+        var hiHat = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert] + 2;
+        var midi = MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(10, 100, hatPedal, channel: MidIOHelper.ELITE_DRUMS_CHANNEL_FLAG_YELLOW),
+            Note(10, 100, hiHat)));
+
+        var song = MidReader.ReadMidi(midi);
+        var notes = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes;
+
+        var pedal = notes.Single(note => note.eliteDrumPad is EliteDrumPad.HatPedal);
+        var hat = notes.Single(note => note.eliteDrumPad is EliteDrumPad.HiHat);
+
+        using (Assert.EnterMultipleScope())
+        {
+            AssertHasFlag(pedal, Flags.EliteDrums_InvisibleTerminator);
+            AssertHasFlag(pedal, Flags.EliteDrums_ChannelFlagYellow);
+            AssertDoesNotHaveFlag(hat, Flags.EliteDrums_InvisibleTerminator);
+        }
+    }
+
+    [Test]
+    public void EliteDrumsNonStrictHatPedalChordedWithIndifferentHiHat_NotSuppressed()
+    {
+        // The forced-indifferent variant: an "indifferent hat" marker covering the
+        // chord leaves the hi-hat non-suppressing, so the pedal survives for the
+        // downchart builder and the scan-time mask must advertise the difficulty.
+        var hatPedal = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert] - 2;
+        var hiHat = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert] + 2;
+        var indifferentMarker = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert] + 14;
+        var midi = MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(0, 200, indifferentMarker),
+            Note(10, 100, hatPedal, channel: MidIOHelper.ELITE_DRUMS_CHANNEL_FLAG_YELLOW),
+            Note(10, 100, hiHat)));
+
+        var song = MidReader.ReadMidi(midi);
+        var notes = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes;
+
+        var pedal = notes.Single(note => note.eliteDrumPad is EliteDrumPad.HatPedal);
+        var hat = notes.Single(note => note.eliteDrumPad is EliteDrumPad.HiHat);
+
+        using (Assert.EnterMultipleScope())
+        {
+            AssertHasFlag(hat, Flags.EliteDrums_ForcedIndifferent);
+            AssertDoesNotHaveFlag(pedal, Flags.EliteDrums_InvisibleTerminator);
+        }
+    }
+
+    [Test]
+    public void EliteDrumsStrictHatPedalChordedWithHiHat_NotSuppressed()
+    {
+        // Strict hat pedal state wins over chord context: the pedal keeps
+        // converting for the downchart, so the scan mask must advertise.
+        var hatPedal = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert] - 2;
+        var hiHat = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert] + 2;
+        var midi = MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Text(0, $"[{MidIOHelper.STRICT_HAT_PEDAL_STATE}]"),
+            Note(10, 100, hatPedal, channel: MidIOHelper.ELITE_DRUMS_CHANNEL_FLAG_YELLOW),
+            Note(10, 100, hiHat)));
+
+        var song = MidReader.ReadMidi(midi);
+        var notes = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes;
+
+        var pedal = notes.Single(note => note.eliteDrumPad is EliteDrumPad.HatPedal);
+
+        using (Assert.EnterMultipleScope())
+        {
+            AssertHasFlag(pedal, Flags.EliteDrums_StrictHatState);
+            AssertDoesNotHaveFlag(pedal, Flags.EliteDrums_InvisibleTerminator);
+        }
+    }
+
+    [Test]
+    public void EliteDrumsHatPedalChordDoesNotCrossDifficulties()
+    {
+        // Chord context is per-difficulty: an Expert hat pedal at the same tick as
+        // a Hard-only hi-hat is NOT chorded with it, so it must survive.
+        var hatPedal = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert] - 2;
+        var hardHiHat = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Hard] + 2;
+        var midi = MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(10, 100, hatPedal, channel: MidIOHelper.ELITE_DRUMS_CHANNEL_FLAG_YELLOW),
+            Note(10, 100, hardHiHat)));
+
+        var song = MidReader.ReadMidi(midi);
+        var expertNotes = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes;
+
+        var pedal = expertNotes.Single(note => note.eliteDrumPad is EliteDrumPad.HatPedal);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(pedal.isChord, Is.False,
+                "a Hard-only hi-hat is not part of the Expert pedal's chord");
+            AssertDoesNotHaveFlag(pedal, Flags.EliteDrums_InvisibleTerminator);
+        }
+    }
+
+    [Test]
     public void GuitarForcingMarkers_ApplyAfterNotesAreParsed()
     {
         var green = MidIOHelper.GUITAR_DIFF_START_LOOKUP[Difficulty.Expert];

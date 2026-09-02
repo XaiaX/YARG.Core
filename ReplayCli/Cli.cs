@@ -346,7 +346,7 @@ public partial class Cli
                 return null;
             }
 
-            return entries[0].LoadChart();
+            return entries[0].LoadChart(_replayData.GetEliteDrumsDownchartOutputs());
         }
         catch (Exception e)
         {

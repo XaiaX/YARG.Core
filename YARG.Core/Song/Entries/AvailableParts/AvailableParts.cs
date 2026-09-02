@@ -24,6 +24,11 @@ namespace YARG.Core.Song
             FiveLaneDrums = PartValues.Default,
 
             EliteDrums = PartValues.Default,
+            // Difficulties the Elite Drums chart actually downcharts to (at least one
+            // converted note), which can be a strict subset of EliteDrums — see
+            // Midi_EliteDrums_Preparser. Starts empty for every non-MIDI source, since
+            // only MIDI charts can carry an Elite Drums track.
+            EliteDrumsDownchart = PartValues.Default,
 
             ProGuitar_17Fret = PartValues.Default,
             ProGuitar_22Fret = PartValues.Default,
@@ -56,6 +61,8 @@ namespace YARG.Core.Song
         public PartValues FiveLaneDrums;
 
         public PartValues EliteDrums;
+
+        public PartValues EliteDrumsDownchart;
 
         public PartValues ProGuitar_17Fret;
         public PartValues ProGuitar_22Fret;
