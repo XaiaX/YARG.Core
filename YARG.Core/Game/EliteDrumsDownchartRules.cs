@@ -37,54 +37,43 @@ namespace YARG.Core.Game
         /// Whether a song is playable for a downchart target: the song's Elite Drums
         /// chart produces a usable (non-empty) downchart for the show — the exact notion
         /// the chart loader exposes downchart variants by, recorded at scan time in
-        /// <see cref="SongEntry.HasEliteDrumsDownchart"/> — or, for songs without one,
-        /// the target format's native chart (with the usual 4/5-lane conversions)
-        /// carries it. This is the session playability predicate Difficulty Select and
-        /// Maestro must share: a target row is only offered — and a staged target only
-        /// kept — when every song in the show satisfies it. A target outside the valid
-        /// domain is never playable for any song, so malformed values fail closed.
+        /// <see cref="SongEntry.HasEliteDrumsDownchart"/>. An explicit Elite target
+        /// never falls back to a native chart: without an Elite source, the option would
+        /// merely act as an alias for ordinary native selection. This is the session
+        /// playability predicate Difficulty Select and Maestro must share: a target row
+        /// is only offered — and a staged target only kept — when every song in the show
+        /// satisfies it. A target outside the valid domain is never playable for any
+        /// song, so malformed values fail closed.
         /// </summary>
         /// <remarks>
         /// "Active Elite chart" alone is deliberately NOT enough: an Elite chart
         /// consisting solely of notes the downchart builder drops (unforced or invisible
         /// hat pedal notes) generates empty difficulties, and
         /// <c>MoonSongLoader.DownchartEliteDrumsTrack</c> then builds no downchart at
-        /// all — a target offered on chart presence alone could resolve to no usable
-        /// track when no native chart exists either.
+        /// all. Native chart availability is intentionally irrelevant to this explicit
+        /// target predicate; ordinary native instrument selection retains its own
+        /// fallback behavior elsewhere.
         /// </remarks>
         public static bool IsSongPlayableForTarget(SongEntry song, Instrument target)
         {
-            if (!IsValidTarget(target))
-            {
-                return false;
-            }
-
-            return song.HasEliteDrumsDownchart() ||
-                HasNativePlayableInstrument(song, target);
+            return IsValidTarget(target) && song.HasEliteDrumsDownchart();
         }
 
         /// <summary>
-        /// Whether a difficulty is playable for a target in a song. Songs with a usable
-        /// downchart take their difficulties from it (Beginner is synthesized from Easy,
-        /// matching the Core downchart loader); songs whose Elite chart downcharts to
-        /// nothing keep their native difficulties because no downchart is built for them.
+        /// Whether a difficulty is playable for an explicit Elite target in a song.
+        /// Usable Elite downcharts provide their generated difficulties (Beginner is
+        /// synthesized from Easy, matching the Core downchart loader). A song without a
+        /// usable Elite downchart provides no explicit-target difficulties, even when a
+        /// native drums chart has the requested difficulty; native fallback belongs to
+        /// ordinary instrument selection, not an explicit Elite target.
         /// A target outside the valid domain offers no difficulties, so malformed values
         /// fail closed.
         /// </summary>
         public static bool HasTargetDifficulty(SongEntry song, Instrument target,
             Difficulty difficulty)
         {
-            if (!IsValidTarget(target))
-            {
-                return false;
-            }
-
-            if (song.HasEliteDrumsDownchart())
-            {
-                return song.HasEliteDrumsDownchartDifficulty(difficulty);
-            }
-
-            return HasNativeDifficulty(song, target, difficulty);
+            return IsValidTarget(target) && song.HasEliteDrumsDownchart() &&
+                song.HasEliteDrumsDownchartDifficulty(difficulty);
         }
 
         /// <summary>
@@ -114,47 +103,5 @@ namespace YARG.Core.Game
                     or GameMode.EliteDrums;
         }
 
-        /// <summary>
-        /// Native chart presence for a drums output format, mirroring the menu's
-        /// playable-instrument rules for drums (4-lane/Pro charts are playable on
-        /// 5-lane and vice versa). Rejects instruments outside the target domain so a
-        /// malformed value can never reach the song part lookups.
-        /// </summary>
-        private static bool HasNativePlayableInstrument(SongEntry song, Instrument target)
-        {
-            if (!IsValidTarget(target))
-            {
-                return false;
-            }
-
-            return song.HasInstrument(target) || target switch
-            {
-                // Allow 5 -> 4-lane conversions to be played on 4-lane
-                Instrument.FourLaneDrums or
-                Instrument.ProDrums      => song.HasInstrument(Instrument.FiveLaneDrums),
-                // Allow 4 -> 5-lane conversions to be played on 5-lane
-                Instrument.FiveLaneDrums => song.HasInstrument(Instrument.ProDrums),
-                _ => false
-            };
-        }
-
-        private static bool HasNativeDifficulty(SongEntry song, Instrument target,
-            Difficulty difficulty)
-        {
-            if (!IsValidTarget(target))
-            {
-                return false;
-            }
-
-            return song[target][difficulty] || target switch
-            {
-                // Allow 5 -> 4-lane conversions to be played on 4-lane
-                Instrument.FourLaneDrums or
-                Instrument.ProDrums      => song[Instrument.FiveLaneDrums][difficulty],
-                // Allow 4 -> 5-lane conversions to be played on 5-lane
-                Instrument.FiveLaneDrums => song[Instrument.ProDrums][difficulty],
-                _ => false
-            };
-        }
     }
 }

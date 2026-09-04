@@ -84,17 +84,17 @@ public sealed class EliteDrumsDownchartRulesTests
     }
 
     [Test]
-    public void NativeFourLaneSongWithoutEliteIsStillPlayableForEveryTarget()
+    public void NativeDrumsSongWithoutEliteIsNotPlayableForAnExplicitTarget()
     {
-        // The desired elite-free-library behavior: with no Elite Drums chart at all,
-        // a usable native drums chart keeps the option playable — four-lane/Pro
-        // natively, and five-lane through the 4 -> 5 conversion.
+        // An explicit Elite target must require an Elite source chart. Native charts
+        // remain playable through ordinary instrument selection, but must not make an
+        // explicit Elite option appear as an alias.
         var entry = CreateSong(pro: new[] { Difficulty.Easy }, fourLane: new[] { Difficulty.Easy });
 
         foreach (var target in Targets)
         {
-            Assert.That(EliteDrumsDownchartRules.IsSongPlayableForTarget(entry, target), Is.True,
-                $"a native four-lane song must be playable for target {target}");
+            Assert.That(EliteDrumsDownchartRules.IsSongPlayableForTarget(entry, target), Is.False,
+                $"a native-only song must not be playable for explicit target {target}");
         }
     }
 
@@ -147,19 +147,20 @@ public sealed class EliteDrumsDownchartRulesTests
     }
 
     [Test]
-    public void EliteLessSongKeepsNativeDifficultiesIncludingConversions()
+    public void NativeDifficultiesDoNotSatisfyAnExplicitEliteTarget()
     {
-        // A five-lane-only song keeps its native difficulties for four-lane/Pro
-        // targets through the 5 -> 4 conversion, exactly like native selection.
+        // Native difficulty availability is intentionally separate from the explicit
+        // Elite target policy. Even a complete native chart must not leak difficulties
+        // into an Elite target row when no Elite source exists.
         var entry = CreateSong(fiveLane: new[] { Difficulty.Medium, Difficulty.Hard });
 
-        using (Assert.EnterMultipleScope())
+        foreach (var target in Targets)
         {
-            Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, Instrument.FourLaneDrums, Difficulty.Medium), Is.True);
-            Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, Instrument.ProDrums, Difficulty.Hard), Is.True);
-            Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, Instrument.FiveLaneDrums, Difficulty.Hard), Is.True);
-            Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, Instrument.FourLaneDrums, Difficulty.Easy), Is.False);
-            Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, Instrument.FiveLaneDrums, Difficulty.Easy), Is.False);
+            foreach (var difficulty in new[] { Difficulty.Medium, Difficulty.Hard })
+            {
+                Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, target, difficulty), Is.False,
+                    $"native difficulty {difficulty} must not satisfy explicit target {target}");
+            }
         }
     }
 
@@ -212,11 +213,11 @@ public sealed class EliteDrumsDownchartRulesTests
     }
 
     [Test]
-    public void EliteSongWithEmptyGeneratedDownchartFallsBackToNative()
+    public void EliteSongWithEmptyGeneratedDownchartDoesNotFallBackToNative()
     {
-        // Same degenerate Elite chart, but the song also has a native five-lane chart:
-        // the loader falls back to native, so the rules must too — playable for every
-        // target through the 5 -> 4 conversions, with the NATIVE difficulties.
+        // Even when a native chart exists, an explicit Elite target requires a usable
+        // generated Elite downchart. Otherwise the option would silently play the native
+        // chart and misrepresent what the user selected.
         var entry = CreateSong(
             elite: new[] { Difficulty.Easy, Difficulty.Expert },
             eliteDownchart: System.Array.Empty<Difficulty>(),
@@ -226,15 +227,18 @@ public sealed class EliteDrumsDownchartRulesTests
         {
             foreach (var target in Targets)
             {
-                Assert.That(EliteDrumsDownchartRules.IsSongPlayableForTarget(entry, target), Is.True,
-                    $"native fallback must keep the song playable for target {target}");
+                Assert.That(EliteDrumsDownchartRules.IsSongPlayableForTarget(entry, target), Is.False,
+                    $"an empty Elite downchart must not fall back to native target {target}");
             }
 
-            Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, Instrument.FourLaneDrums, Difficulty.Medium), Is.True,
-                "difficulties come from the native chart when no downchart is generated");
-            Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, Instrument.ProDrums, Difficulty.Hard), Is.True);
+            foreach (var difficulty in new[] { Difficulty.Medium, Difficulty.Hard })
+            {
+                Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, Instrument.ProDrums, difficulty), Is.False,
+                    $"native difficulty {difficulty} must not satisfy an explicit Elite target");
+            }
+
             Assert.That(EliteDrumsDownchartRules.HasTargetDifficulty(entry, Instrument.FiveLaneDrums, Difficulty.Easy), Is.False,
-                "the elite chart's Easy must not leak into the offered difficulties");
+                "the empty generated downchart must not expose an Elite difficulty");
         }
     }
 
