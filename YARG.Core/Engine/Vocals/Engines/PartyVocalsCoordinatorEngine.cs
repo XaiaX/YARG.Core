@@ -49,6 +49,24 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             merged.Sort((a, b) => a.Tick.CompareTo(b.Tick));
 
+            // Master phrases are the union of all source phrase spans. Split overlaps at
+            // every boundary so each coordinator window has one well-defined interval.
+            var sourceSpans = merged
+                .Select(note => (start: note.Tick, end: note.TickEnd))
+                .ToArray();
+            var boundaries = sourceSpans
+                .SelectMany(span => new[] { span.start, span.end })
+                .Distinct()
+                .OrderBy(tick => tick)
+                .ToArray();
+            merged = boundaries
+                .Zip(boundaries.Skip(1), (start, end) => (start, end))
+                .Where(interval => interval.start < interval.end
+                    && sourceSpans.Any(span => span.start <= interval.start && span.end >= interval.end))
+                .Select(interval => new VocalNote(
+                    NoteFlags.None, false, 0.0, 0.0, interval.start, interval.end - interval.start))
+                .ToList();
+
             // StarPower Phrase events live per-part, so the merged track must union
             // them too — otherwise TotalStarPowerPhrases counts only HARM1's phrases
             // while StarPowerPhrasesHit counts hits across all parts.
@@ -89,6 +107,9 @@ namespace YARG.Core.Engine.Vocals.Engines
         // transient (the sub-engine resets it every AccumulateMicPartHits call), so it is
         // NOT suitable for the visual layer, which reads one frame later — see below.
         private readonly uint[] _micCurrentlyHittingParts;
+        // Subset of _micCurrentlyHittingParts whose matching notes are pitched. An ambiguous
+        // mask with no pitched matches is talkie-only and can be credited to every part.
+        private readonly uint[] _micCurrentlyPitchedParts;
 
         // Per-mic bitmask of parts each mic hit at ANY point during the current visual frame.
         // OR-accumulated across ticks and reset per frame (ResetMicSangFlags), mirroring
@@ -145,6 +166,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             _cumulativeAssignedTicks = new double[partCount];
             _lastTickMicDeltas = new double[micCount];
             _micCurrentlyHittingParts = new uint[micCount];
+            _micCurrentlyPitchedParts = new uint[micCount];
             _micHittingPartsThisFrame = new uint[micCount];
             _micSangThisTick = new bool[micCount];
 
@@ -423,6 +445,7 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                 // Read the sub-engine's per-mic hitting-parts bitmask (single-tick).
                 _micCurrentlyHittingParts[i] = _subEngines[i].GetMicHittingParts();
+                _micCurrentlyPitchedParts[i] = _subEngines[i].GetMicPitchedParts();
 
                 // OR-accumulate into the per-frame signal the visual layer reads, so a hit
                 // on any tick this frame keeps the trail's on-note gate satisfied.
@@ -591,6 +614,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             Array.Clear(_ambiguityBuckets, 0, _ambiguityBuckets.Length);
             Array.Clear(_bucketPerMic, 0, _bucketPerMic.Length);
             Array.Clear(_micCurrentlyHittingParts, 0, _micCurrentlyHittingParts.Length);
+            Array.Clear(_micCurrentlyPitchedParts, 0, _micCurrentlyPitchedParts.Length);
             Array.Clear(_micHittingPartsThisFrame, 0, _micHittingPartsThisFrame.Length);
             Array.Clear(_micSangThisTick, 0, _micSangThisTick.Length);
 
@@ -616,6 +640,34 @@ namespace YARG.Core.Engine.Vocals.Engines
                         mask |= 1u << j;
                 }
                 _micHitMaskScratch[i] = mask;
+            }
+
+            // Direct credit: binary across mics. Talkie-only ambiguity is direct credit for
+            // every matched part: unlike pitched ambiguity, one non-pitched vocalization has
+            // no meaningful lane competition to resolve. Take the maximum talkie delta per
+            // part for this tick, then accumulate it just like ordinary direct credit.
+            for (int j = 0; j < partCount; j++)
+            {
+                double maxTalkieDelta = 0;
+                for (int i = 0; i < _micCount; i++)
+                {
+                    uint mask = _micHitMaskScratch[i];
+                    if (PopCount(mask) < 2 || (_micCurrentlyPitchedParts[i] & mask) != 0u
+                        || (mask & (1u << j)) == 0u) continue;
+
+                    maxTalkieDelta = Math.Max(maxTalkieDelta, _lastTickMicDeltas[i]);
+                }
+
+                _harmDirectTicks[j] += maxTalkieDelta;
+            }
+
+            for (int i = 0; i < _micCount; i++)
+            {
+                uint mask = _micHitMaskScratch[i];
+                if (PopCount(mask) >= 2 && (_micCurrentlyPitchedParts[i] & mask) == 0u)
+                {
+                    _micHitMaskScratch[i] = 0u;
+                }
             }
 
             // Direct credit: binary across mics
@@ -782,20 +834,32 @@ namespace YARG.Core.Engine.Vocals.Engines
         {
             uint masterStart = masterPhrase.Tick;
             uint masterEnd = masterPhrase.TickEnd;
+            var covered = new List<(uint start, uint end)>();
 
-            uint totalTime = 0;
             foreach (var partPhrase in part.NotePhrases)
             {
                 var phraseNote = partPhrase.PhraseParentNote;
-                if (phraseNote.Tick >= masterEnd || phraseNote.TickEnd <= masterStart) continue;
-
                 foreach (var noteInPhrase in phraseNote.ChildNotes)
                 {
                     if (noteInPhrase.IsPercussion) continue;
-                    totalTime += phraseNote.GetTicksForNote(noteInPhrase);
+
+                    uint start = Math.Max(Math.Max(noteInPhrase.Tick, phraseNote.Tick), masterStart);
+                    uint end = Math.Min(Math.Min(noteInPhrase.TotalTickEnd, phraseNote.TickEnd), masterEnd);
+                    if (start >= end) continue;
+                    covered.Add((start, end));
                 }
-                break;
             }
+
+            covered.Sort((a, b) => a.start.CompareTo(b.start));
+            uint totalTime = 0;
+            uint coveredEnd = 0;
+            foreach (var interval in covered)
+            {
+                if (interval.end <= coveredEnd) continue;
+                totalTime += interval.end - Math.Max(interval.start, coveredEnd);
+                coveredEnd = interval.end;
+            }
+
             return totalTime;
         }
 

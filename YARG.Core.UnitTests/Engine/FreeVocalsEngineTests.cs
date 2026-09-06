@@ -541,23 +541,23 @@ public sealed class FreeVocalsEngineTests
     public void UnisonPhrase_SingleMeterOnly_TicksIncrementByOne()
     {
         // Create a unison 2-part track where both parts have same pitch (C4 = 60)
-        var engine = CreateEngine(out _, harm1Pitch: 60, harm2Pitch: 60);
+        var engine = CreateEngine(out var parts, harm1Pitch: 60, harm2Pitch: 60);
+        bool selectedHarm2 = false;
 
-        // Queue pitch inputs that match both HARM1 and HARM2 (C4 = 60)
-        for (double t = 0.0; t <= 0.99; t += 1.0 / 60.0)
+        // Queue pitch inputs that match both HARM1 and HARM2 (C4 = 60), advancing only
+        // within the active phrase so the target state can be observed directly.
+        for (double t = 0.0; t <= 0.20; t += 1.0 / 60.0)
         {
             var input = GameInput.Create(t, VocalsAction.Pitch, 60f);
             engine.QueueInput(ref input);
+            engine.Update(t);
+            selectedHarm2 |= engine.CurrentTargetHarmonyIndex == 1;
         }
 
-        engine.Update(1.5);
-
-        // For unison, only the best match (HARM1, index 0) should score ticks.
-        // If double meter was triggered, CurrentTargetHarmonyIndex would oscillate or
-        // the ticks would be very high. With single meter, CurrentTargetHarmonyIndex
-        // should be consistently 0.
-        Assert.That(engine.CurrentTargetHarmonyIndex, Is.EqualTo(0),
-            "CurrentTargetHarmonyIndex should be 0 during unison (HARM1 matches and is checked first)");
+        // Unison is still scored once per tick, but equal visual matches rotate instead
+        // of permanently selecting the lowest-index harmony part.
+        Assert.That(selectedHarm2, Is.True,
+            "Round-robin target selection should select HARM2 during equal unison matches");
     }
 
     // ================================================================
@@ -663,6 +663,7 @@ public sealed class FreeVocalsEngineTests
 
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
         var syncTrack = new SyncTrack(480);
+        syncTrack.Tempos.Add(new TempoChange(120.0, 0.0, 0));
 
         return new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, isBot);
     }

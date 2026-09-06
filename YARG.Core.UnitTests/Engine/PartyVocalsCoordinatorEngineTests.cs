@@ -94,8 +94,9 @@ public sealed class PartyVocalsCoordinatorEngineTests
         {
             (480u, 720u), (960u, 1200u), (1440u, 1680u)
         }));
-        Assert.That(merged.Notes[1], Is.SameAs(parts[1].NotePhrases[0].PhraseParentNote));
-        Assert.That(merged.Notes[2], Is.SameAs(parts[2].NotePhrases[1].PhraseParentNote));
+        Assert.That(merged.Notes[0], Is.Not.SameAs(parts[0].NotePhrases[0].PhraseParentNote));
+        Assert.That(merged.Notes[1], Is.Not.SameAs(parts[1].NotePhrases[0].PhraseParentNote));
+        Assert.That(merged.Notes[2], Is.Not.SameAs(parts[2].NotePhrases[1].PhraseParentNote));
 
         Assert.That(merged.Phrases.Select(phrase => phrase.Tick), Is.EqualTo(new[]
         {
@@ -903,34 +904,55 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     [Test]
-    public void StackingShortcut_TwoMicsTalkieHalfPhrase_GradeMiss()
+    public void OverlappingTalkies_SingleMic_CreditsEveryPart()
     {
-        // The bug the per-mic-span cap was added to fix.
-        // 2 mics both ambiguous on {0,1} for HALF a phrase (talkies + harmonized
-        // talkies are the typical real-game case). Under the prior additive-bucket
-        // model: bucket = 2 × N/2 = N, allocator filled HARM0 to 100% → Awesome.
-        // Equivalent unambiguous singing (2 mics on HARM1 half phrase) graded Miss.
-        // Inconsistency was the shortcut.
-        // Under per-mic-span cap: bucket = N, perMicCap = N/2. Each HARM can receive
-        // at most N/2 → both HARMs at 50% → below threshold → Miss. Consistent.
+        // A single mic singing through simultaneous talkies should complete every
+        // matching line. Talkie ambiguity is broadcast rather than greedily assigned
+        // to HARM1, because talkies have no pitch-based lane competition.
         var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
         AddTalkiePhrase(parts[0], 0, 960);
         AddTalkiePhrase(parts[1], 0, 960);
 
-        var engine = CreateCoordinator(parts, 2);
+        var engine = CreateCoordinator(parts, 1);
         var grades = new List<PhraseGrade>();
-        engine.OnPartyVocalsPhrase += (grade, meters, isLast) => grades.Add(grade);
+        IReadOnlyList<PartyPartResult>? results = null;
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) =>
+        {
+            grades.Add(grade);
+            results = meters;
+        };
 
-        // Both mics making noise for ONLY HALF the phrase (0.0-0.25s of a 0.0-0.5s
-        // content window) — they then go silent for the second half. Under the new
-        // model this is a Miss.
-        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 60f } }, 0.0, 0.25);
-        engine.Update(1.1); // past phrase end
+        FeedPitches(engine, 1, new[] { new[] { 60f } }, 0.0, 0.55);
+        engine.Update(1.1);
 
         Assert.AreEqual(1, grades.Count, "One phrase grade");
-        Assert.AreEqual(PhraseGrade.Miss, grades[0],
-            "Two mics on harmonized talkies for HALF the phrase must grade Miss " +
-            "(stacking shortcut prevention via per-mic-span cap).");
+        Assert.AreEqual(PhraseGrade.DoubleAwesome, grades[0]);
+        Assert.That(results, Is.Not.Null);
+        Assert.That(results!.Select(result => result.Meter), Is.All.GreaterThanOrEqualTo(AwesomeThreshold));
+    }
+
+    [Test]
+    public void OverlappingTalkies_UnequalSpans_CreditsEachLineWithinItsOwnSpan()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddTalkiePhrase(parts[0], 0, 480);
+        AddTalkiePhrase(parts[1], 0, 960);
+
+        var engine = CreateCoordinator(parts, 1);
+        var grades = new List<PhraseGrade>();
+        IReadOnlyList<PartyPartResult>? results = null;
+        engine.OnPartyVocalsPhrase += (grade, meters, isLast) =>
+        {
+            grades.Add(grade);
+            results = meters;
+        };
+
+        FeedPitches(engine, 1, new[] { new[] { 60f } }, 0.0, 1.05);
+        engine.Update(1.6);
+
+        Assert.That(grades, Is.Not.Empty);
+        Assert.That(results, Is.Not.Null);
+        Assert.That(results!.Select(result => result.Meter), Is.All.GreaterThanOrEqualTo(AwesomeThreshold));
     }
 
     [Test]
