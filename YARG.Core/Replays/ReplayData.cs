@@ -61,9 +61,13 @@ namespace YARG.Core.Replays
             }
 
             int frameCount = stream.Read<int>(Endianness.Little);
-            if (frameCount < 0 || frameCount > 1000000)
+            if (frameCount < 0 || frameCount > stream.Remaining / sizeof(double))
             {
-                throw new InvalidDataException($"Invalid frame time count: {frameCount}");
+                // Bound against the remaining bytes rather than a fixed cap: legitimate
+                // verbose replays can exceed any constant limit, but the count can never
+                // exceed the doubles actually left in the stream. Trailing-byte validation
+                // below catches counts that are merely consistent-but-wrong.
+                throw new InvalidDataException($"Invalid frame time count: {frameCount} (remaining bytes: {stream.Remaining})");
             }
             var frameTimes = new double[frameCount];
 
