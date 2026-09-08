@@ -43,7 +43,8 @@ namespace YARG.Core.Audio
         {
             if (string.IsNullOrWhiteSpace(baseName))
             {
-                if (!string.IsNullOrWhiteSpace(name) && InputDeviceInfo.TryParseDisplayName(name, out var parsedBaseName, out var parsedChannel))
+                if (!string.IsNullOrWhiteSpace(name) && InputDeviceInfo.TryParseDisplayName(name, out var parsedBaseName, out var parsedChannel)
+                    && !string.IsNullOrWhiteSpace(parsedBaseName))
                 {
                     baseName = parsedBaseName;
                     channel = parsedChannel;

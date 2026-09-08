@@ -43,12 +43,12 @@ namespace YARG.Core.UnitTests.Parsing
         [Test]
         public void NativeBeginnerKickLane_FollowsUpstreamWildcardLaneSemantics()
         {
-            // Upstream (dev) DrumsFinalPass treats every lane phrase on Beginner as a
-            // wildcard tremolo: kick-lane boundaries are converted to regular wildcard
-            // LaneStart/LaneEnd only when the phrase contains enough hand notes to form
-            // a valid tremolo. A pure-kick phrase produces no lane at all. (The YOLO
-            // line used to stamp kick-lane markers on Beginner directly; that behavior
-            // was superseded by the upstream rework.)
+            // Upstream (dev) DrumsFinalPass treats every phrase on Beginner as a wildcard
+            // tremolo: all Beginner notes are unconditionally Wildcard pads regardless of
+            // the source Easy pads, and kick-lane boundaries are converted to regular
+            // wildcard LaneStart/LaneEnd flags. (The YOLO line used to stamp kick identity
+            // and kick-lane markers on Beginner directly; that behavior was superseded by
+            // the upstream rework.)
             var song = CreateSong();
             var chart = song.GetChart(MoonSong.MoonInstrument.Drums, MoonSong.Difficulty.Easy);
             chart.Add(new MoonPhrase(TICKS(0), TICKS(3), MoonPhrase.Type.ProDrums_KickLane));
