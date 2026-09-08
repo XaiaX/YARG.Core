@@ -22,6 +22,7 @@ public class PreviewContextTests
             speed: 1f,
             delaySeconds: 30,
             fadeDuration: 0,
+            false,
             cancellationTokenSource.Token);
 
         await cancellationTokenSource.CancelAsync();
@@ -54,6 +55,7 @@ public class PreviewContextTests
             speed: 1f,
             delaySeconds: 0,
             fadeDuration: 0,
+            false,
             cancellationTokenSource.Token);
 
         var context = await createTask;
@@ -80,6 +82,7 @@ public class PreviewContextTests
             speed: 1f,
             delaySeconds: 0,
             fadeDuration: 0,
+            false,
             cancellationTokenSource.Token);
 
         Assert.That(context, Is.Not.Null);
@@ -111,6 +114,7 @@ public class PreviewContextTests
             speed: 1f,
             delaySeconds: 0,
             fadeDuration: 0.05,
+            false,
             cancellationTokenSource.Token);
 
         Assert.That(context, Is.Not.Null);
@@ -143,9 +147,9 @@ public class PreviewContextTests
 
         public override SongChart? LoadChart(IReadOnlyCollection<Instrument>? eliteDrumsDownchartOutputs = null) => null;
 
-        public override StemMixer? LoadAudio(float speed, double volume, params SongStem[] ignoreStems) => null;
+        public override StemMixer? LoadAudio(float speed, double volume, bool enableCensoring, params SongStem[] ignoreStems) => null;
 
-        public override StemMixer? LoadPreviewAudio(float speed)
+        public override StemMixer? LoadPreviewAudio(float speed, bool enableCensoring)
         {
             LoadPreviewAudioCallCount++;
             return loadPreviewAudio();
@@ -153,9 +157,11 @@ public class PreviewContextTests
 
         public override YARGImage? LoadAlbumData() => null;
 
-        public override BackgroundResult? LoadBackground(bool excludeYarground = false) => null;
+        public override BackgroundResult? LoadBackground(bool censoringEnabled, bool excludeYarground = false) => null;
 
         public override FixedArray<byte>? LoadMiloData() => null;
+
+        public override FixedArray<byte>? LoadVocData() => null;
     }
 
     private sealed class FakeAudioManager : AudioManager
@@ -166,21 +172,24 @@ public class PreviewContextTests
 
         protected internal override MicDevice? GetInputDevice(string name) => null;
 
-        protected internal override List<(int id, string name)> GetAllInputDevices() => [];
+        protected internal override List<InputDeviceInfo> GetAllInputDevices() => [];
 
-        protected internal override MicDevice? CreateInputDevice(int deviceId, string name) => null;
+        protected internal override MicDevice? CreateInputDevice(InputDeviceInfo device) => null;
 
         protected internal override OutputChannel? CreateOutputChannel(int channelId) => null;
-
-        protected internal override OutputDevice? CreateOutputDevice(int deviceId, string name) => null;
 
         protected internal override List<(int id, string name)> GetAllOutputDevices() => [];
 
         protected internal override int GetOutputChannelCount() => 0;
 
-        protected internal override OutputDevice? GetOutputDevice(string name) => null;
+        protected internal override bool SetOutputDevice(string name) => false;
 
         protected internal override void SetMasterVolume(double volume) { }
+
+        public override void LoadVenueSample(string name, byte[] sampleData, OutputChannel? outputChannel = null) { }
+        public override void ClearVenueSamples() { }
+        protected internal override void PlayMetronomeSoundEffectToChannel(MetronomeSample sample,
+            MetronomePitch pitch, int channelId) { }
 
 
         protected override void SetBufferLength_Internal(int length) { }
@@ -200,6 +209,17 @@ public class PreviewContextTests
         {
             add => _songEnd += value;
             remove => _songEnd -= value;
+        }
+
+        public override OneShotChannel CreateOneShotChannel(int sampleStream,
+            IReadOnlyList<double> scheduledPlays, double outputLeadTime = 0,
+            OutputChannel? outputChannel = null) => new EmptyOneShotChannel();
+
+        private sealed class EmptyOneShotChannel : OneShotChannel
+        {
+            public override void SetEnabled(bool enabled) { }
+            public override void SetVolume(double volume) { }
+            public override void Dispose() { }
         }
 
         protected override int Play_Internal() => 0;
@@ -227,7 +247,7 @@ public class PreviewContextTests
 
         protected override int GetLevel_Internal(float[] level) => 0;
 
-        protected override void SetSpeed_Internal(float speed, bool shiftPitch) { }
+        protected override void SetPlaybackSpeed_Internal(float songSpeed, float syncAdjustment, bool shiftPitch) { }
 
         protected override bool AddChannels_Internal(Stream stream, params StemInfo[] stemInfos) => false;
 
@@ -239,6 +259,18 @@ public class PreviewContextTests
         protected override void SetOutputChannel_Internal(OutputChannel? channel) { }
 
         protected override void SetOutputDevice_Internal(OutputDevice device) { }
+
+        public override ToneChannel? CreateToneChannel(double volume, double fadeDuration)
+        {
+            return new EmptyToneChannel();
+        }
+
+        private sealed class EmptyToneChannel : ToneChannel
+        {
+            public override bool SetSchedule(ReadOnlySpan<ToneSegment> segments) => true;
+
+            public override void Dispose() { }
+        }
 
         protected override void DisposeManagedResources()
         {

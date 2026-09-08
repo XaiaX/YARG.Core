@@ -115,21 +115,6 @@ namespace YARG.Core.Engine.Keys
                 }
             }
 
-            if (note.IsSoloStart)
-            {
-                StartSolo();
-            }
-
-            if (IsSoloActive)
-            {
-                Solos[CurrentSoloIndex].NotesHit++;
-            }
-
-            if (note.IsSoloEnd && note.ParentOrSelf.WasFullyHitOrMissed())
-            {
-                EndSolo();
-            }
-
             if (note.ParentOrSelf.WasFullyHit())
             {
                 ChordStaggerTimer.Disable(CurrentTime, early: true);
@@ -154,8 +139,6 @@ namespace YARG.Core.Engine.Keys
 
             if (note.IsGlissando)
             {
-                UpdateLaneAutohitExpireTime();
-
                 if (note.IsGlissandoStart)
                 {
                     IsGlissandoActive = true;
@@ -169,6 +152,29 @@ namespace YARG.Core.Engine.Keys
 
             OnNoteHit?.Invoke(NoteIndex, note);
             base.HitNote(note);
+        }
+
+        protected bool AutohitNoteFromGlissando(ProKeysNote note)
+        {
+            // If the note was already hit or missed, don't let the caller attempt to autohit it
+            if (note.WasHit || note.WasMissed)
+            {
+                return false;
+            }
+
+            if (note.Time > LaneAutohitExpireTime)
+            {
+                return false;
+            }
+
+            if (note.IsGlissando)
+            {
+                // Glissandos don't require the first note to be hit accurately, so we can just hit the note and return true
+                HitNote(note);
+                return true;
+            }
+
+            return false;
         }
 
         protected override void MissNote(ProKeysNote note)
@@ -193,14 +199,6 @@ namespace YARG.Core.Engine.Keys
                 return;
             }
 
-            // Autohit glissando notes as long as the player keeps providing inputs
-            if (note.IsGlissando && note.Time < LaneAutohitExpireTime)
-            {
-                note.SetHitState(true, false);
-                base.HitNote(note);
-                return;
-            }
-
             note.SetMissState(true, false);
 
             if (note.IsStarPower)
@@ -208,28 +206,14 @@ namespace YARG.Core.Engine.Keys
                 StripStarPower(note);
             }
 
-            if (note is { IsSoloStart: true, IsSoloEnd: true } && note.ParentOrSelf.WasFullyHitOrMissed())
+            if (note.IsGlissandoStart)
             {
-                // While a solo is active, end the current solo and immediately start the next.
-                if (IsSoloActive)
-                {
-                    EndSolo();
-                    StartSolo();
-                }
-                else
-                {
-                    // If no solo is currently active, start and immediately end the solo.
-                    StartSolo();
-                    EndSolo();
-                }
+                IsGlissandoActive = true;
             }
-            else if (note.IsSoloEnd && note.ParentOrSelf.WasFullyHitOrMissed())
+
+            if (note.IsGlissandoEnd)
             {
-                EndSolo();
-            }
-            else if (note.IsSoloStart)
-            {
-                StartSolo();
+                IsGlissandoActive = false;
             }
 
             if (note.IsGlissandoStart)
@@ -262,7 +246,7 @@ namespace YARG.Core.Engine.Keys
             }
 
             OnNoteMissed?.Invoke(NoteIndex, note);
-            base.HitNote(note);
+            base.MissNote(note);
         }
 
         protected override void AddScore(ProKeysNote note)

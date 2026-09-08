@@ -524,9 +524,9 @@ namespace YARG.Core.Chart
             Instrument.Keys               => MoonSong.MoonInstrument.Keys,
 
             Instrument.SixFretGuitar     => MoonSong.MoonInstrument.GHLiveGuitar,
-            Instrument.SixFretCoopGuitar => MoonSong.MoonInstrument.GHLiveBass,
-            Instrument.SixFretBass       => MoonSong.MoonInstrument.GHLiveRhythm,
-            Instrument.SixFretRhythm     => MoonSong.MoonInstrument.GHLiveCoop,
+            Instrument.SixFretCoopGuitar => MoonSong.MoonInstrument.GHLiveCoop,
+            Instrument.SixFretBass       => MoonSong.MoonInstrument.GHLiveBass,
+            Instrument.SixFretRhythm     => MoonSong.MoonInstrument.GHLiveRhythm,
 
             Instrument.FourLaneDrums or
             Instrument.FiveLaneDrums or
@@ -610,8 +610,9 @@ namespace YARG.Core.Chart
 
                 if (!lanesCanOverlap)
                 {
-                    // Lanes that cannot overlap can resume scanning from the end of the current phrase.
-                    // Drum kick lanes may overlap hand lanes, so those callers deliberately rescan.
+                    // This is where the next GetNotesInPhrase call will start iterating from
+                    // If lanes are strictly nonoverlapping, then we can start iterating from where we left off with this lane
+                    // If lanes can overlap (e.g. kick lanes vs. hand lanes on drums), then we have to double back and recheck the notes, so don't set the nextIndex
                     nextIndex = i + 1;
                 }
 

@@ -161,7 +161,7 @@ public class YargProfileModifierTests
         phraseParent.AddChildNote(
             new VocalNote(60f, harmonyPart, VocalNoteType.Lyric, 0, 0.5, 0, 240));
         var phrase = new VocalsPhrase(0, 1.0, 0, 480, phraseParent, new());
-        return new VocalsPart(harmonyPart > 0, new() { phrase }, new(), new(), new());
+        return new VocalsPart(harmonyPart > 0, new() { phrase }, new(), new(), new(), new());
     }
 
     private static VocalsPart CreatePartWithPercussion()
@@ -172,7 +172,7 @@ public class YargProfileModifierTests
         phraseParent.AddChildNote(
             new VocalNote(-1f, 0, VocalNoteType.Percussion, 0.1, 0.1, 100, 20));
         var phrase = new VocalsPhrase(0, 2.0, 0, 960, phraseParent, new());
-        return new VocalsPart(false, new() { phrase }, new(), new(), new());
+        return new VocalsPart(false, new() { phrase }, new(), new(), new(), new());
     }
 
     private static bool AllLyricNotesUnpitched(VocalsPart part)
@@ -323,4 +323,5 @@ public class YargProfileModifierTests
     }
 
     #endregion
+
 }

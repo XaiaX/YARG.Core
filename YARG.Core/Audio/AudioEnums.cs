@@ -19,6 +19,7 @@
         Preview,
         VoxSample,
         Metronome,
+        VenueSample,
     }
 
     public enum SfxSample

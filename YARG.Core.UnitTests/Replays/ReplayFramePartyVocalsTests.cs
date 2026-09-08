@@ -40,14 +40,13 @@ namespace YARG.Core.UnitTests.Replays
             return new ReplayFrame(ref stream, version);
         }
 
-        private static ReplayFrame RoundTripV16(ReplayFrame original)
+        private static ReplayFrame RoundTripCurrent(ReplayFrame original)
         {
-            return RoundTrip(original, 16);
-        }
-
-        private static ReplayFrame RoundTripV15(ReplayFrame original)
-        {
-            return RoundTrip(original, 15);
+            // Round-trip at the current replay version. Older fixed version numbers
+            // can no longer be produced by the current writer (e.g. BaseStats writes
+            // StarPowerRevives unconditionally but only reads it at >= 17), so any
+            // fixed old version desyncs the stream.
+            return RoundTrip(original, ReplayIO.REPLAY_VERSIONS.CURRENT);
         }
 
         private static ReplayFrame CreatePartyVocalsFrame(GameInput[] inputs)
@@ -85,7 +84,7 @@ namespace YARG.Core.UnitTests.Replays
             };
 
             var original = CreatePartyVocalsFrame(inputs);
-            var deserialized = RoundTripV16(original);
+            var deserialized = RoundTripCurrent(original);
 
             Assert.Multiple(() =>
             {
@@ -105,7 +104,7 @@ namespace YARG.Core.UnitTests.Replays
             };
 
             var original = CreatePartyVocalsFrame(inputs);
-            var deserialized = RoundTripV16(original);
+            var deserialized = RoundTripCurrent(original);
 
             Assert.Multiple(() =>
             {
@@ -126,7 +125,7 @@ namespace YARG.Core.UnitTests.Replays
             var stats = new VocalsStats();
             var frame = new ReplayFrame(profile, EngineParameters, stats, Array.Empty<GameInput>());
 
-            var deserialized = RoundTripV16(frame);
+            var deserialized = RoundTripCurrent(frame);
 
             // Flat stream format - no mic-specific field to check
             Assert.That(deserialized.Inputs, Is.Empty, "Non-Party Vocals should have empty inputs");
@@ -155,67 +154,13 @@ namespace YARG.Core.UnitTests.Replays
             };
             var frame = new ReplayFrame(profile, EngineParameters, stats, inputs);
 
-            var deserialized = RoundTripV16(frame);
+            var deserialized = RoundTripCurrent(frame);
 
             Assert.That(deserialized.Inputs.Length, Is.GreaterThan(0), "inputs should deserialize");
         }
 
-        [Test]
-        public void ReplayFrame_V15PartyVocals_DiscardsMicBlock_StaysAligned()
-        {
-            // Test that v15 reading consumes exactly the legacy mic block bytes
-            // and leaves the stream positioned correctly for subsequent data.
-
-            using var memoryStream = new MemoryStream();
-            using var writer = new BinaryWriter(memoryStream);
-
-            // Write a minimal replay frame header
-            new FourCC('R', 'P', 'F', 'M').Serialize(writer);
-
-            // Write minimal profile (not PartyVocals to test legacy path)
-            var profile = new YargProfile(Guid.NewGuid())
-            {
-                CurrentInstrument = Instrument.Vocals,
-                GameMode = GameMode.Vocals,
-                Version = 10
-            };
-            profile.Serialize(writer);
-
-            // Write minimal engine parameters
-            EngineParameters.Serialize(writer);
-
-            // Write minimal stats
-            var stats = new VocalsStats();
-            stats.Serialize(writer);
-
-            // Write inputs
-            writer.Write(1); // count
-            writer.Write(0.0); writer.Write((int)VocalsAction.Pitch); writer.Write(60);
-
-            // Write legacy mic block (v15 format): 2 mics with total 5 float values
-            writer.Write(2); // mic count
-            writer.Write(3); // mic 0 length
-            writer.Write(60f); writer.Write(62f); writer.Write(64f); // mic 0 pitches
-            writer.Write(2); // mic 1 length
-            writer.Write(64f); writer.Write(65f); // mic 1 pitches
-
-            // Write a marker after the legacy block
-            writer.Write((byte)0xFF); // sentinel byte
-
-            writer.Flush();
-
-            var bytes = memoryStream.ToArray();
-            var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
-            bytes.CopyTo(fixedArray.Span);
-            var stream = new FixedArrayStream(fixedArray);
-
-            // Deserialize at v15 (should consume legacy block and preserve sentinel)
-            var deserialized = new ReplayFrame(ref stream, 15);
-
-            // The next byte should be our sentinel (proving correct alignment)
-                byte nextByte = stream.ReadByte();
-                Assert.That(nextByte, Is.EqualTo(0xFF), "Stream should be positioned after legacy block");
-        }
+        // NOTE: the legacy v15 per-mic block (YOLO party-vocals line) is gone.
+        // Versions 15-18 follow the upstream layout; see ReplayIO.REPLAY_VERSIONS.
 
         [Test]
         public void PlainVocalsFrame_RoundTrip()
@@ -238,7 +183,7 @@ namespace YARG.Core.UnitTests.Replays
             };
 
             var frame = new ReplayFrame(profile, EngineParameters, stats, inputs);
-            var deserialized = RoundTripV16(frame);
+            var deserialized = RoundTripCurrent(frame);
 
             Assert.Multiple(() =>
             {
@@ -258,8 +203,8 @@ namespace YARG.Core.UnitTests.Replays
             };
 
             var frame1 = CreatePartyVocalsFrame(inputs);
-            var deserialized1 = RoundTripV16(frame1);
-            var deserialized2 = RoundTripV16(frame1);
+            var deserialized1 = RoundTripCurrent(frame1);
+            var deserialized2 = RoundTripCurrent(frame1);
 
             Assert.Multiple(() =>
             {

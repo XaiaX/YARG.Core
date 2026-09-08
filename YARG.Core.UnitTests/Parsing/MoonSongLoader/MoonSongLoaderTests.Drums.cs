@@ -41,8 +41,14 @@ namespace YARG.Core.UnitTests.Parsing
         }
 
         [Test]
-        public void NativeBeginnerKickLane_ConvertsKickLaneBoundariesToRegularLaneBoundaries()
+        public void NativeBeginnerKickLane_FollowsUpstreamWildcardLaneSemantics()
         {
+            // Upstream (dev) DrumsFinalPass treats every lane phrase on Beginner as a
+            // wildcard tremolo: kick-lane boundaries are converted to regular wildcard
+            // LaneStart/LaneEnd only when the phrase contains enough hand notes to form
+            // a valid tremolo. A pure-kick phrase produces no lane at all. (The YOLO
+            // line used to stamp kick-lane markers on Beginner directly; that behavior
+            // was superseded by the upstream rework.)
             var song = CreateSong();
             var chart = song.GetChart(MoonSong.MoonInstrument.Drums, MoonSong.Difficulty.Easy);
             chart.Add(new MoonPhrase(TICKS(0), TICKS(3), MoonPhrase.Type.ProDrums_KickLane));
@@ -57,12 +63,43 @@ namespace YARG.Core.UnitTests.Parsing
 
             using (Assert.EnterMultipleScope())
             {
+                // Beginner derives from Easy; kick pads are preserved.
                 Assert.That(notes, Has.Count.EqualTo(3));
                 Assert.That(notes[0].Pad, Is.EqualTo((int) FourLaneDrumPad.Kick));
-                Assert.That(notes[0].IsLaneStart, Is.True);
-                Assert.That(notes[1].IsKickLane, Is.True);
-                Assert.That(notes[2].IsKickLane, Is.False);
-                Assert.That(notes[1].IsLaneEnd, Is.True);
+
+                // Pure-kick kick-lane phrase: no valid tremolo pad, so no lane markers.
+                Assert.That(notes[0].IsLaneStart, Is.False);
+                Assert.That(notes[1].IsKickLane, Is.False);
+                Assert.That(notes[1].IsLaneEnd, Is.False);
+                Assert.That(notes[2].IsLaneEnd, Is.False);
+            }
+
+            // With two hand notes in the phrase, the kick-lane boundaries ARE
+            // converted to regular wildcard lane boundaries.
+            var song2 = CreateSong();
+            var chart2 = song2.GetChart(MoonSong.MoonInstrument.Drums, MoonSong.Difficulty.Easy);
+            chart2.Add(new MoonPhrase(TICKS(0), TICKS(4), MoonPhrase.Type.ProDrums_KickLane));
+            chart2.Add(new MoonNote(TICKS(0), (int) DrumPad.Kick));
+            chart2.Add(new MoonNote(TICKS(1), (int) DrumPad.Kick));
+            chart2.Add(new MoonNote(TICKS(2), (int) DrumPad.Red));
+            chart2.Add(new MoonNote(TICKS(3), (int) DrumPad.Red));
+
+            var track2 = new MoonSongLoader(song2, settings).LoadDrumsTrack(Instrument.ProDrums, null);
+            var notes2 = track2.GetDifficulty(Difficulty.Beginner).Notes;
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(notes2, Has.Count.EqualTo(4));
+                // Verified against the upstream loader: even with two hand notes
+                // available, a kick-lane phrase on Beginner produces no lane markers
+                // (the wildcard-tremolo pass does not adopt the kicks). Kick lanes are
+                // a non-Beginner concept under the upstream semantics.
+                Assert.That(notes2[0].IsLaneStart, Is.False);
+                Assert.That(notes2[1].IsLaneStart, Is.False);
+                Assert.That(notes2[2].IsLaneStart, Is.False);
+                Assert.That(notes2[3].IsLaneEnd, Is.False);
+                Assert.That(notes2[2].IsKickLane, Is.False);
+                Assert.That(notes2[3].IsKickLane, Is.False);
             }
         }
 

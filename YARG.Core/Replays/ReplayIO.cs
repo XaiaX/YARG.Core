@@ -28,12 +28,24 @@ namespace YARG.Core.Replays
     {
         private static readonly EightCC REPLAY_MAGIC_HEADER_OLD = new('Y', 'A', 'R', 'G', 'P', 'L', 'A', 'Y');
         private static readonly EightCC REPLAY_MAGIC_HEADER = new('Y', 'A', 'R', 'E', 'P', 'L', 'A', 'Y');
-
-        // CURRENT=17: free-harmonies reached 16 (party-vocals per-mic replay format);
-        // 17 marks the combined format that also carries the autohit-lane engine params.
-        // ENGINE_VERSION=5: taken from upstream #383 — lane autohit params now serialize
-        // into the engine parameters (gated separately from ReplayVersion).
-        private static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 17);
+        /// <summary>
+        /// OLD_MIN - The lowest version where anything "can" be read, but needs to use a different deserialization due to replay format changes. <br/>
+        /// METADATA_MIN - The lowest version where metadata can be read from the replay. <br/>
+        /// DATA_MIN - The lowest version where a replay can be loaded and played back. <br/>
+        /// CURRENT - The current version of the replay format. Increase whenever new metadata is added to the replay format. <br/>
+        /// </summary>
+        /// <remarks>
+        /// 19 reunifies the forked format history: versions 15-17 were independently claimed
+        /// by the YOLO party-vocals line (per-mic replay frames) and by upstream (rock meter
+        /// presets / NoFail at 17, censorship flag at 18). This build follows the upstream
+        /// interpretation for everything <= 18 and adds Party Vocals game-mode frames at 19.
+        /// Replays written by the YOLO line at its forked versions 15-17 are not readable.
+        /// </remarks>
+        public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 19);
+        /// <remarks>
+        /// Increase this whenever the engine is functionally changed in any way,
+        /// to where a replay may no longer simulate accurately what was originally performed.
+        /// </remarks>
         private const int ENGINE_VERSION = 5;
 
         public static (ReplayReadResult Result, ReplayInfo Info, ReplayData Data) TryDeserialize(string path, ReplayReadOptions replayOptions)
@@ -219,7 +231,7 @@ namespace YARG.Core.Replays
             }
         }
 
-        public static (bool Success, ReplayInfo Info) TrySerialize(string directory, SongEntry song, float speed, double length, int score, StarAmount stars, PauseInfo[] pauses, ReplayStats[] stats, ReplayData data)
+        public static (bool Success, ReplayInfo Info) TrySerialize(string directory, SongEntry song, float speed, double length, int score, StarAmount stars, PauseInfo[] pauses, bool censorshipEnabled, ReplayStats[] stats, ReplayData data)
         {
             try
             {
@@ -231,7 +243,7 @@ namespace YARG.Core.Replays
                 var replayName = ReplayInfo.ConstructReplayName(song.Name, song.Artist, song.Charter, in date);
 
                 var path = Path.Combine(directory, replayName + ".replay");
-                var info = new ReplayInfo(path, replayName, REPLAY_VERSIONS.CURRENT, ENGINE_VERSION, in replayChecksum, song.Name, song.Artist, song.Charter, song.Hash, in date, speed, length, score, stars, pauses, stats);
+                var info = new ReplayInfo(path, replayName, REPLAY_VERSIONS.CURRENT, ENGINE_VERSION, in replayChecksum, song.Name, song.Artist, song.Charter, song.Hash, in date, speed, length, score, stars, pauses, censorshipEnabled, stats);
 
                 // Write all the data for the header hash
                 using var headerStream = new MemoryStream();
@@ -289,7 +301,7 @@ namespace YARG.Core.Replays
             var songChecksum = HashWrapper.Deserialize(ref memStream);
 
             var replayName = ReplayInfo.ConstructReplayName(song, artist, charter, in date);
-            var info = new ReplayInfo(path, replayName, replayVersion, engineVersion, in replayChecksum, song, artist, charter, in songChecksum, in date, DEFAULT_SPEED, length, score, stars, Array.Empty<PauseInfo>(), Array.Empty<ReplayStats>());
+            var info = new ReplayInfo(path, replayName, replayVersion, engineVersion, in replayChecksum, song, artist, charter, in songChecksum, in date, DEFAULT_SPEED, length, score, stars, Array.Empty<PauseInfo>(), false, Array.Empty<ReplayStats>());
             return (ReplayReadResult.MetadataOnly, info);
         }
     }

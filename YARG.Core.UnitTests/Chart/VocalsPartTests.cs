@@ -6,43 +6,6 @@ namespace YARG.Core.UnitTests.Chart;
 public class VocalsTrackTests
 {
     [Test]
-    public void CloneAsInstrumentDifficultyDoesNotShareNotesBetweenClones()
-    {
-        var part = CreatePartWithSungPhrase();
-
-        var first = part.CloneAsInstrumentDifficulty(deepClone: true);
-        var second = part.CloneAsInstrumentDifficulty(deepClone: true);
-
-        first.Notes[0].SetHitState(true, true);
-        first.Notes[0].SetMissState(true, true);
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(second.Notes[0], Is.Not.SameAs(first.Notes[0]));
-            Assert.That(second.Notes[0].WasHit, Is.False);
-            Assert.That(second.Notes[0].WasMissed, Is.False);
-            Assert.That(part.NotePhrases[0].PhraseParentNote.WasHit, Is.False);
-            Assert.That(part.NotePhrases[0].PhraseParentNote.WasMissed, Is.False);
-        }
-    }
-
-    [Test]
-    public void CloneAsInstrumentDifficultyPreservesPitchSlideChildNotes()
-    {
-        var part = CreatePartWithSungPhrase();
-
-        var cloned = part.CloneAsInstrumentDifficulty(deepClone: true);
-        var phrase = cloned.Notes[0];
-
-        using (Assert.EnterMultipleScope())
-        {
-            Assert.That(phrase.ChildNotes, Has.Count.EqualTo(2));
-            Assert.That(phrase.ChildNotes[1].ChildNotes, Has.Count.EqualTo(1));
-            Assert.That(phrase.ChildNotes[1].ChildNotes[0].Pitch, Is.EqualTo(64));
-        }
-    }
-
-    [Test]
     public void CloneInTickRangeRemovesEventsOutsideRange()
     {
         var track = CreateVocalsTrack();
@@ -64,6 +27,7 @@ public class VocalsTrackTests
     {
         var track = new VocalsTrack(Instrument.Vocals, [
             new VocalsPart(false,
+                CreateVocalPhrases(100, 200),
                 CreateVocalPhrases(100, 200),
                 CreateVocalPhrases(100, 200),
                 CreatePhrases(100, 200),
@@ -88,6 +52,7 @@ public class VocalsTrackTests
             new VocalsPart(false,
                 [CreateVocalPhraseWithChildEvents(90, 100)],
                 [CreateVocalPhraseWithChildEvents(90, 100)],
+                [CreateVocalPhraseWithChildEvents(90, 100)],
                 [],
                 [])
         ], []);
@@ -109,6 +74,8 @@ public class VocalsTrackTests
         var track = new VocalsTrack(Instrument.Vocals, [
             new VocalsPart(false,
                 [CreateVocalPhraseWithChildEvents(80, 200), CreateVocalPhraseWithChildEvents(70, 90, 100), CreateVocalPhraseWithChildEvents(90, 191)],
+                [CreateVocalPhraseWithChildEvents(80, 200), CreateVocalPhraseWithChildEvents(70, 90, 100), CreateVocalPhraseWithChildEvents(90, 191)],
+
                 [CreateVocalPhraseWithChildEvents(80, 200), CreateVocalPhraseWithChildEvents(70, 90, 100), CreateVocalPhraseWithChildEvents(90, 191)],
                 [],
                 [])
@@ -148,6 +115,106 @@ public class VocalsTrackTests
         var trimmed = track.CloneInTickRange(100, 200);
 
         Assert.That(trimmed.RangeShifts.Select(e => e.Tick), Is.EqualTo(new uint[] { 75, 125, 175 }));
+    }
+
+    [Test]
+    public void CloneAsInstrumentDifficultyDoesNotShareNotesBetweenClones()
+    {
+        var part = CreatePartWithSungPhrase();
+
+        var first = part.CloneAsInstrumentDifficulty();
+        var second = part.CloneAsInstrumentDifficulty();
+
+        first.Notes[0].SetHitState(true, true);
+        first.Notes[0].SetMissState(true, true);
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(second.Notes[0], Is.Not.SameAs(first.Notes[0]));
+            Assert.That(second.Notes[0].WasHit, Is.False);
+            Assert.That(second.Notes[0].WasMissed, Is.False);
+            Assert.That(part.NotePhrases[0].PhraseParentNote.WasHit, Is.False);
+            Assert.That(part.NotePhrases[0].PhraseParentNote.WasMissed, Is.False);
+        }
+    }
+
+    [Test]
+    public void CloneAsInstrumentDifficultyPreservesPitchSlideChildNotes()
+    {
+        var part = CreatePartWithSungPhrase();
+
+        var cloned = part.CloneAsInstrumentDifficulty();
+        var phrase = cloned.Notes[0];
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(phrase.ChildNotes, Has.Count.EqualTo(2));
+            Assert.That(phrase.ChildNotes[1].ChildNotes, Has.Count.EqualTo(1));
+            Assert.That(phrase.ChildNotes[1].ChildNotes[0].Pitch, Is.EqualTo(64));
+        }
+    }
+
+    private static VocalsPart CreatePartWithSungPhrase()
+    {
+        var parentNote = new VocalNote(NoteFlags.None, false, 1.0, 0.4, 100, 40);
+        parentNote.AddChildNote(new VocalNote(60, 0, VocalNoteType.Lyric, 1.0, 0.1, 100, 10));
+
+        var slideNote = new VocalNote(62, 0, VocalNoteType.Lyric, 1.2, 0.1, 120, 10);
+        parentNote.AddChildNote(slideNote);
+        slideNote.AddChildNote(new VocalNote(64, 0, VocalNoteType.Lyric, 1.3, 0.1, 130, 10));
+
+        var phrase = new VocalsPhrase(1.0, 0.4, 100, 40, parentNote, []);
+        return new VocalsPart(false, [phrase], [], [], [], []);
+    }
+
+    private static VocalsTrack CreateVocalsTrack()
+    {
+        return new VocalsTrack(Instrument.Vocals, [
+            new VocalsPart(false,
+                CreateVocalPhrases(50, 100, 150),
+                CreateVocalPhrases(75, 125, 175),
+                CreateVocalPhrases(75, 125, 175),
+                CreatePhrases(25, 125, 225),
+                CreateTextEvents(99, 100, 199, 200))
+        ], CreateRangeShifts(75, 125, 175, 225));
+    }
+
+    private static List<VocalsPhrase> CreateVocalPhrases(params uint[] ticks)
+    {
+        return ticks.Select(tick =>
+        {
+            var parentNote = new VocalNote(NoteFlags.None, false, tick / 100.0, 0.1, tick, 10);
+            return new VocalsPhrase(tick / 100.0, 0.1, tick, 10, parentNote, []);
+        }).ToList();
+    }
+
+    private static VocalsPhrase CreateVocalPhraseWithChildEvents(uint phraseTick, params uint[] childTicks)
+    {
+        var tickLength = childTicks[^1] - phraseTick + 10;
+        var parentNote = new VocalNote(NoteFlags.None, false, phraseTick / 100.0, tickLength / 100.0, phraseTick, tickLength);
+
+        foreach (var childTick in childTicks)
+        {
+            parentNote.AddChildNote(new VocalNote(60, 0, VocalNoteType.Lyric, childTick / 100.0, 0.1, childTick, 10));
+        }
+
+        return new VocalsPhrase(phraseTick / 100.0, tickLength / 100.0, phraseTick, tickLength, parentNote,
+            childTicks.Select(childTick => new LyricEvent(LyricSymbolFlags.None, childTick.ToString(), childTick / 100.0, childTick)).ToList());
+    }
+
+    private static List<Phrase> CreatePhrases(params uint[] ticks)
+    {
+        return ticks.Select(tick => new Phrase(PhraseType.StarPower, tick / 100.0, 0.1, tick, 10)).ToList();
+    }
+
+    private static List<TextEvent> CreateTextEvents(params uint[] ticks)
+    {
+        return ticks.Select(tick => new TextEvent(tick.ToString(), tick / 100.0, tick)).ToList();
+    }
+
+    private static List<VocalsRangeShift> CreateRangeShifts(params uint[] ticks)
+    {
+        return ticks.Select(tick => new VocalsRangeShift(60, 72, tick / 100.0, 0.1, tick, 10)).ToList();
     }
 
     [Test]
@@ -194,68 +261,7 @@ public class VocalsTrackTests
         parentNote.AddChildNote(new VocalNote(60, 0, VocalNoteType.Lyric,
             tick / 100.0, tickLength / 100.0, tick, tickLength));
         var phrase = new VocalsPhrase(parentNote.Time, parentNote.TimeLength, tick, tickLength, parentNote, []);
-        return new VocalsPart(false, [phrase], [], [], []);
+        return new VocalsPart(false, [phrase], [], [], [], []);
     }
 
-    private static VocalsPart CreatePartWithSungPhrase()
-    {
-        var parentNote = new VocalNote(NoteFlags.None, false, 1.0, 0.4, 100, 40);
-        parentNote.AddChildNote(new VocalNote(60, 0, VocalNoteType.Lyric, 1.0, 0.1, 100, 10));
-
-        var slideNote = new VocalNote(62, 0, VocalNoteType.Lyric, 1.2, 0.1, 120, 10);
-        parentNote.AddChildNote(slideNote);
-        slideNote.AddChildNote(new VocalNote(64, 0, VocalNoteType.Lyric, 1.3, 0.1, 130, 10));
-
-        var phrase = new VocalsPhrase(1.0, 0.4, 100, 40, parentNote, []);
-        return new VocalsPart(false, [phrase], [], [], []);
-    }
-
-    private static VocalsTrack CreateVocalsTrack()
-    {
-        return new VocalsTrack(Instrument.Vocals, [
-            new VocalsPart(false,
-                CreateVocalPhrases(50, 100, 150),
-                CreateVocalPhrases(75, 125, 175),
-                CreatePhrases(25, 125, 225),
-                CreateTextEvents(99, 100, 199, 200))
-        ], CreateRangeShifts(75, 125, 175, 225));
-    }
-
-    private static List<VocalsPhrase> CreateVocalPhrases(params uint[] ticks)
-    {
-        return ticks.Select(tick =>
-        {
-            var parentNote = new VocalNote(NoteFlags.None, false, tick / 100.0, 0.1, tick, 10);
-            return new VocalsPhrase(tick / 100.0, 0.1, tick, 10, parentNote, []);
-        }).ToList();
-    }
-
-    private static VocalsPhrase CreateVocalPhraseWithChildEvents(uint phraseTick, params uint[] childTicks)
-    {
-        var tickLength = childTicks[^1] - phraseTick + 10;
-        var parentNote = new VocalNote(NoteFlags.None, false, phraseTick / 100.0, tickLength / 100.0, phraseTick, tickLength);
-
-        foreach (var childTick in childTicks)
-        {
-            parentNote.AddChildNote(new VocalNote(60, 0, VocalNoteType.Lyric, childTick / 100.0, 0.1, childTick, 10));
-        }
-
-        return new VocalsPhrase(phraseTick / 100.0, tickLength / 100.0, phraseTick, tickLength, parentNote,
-            childTicks.Select(childTick => new LyricEvent(LyricSymbolFlags.None, childTick.ToString(), childTick / 100.0, childTick)).ToList());
-    }
-
-    private static List<Phrase> CreatePhrases(params uint[] ticks)
-    {
-        return ticks.Select(tick => new Phrase(PhraseType.StarPower, tick / 100.0, 0.1, tick, 10)).ToList();
-    }
-
-    private static List<TextEvent> CreateTextEvents(params uint[] ticks)
-    {
-        return ticks.Select(tick => new TextEvent(tick.ToString(), tick / 100.0, tick)).ToList();
-    }
-
-    private static List<VocalsRangeShift> CreateRangeShifts(params uint[] ticks)
-    {
-        return ticks.Select(tick => new VocalsRangeShift(60, 72, tick / 100.0, 0.1, tick, 10)).ToList();
-    }
 }

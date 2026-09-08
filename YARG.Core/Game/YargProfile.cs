@@ -1,4 +1,5 @@
-﻿using System;
+#nullable disable
+using System;
 using System.IO;
 using Newtonsoft.Json;
 using YARG.Core.Chart;
@@ -12,10 +13,18 @@ namespace YARG.Core.Game
 {
     public partial class YargProfile
     {
-        // Version 13 added EliteDrumsDownchartTarget (see the property below). This is the
-        // *replay* profile version — it only ever appears inside ReplayFrame serialization,
-        // never in the JSON profile persistence.
-        private readonly int PROFILE_VERSION = 13;
+        /// <summary>
+        /// The current version for profile serialization.
+        /// Increment this when adding new fields to the profile that may affect deserialization.
+        /// </summary>
+        /// <remarks>
+        /// 14 reunifies the forked profile history (see the YOLO line's party-vocals
+        /// fields below): versions 9-13 follow the upstream layout, and the YOLO-only
+        /// fields (Party Vocals chart preference, Elite Drums downchart target) are
+        /// serialized starting at 14. This is the *replay* profile version — it only
+        /// ever appears inside ReplayFrame serialization, never in JSON persistence.
+        /// </remarks>
+        private const int PROFILE_VERSION = 14;
 
         public int Version;
 
@@ -314,12 +323,6 @@ namespace YARG.Core.Game
             _savedModifiers = CurrentModifiers;
             _harmonyIndex = _harmonyIndexFallback = stream.ReadByte();
 
-            if (Version >= 9 && Version < 11)
-            {
-                // Consume and discard _freeHarmony for backward compatibility
-                stream.ReadBoolean();
-            }
-
             NoteSpeed = stream.Read<float>(Endianness.Little);
             HighwayLength = stream.Read<float>(Endianness.Little);
             LeftyFlip = stream.ReadBoolean();
@@ -424,7 +427,16 @@ namespace YARG.Core.Game
                 }
             }
 
-            if (Version >= 12)
+            if (Version >= 9)
+            {
+                RockMeterPreset = stream.ReadGuid();
+            }
+
+            // Version 14 reunifies the forked profile history: versions 9-13 were
+            // independently claimed by the YOLO party-vocals line and by upstream
+            // (RockMeterPreset at 9). This build follows the upstream interpretation
+            // for <= 13 and serializes the YOLO-only fields starting at 14.
+            if (Version >= 14)
             {
                 _partyVocalsChartPreference = stream.ReadByte();
             }
@@ -433,7 +445,7 @@ namespace YARG.Core.Game
                 _partyVocalsChartPreference = (byte) PartyVocalsChartPreference.Harmony;
             }
 
-            if (Version >= 13)
+            if (Version >= 14)
             {
                 // Written as a presence flag followed by the instrument byte because
                 // 0 is a valid Instrument value (FiveFretGuitar) and must not be
@@ -525,6 +537,7 @@ namespace YARG.Core.Game
             switch (GameMode)
             {
                 case GameMode.FiveFretGuitar:
+                case GameMode.SixFretGuitar:
                     if (track is not InstrumentDifficulty<GuitarNote> guitarTrack)
                     {
                         throw new InvalidOperationException("Cannot apply guitar modifiers to non-guitar track " +
@@ -709,7 +722,7 @@ namespace YARG.Core.Game
 
             writer.Write((byte) OpenLaneDisplayType);
 
-            writer.Write((byte)FourLaneDrumsHighwayOrdering.Length);
+            writer.Write((byte) FourLaneDrumsHighwayOrdering.Length);
             foreach (var item in FourLaneDrumsHighwayOrdering)
             {
                 writer.Write((byte) item);
@@ -727,11 +740,13 @@ namespace YARG.Core.Game
                 writer.Write((byte) item);
             }
 
-            // Version 12+: Party Vocals chart preference (Solo vs HARM). Determines
+            writer.Write(RockMeterPreset);
+
+            // Version 14+: Party Vocals chart preference (Solo vs HARM). Determines
             // scored notes, so it must be captured for deterministic replay playback.
             writer.Write(_partyVocalsChartPreference);
 
-            // Version 13+: the explicit "Elite (To …)" downchart output target, when one
+            // Version 14+: the explicit "Elite (To …)" downchart output target, when one
             // is active. It selects which drums track the run was played on, so a replay
             // must reproduce it or it would re-simulate against a different chart.
             if (EliteDrumsDownchartTarget is { } downchartTarget)

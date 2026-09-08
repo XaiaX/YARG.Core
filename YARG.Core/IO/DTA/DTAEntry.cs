@@ -19,6 +19,8 @@ namespace YARG.Core.IO
         public string? Genre;
         public string? Subgenre;
         public TextSpan? Charter;
+        public TextSpan? CharterKeys;
+        public TextSpan? CharterProStrings;
         public string? Source;
         public TextSpan? Playlist;
         public TextSpan? LoadingPhrase;
@@ -78,33 +80,6 @@ namespace YARG.Core.IO
                     case "artist": Artist = YARGDTAReader.ExtractTextBytes(ref container); break;
                     case "covered_by": CoveredBy = YARGDTAReader.ExtractTextBytes(ref container); break;
                     case "master": IsMaster = YARGDTAReader.ExtractBoolean_FlippedDefault(ref container); break;
-                    case "context":
-                        unsafe
-                        {
-                            int scopeLevel = 1;
-                            while (!container.IsAtEnd())
-                            {
-                                int ch = container.Get();
-                                if (ch == ')')
-                                {
-                                    --scopeLevel;
-                                    break;
-                                }
-                                ++container.Position;
-
-                                switch (ch)
-                                {
-                                    case '{': ++scopeLevel; break;
-                                    case '}': --scopeLevel; break;
-                                }
-                            }
-
-                            if (scopeLevel != 0)
-                            {
-                                throw new Exception("Invalid Context - Unbalanced brace count!");
-                            }
-                            break;
-                        }
                     case "song":
                         while (YARGDTAReader.StartNode(ref container))
                         {
@@ -238,6 +213,7 @@ namespace YARG.Core.IO
                     case "album_art": /*HasAlbumArt = YARGDTAReader.ExtractBoolean(ref container);*/ break;
                     case "year_released": YearAsNumber = YARGDTAReader.ExtractInteger<int>(ref container); break;
                     case "year_recorded": YearSecondaryAsNumber = YARGDTAReader.ExtractInteger<int>(ref container); break;
+                    case "date_released": YearAsNumber = int.Parse(YARGDTAReader.ExtractText(ref container).AsSpan(0, 4)); break;
                     case "album_name": Album = YARGDTAReader.ExtractTextBytes(ref container); break;
                     case "album_track_number": AlbumTrack = YARGDTAReader.ExtractInteger<int>(ref container); break;
                     case "pack_name": Playlist = YARGDTAReader.ExtractTextBytes(ref container); break;
@@ -247,6 +223,8 @@ namespace YARG.Core.IO
                     case "song_length": SongLength = YARGDTAReader.ExtractInteger<long>(ref container); break;
                     case "sub_genre": Subgenre = YARGDTAReader.ExtractText(ref container); break;
                     case "author": Charter = YARGDTAReader.ExtractTextBytes(ref container); break;
+                    case "keys_author": CharterKeys = YARGDTAReader.ExtractTextBytes(ref container); break;
+                    case "strings_author": CharterProStrings = YARGDTAReader.ExtractTextBytes(ref container); break;
                     case "guide_pitch_volume": /*GuidePitchVolume = YARGDTAReader.Extract<float>(ref container);*/ break;
                     case "encoding":
                         MetadataEncoding = YARGDTAReader.ExtractText(ref container).ToLower() switch

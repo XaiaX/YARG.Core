@@ -55,6 +55,8 @@ namespace YARG.Core.Engine
         public override BaseEngineParameters BaseParameters => EngineParameters;
         public override BaseStats            BaseStats      => EngineStats;
 
+        protected virtual int WildcardMask => -1;
+
         protected BaseEngine(InstrumentDifficulty<TNoteType> chart, SyncTrack syncTrack,
             TEngineParams engineParameters, bool isChordSeparate, bool isBot)
             : base(syncTrack, isChordSeparate, isBot)
@@ -505,12 +507,17 @@ namespace YARG.Core.Engine
                 EndCoda();
             }
 
+            if (note.IsSolo)
+            {
+                HandleSoloNote(note);
+            }
+
             if (note.ParentOrSelf.WasFullyHitOrMissed())
             {
                 AdvanceToNextNote(note);
             }
 
-            if ((!LanesExist && !note.IsLaneEnd) || !note.IsLane || !BaseParameters.EnableLanes)
+            if (!note.IsLane || !BaseParameters.EnableLanes)
             {
                 return;
             }
@@ -547,6 +554,12 @@ namespace YARG.Core.Engine
         // Intercept a missed note while a lane phrase is active
         protected bool AutohitNoteFromLane(TNoteType note)
         {
+            // If the note was already hit or missed, don't let the caller attempt to autohit it
+            if (note.WasHit || note.WasMissed)
+            {
+                return false;
+            }
+
             if (note.Time > LaneAutohitExpireTime)
             {
                 return false;
@@ -583,6 +596,11 @@ namespace YARG.Core.Engine
                 EndCoda();
             }
 
+            if (note.IsSolo)
+            {
+                HandleSoloNote(note);
+            }
+
             if (note.ParentOrSelf.WasFullyHitOrMissed())
             {
                 AdvanceToNextNote(note);
@@ -603,14 +621,14 @@ namespace YARG.Core.Engine
             }
         }
 
-        protected void SubmitLaneNote(int newNote)
+        protected virtual void SubmitLaneNote(int newNote)
         {
             if (!IsLaneActive || NoteIndex >= Notes.Count)
             {
                 return;
             }
 
-            if (newNote == RequiredLaneNote)
+            if (newNote == RequiredLaneNote || RequiredLaneNote == WildcardMask)
             {
                 // Required input received, extend the lane expiration time
                 var currentNote = Notes[NoteIndex].ParentOrSelf;
@@ -651,6 +669,11 @@ namespace YARG.Core.Engine
                 return false;
             }
 
+            if (RequiredLaneNote == WildcardMask)
+            {
+                return true;
+            }
+
             if (inputNote == RequiredLaneNote || (NextTrillNote != -1 && inputNote == NextTrillNote))
             {
                 return true;
@@ -662,7 +685,7 @@ namespace YARG.Core.Engine
         // This cares whether the input would satisfy the lane that's providing leniency.
         // Used by Drums and Keys engines to provide forgiveness only for inputs that would satisfy a nearby lane, not for unrelated inputs.
         // Guitar engine has a parameterless version that doesn't check inputs against adjacent lanes.
-        protected bool IsInLaneLeniencyWindow(int inputNote)
+        protected virtual bool IsInLaneLeniencyWindow(int inputNote)
         {
             if (IsLaneActive)
             {
@@ -690,7 +713,7 @@ namespace YARG.Core.Engine
         protected void UpdateLaneAutohitExpireTime()
         {
             LaneAutohitExpireTime = CurrentTime + EngineParameters.HitWindow.LaneAutohitWindow;
-            YargLogger.LogFormatDebug("LaneExpireTime extended to {0}. LaneAutohitWindow {1}. Increment {2}.", LaneAutohitExpireTime, EngineParameters.HitWindow.LaneAutohitWindow, LaneAutohitExpireTime - CurrentTime);
+            YargLogger.LogFormatTrace("LaneExpireTime extended to {0}. LaneAutohitWindow {1}. Increment {2}.", LaneAutohitExpireTime, EngineParameters.HitWindow.LaneAutohitWindow, LaneAutohitExpireTime - CurrentTime);
         }
 
         protected bool SkipPreviousNotes(TNoteType current)
@@ -699,20 +722,49 @@ namespace YARG.Core.Engine
             var prevNote = current.PreviousNote;
             while (prevNote is not null && !prevNote.WasFullyHitOrMissed())
             {
-                if (AutohitNoteFromLane(prevNote))
+                bool laneAutoHit = false;
+
+                if (TreatChordAsSeparate)
+                {
+                    foreach (var chordNote in prevNote.ParentOrSelf.AllNotes)
+                    {
+                        if (chordNote.WasHit || chordNote.WasMissed)
+                        {
+                            continue;
+                        }
+
+                        laneAutoHit |= AutohitNoteFromLane(chordNote);
+                    }
+                }
+                else
+                {
+                    laneAutoHit = AutohitNoteFromLane(prevNote);
+                }
+
+                if (laneAutoHit && prevNote.ParentOrSelf.WasFullyHitOrMissed())
                 {
                     // Save this note from being counted as a skip if it satisfies the active lane
+                    prevNote = prevNote.PreviousNote;
                     continue;
                 }
 
                 skipped = true;
-                YargLogger.LogFormatTrace("Missed note (Index: {0}) ({1}) due to note skip at {2}", NoteIndex, prevNote.IsParent ? "Parent" : "Child", CurrentTime);
-                MissNote(prevNote);
+
+                if (!prevNote.WasHit && !prevNote.WasMissed)
+                {
+                    YargLogger.LogFormatTrace("Missed note (Index: {0}) ({1}) due to note skip at {2}", NoteIndex, prevNote.IsParent ? "Parent" : "Child", CurrentTime);
+                    MissNote(prevNote);
+                }
 
                 if (TreatChordAsSeparate)
                 {
                     foreach (var child in prevNote.ChildNotes)
                     {
+                        if (child.WasHit || child.WasMissed)
+                        {
+                            continue;
+                        }
+
                         YargLogger.LogFormatTrace("Missed note (Index: {0}) ({1}) due to note skip at {2}", NoteIndex, child.IsParent ? "Parent" : "Child", CurrentTime);
                         MissNote(child);
                     }
@@ -733,6 +785,8 @@ namespace YARG.Core.Engine
             // scoreMultiplier includes combo+star power score
             EngineStats.CommittedScore += scoreMultiplier;
 
+            EngineStats.AverageMultiplier = (float) EngineStats.CommittedScore / BaseNoteScore;
+
             if (EngineStats.IsStarPowerActive)
             {
                 // Amount of points just from Star Power is half of the current multiplier (8x total -> 4x SP points)
@@ -751,6 +805,36 @@ namespace YARG.Core.Engine
             }
 
             UpdateStars();
+        }
+
+        protected void HandleSoloNote(TNoteType note)
+        {
+            if (!note.IsSolo)
+            {
+                return;
+            }
+
+            if (CurrentSoloIndex >= Solos.Count)
+            {
+                // If this happens, something has probably gone wrong
+                YargLogger.LogFormatWarning("Solo note has been hit at time {0}, but all solos have already been completed! Ignoring solo", CurrentTime);
+                return;
+            }
+
+            if (note.IsSoloStart)
+            {
+                StartSolo();
+            }
+
+            if (note.WasHit)
+            {
+                Solos[CurrentSoloIndex].NotesHit++;
+            }
+
+            if (note.IsSoloEnd && note.ParentOrSelf.WasFullyHitOrMissed())
+            {
+                EndSolo();
+            }
         }
 
         protected virtual void UpdateSustains()
@@ -994,8 +1078,8 @@ namespace YARG.Core.Engine
         protected void UpdateStars()
         {
             // Update which star we're on
-            while (CurrentStarIndex < StarScoreThresholds.Length &&
-                EngineStats.TotalScore > StarScoreThresholds[CurrentStarIndex])
+            while (CurrentStarIndex < StarScoreThresholds!.Length &&
+                EngineStats.TotalScore > StarScoreThresholds![CurrentStarIndex])
             {
                 CurrentStarIndex++;
             }
@@ -1283,17 +1367,6 @@ namespace YARG.Core.Engine
         {
             NoteIndex++;
             ReRunHitLogic = true;
-
-            if (!LanesExist)
-            {
-                return;
-            }
-
-            if (note.IsLaneEnd)
-            {
-                // Update the result of LanesExist
-                CurrentLaneIndex++;
-            }
         }
 
         public double GetAverageNoteDistance(TNoteType note)
@@ -1322,7 +1395,7 @@ namespace YARG.Core.Engine
         {
             var soloSections = new List<SoloSection>();
 
-            if (Notes.Count > 0 && Notes[0] is { IsSolo: true, IsSoloEnd: false })
+            if (Notes.Count > 0 && Notes[0].IsSolo)
             {
                 Notes[0].ActivateFlag(NoteFlags.SoloStart);
             }
@@ -1392,8 +1465,8 @@ namespace YARG.Core.Engine
 
                 switch (thisPhrase.Type)
                 {
-                    case PhraseType.TremoloLane:
-                    case PhraseType.TrillLane:
+                    case PhraseType.TremoloLane
+                    or PhraseType.TrillLane:
                         TotalLanes++;
                         break;
                 }
@@ -1413,26 +1486,15 @@ namespace YARG.Core.Engine
                 codaTime = Codas[0].StartTime;
             }
 
-            for (int i = 0; i < notes.Count; i++)
+            double latestNoteEndTime = 0;
+            uint latestNoteEndTick = 0;
+
+            foreach (var parent in notes)
             {
-                // Compare the note at the current index against the previous note
-                double noteOneTimeEnd = 0;
-                uint noteOneTickEnd = 0;
-
-                if (i > 0) {
-                    Note<TNoteType> noteOne = notes[i-1];
-                    noteOneTimeEnd = noteOne.TimeEnd;
-                    noteOneTickEnd = noteOne.TickEnd;
-                }
-
-                Note<TNoteType> noteTwo = notes[i];
-
-                if (noteTwo.Time - noteOneTimeEnd >= WaitCountdown.MIN_SECONDS)
+                if (parent.Time - latestNoteEndTime >= WaitCountdown.MIN_SECONDS)
                 {
-                    // Distance between these two notes is over the threshold
-
                     // If this countdown would start after the coda event, don't create it
-                    if (noteOneTimeEnd >= codaTime)
+                    if (latestNoteEndTime >= codaTime)
                     {
                         continue;
                     }
@@ -1440,19 +1502,33 @@ namespace YARG.Core.Engine
                     WaitCountdown newCountdown;
 
                     // If the countdown would last into a coda, cut it off at the coda start time
-                    if (noteTwo.Time > codaTime)
+                    if (parent.Time > codaTime)
                     {
-                        newCountdown = new WaitCountdown(noteOneTimeEnd, codaTime - noteOneTimeEnd, noteOneTickEnd,
-                            SyncTrack.TimeToTick(codaTime) - noteOneTickEnd);
+                        newCountdown = new WaitCountdown(
+                            latestNoteEndTime,
+                            codaTime - latestNoteEndTime,
+                            latestNoteEndTick,
+                            SyncTrack.TimeToTick(codaTime) - latestNoteEndTick
+                        );
                     }
                     else
                     {
-                        newCountdown = new WaitCountdown(noteOneTimeEnd, noteTwo.Time - noteOneTimeEnd, noteOneTickEnd,
-                            noteTwo.Tick - noteOneTickEnd);
+                        newCountdown = new WaitCountdown(
+                            latestNoteEndTime,
+                            parent.Time - latestNoteEndTime,
+                            latestNoteEndTick,
+                            parent.Tick - latestNoteEndTick
+                        );
                     }
 
                     WaitCountdowns.Add(newCountdown);
                     YargLogger.LogFormatTrace("Created a WaitCountdown at time {0} of {1} seconds in length", newCountdown.Time, newCountdown.TimeLength);
+                }
+
+                foreach (var child in parent.AllNotes)
+                {
+                    latestNoteEndTime = Math.Max(latestNoteEndTime, child.TimeEnd);
+                    latestNoteEndTick = Math.Max(latestNoteEndTick, child.TickEnd);
                 }
             }
         }
@@ -1495,10 +1571,15 @@ namespace YARG.Core.Engine
 
         protected abstract bool ProximalLaneForgivesInput(int inputNote, TNoteType laneNote);
 
-        protected static bool LaneIncludesInputNote(int inputNote, TNoteType laneNote)
+        protected bool LaneIncludesInputNote(int inputNote, TNoteType laneNote)
         {
             var inputMask = 1 << inputNote;
             var (requiredLaneNote, otherNoteInTrill) = GetLaneNotes(laneNote);
+
+            if (requiredLaneNote == WildcardMask)
+            {
+                return true;
+            }
 
             if ((inputMask & requiredLaneNote) != 0)
             {
@@ -1525,11 +1606,11 @@ namespace YARG.Core.Engine
             }
             else if (laneNote.IsLaneEnd)
             {
-                otherNoteInTrill = laneNote.PreviousNote.LaneNote;
+                otherNoteInTrill = laneNote.PreviousNote!.LaneNote;
             }
             else
             {
-                otherNoteInTrill = laneNote.NextNote.LaneNote;
+                otherNoteInTrill = laneNote.NextNote!.LaneNote;
             }
 
             return (requiredLaneNote, otherNoteInTrill);

@@ -32,9 +32,10 @@
         Start = 9,
         /// <summary>Select action button.</summary>
         Select = 10,
-
-        /// <summary>Search action button.</summary>
+        /// <summary>Focus the search field.</summary>
         Search = 11,
+        /// <summary>Select the artist of the current song.</summary>
+        SelectArtist = 12,
     }
 
     /// <summary>

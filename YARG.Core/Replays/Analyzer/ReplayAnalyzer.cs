@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using YARG.Core.Chart;
@@ -170,9 +170,7 @@ namespace YARG.Core.Replays.Analyzer
             {
                 var engine = CreateEngine(frame.Profile, frame.EngineParameters);
                 engines.Add(engine);
-
-                // TODO: Implement support for custom RockMeterPresets in replays
-                manager.Register(engine, frame.Profile.CurrentInstrument, _chart, RockMeterPreset.Normal);
+                RegisterEngine(frame.Profile, engine, manager, frame.EngineParameters, frame);
                 engine.SetSpeed(frame.EngineParameters.SongSpeed);
                 engine.Reset();
 
@@ -186,6 +184,8 @@ namespace YARG.Core.Replays.Analyzer
                     }
                 }
             }
+
+            manager.InitializeHappiness(_replayData.NoFail);
 
             // Seems like a sensible default?
             _fps = _fps > 0 ? _fps : 60;
@@ -223,6 +223,74 @@ namespace YARG.Core.Replays.Analyzer
             return results;
         }
 
+        private void RegisterEngine(YargProfile profile, BaseEngine engine, EngineManager manager, BaseEngineParameters parameters, ReplayFrame frame)
+        {
+            var rockMeterPreset = _replayData.GetRockMeterPreset(frame.Profile.RockMeterPreset)
+                ?? RockMeterPreset.Normal;
+            switch (frame.Profile.GameMode)
+            {
+                case GameMode.FiveFretGuitar:
+                {
+                    var notes = _chart.GetFiveFretTrack(frame.Profile.CurrentInstrument)
+                        .GetDifficulty(frame.Profile.CurrentDifficulty).Clone();
+                    profile.ApplyModifiers(notes, _chart.SyncTrack);
+                    // TODO: Implement support for custom RockMeterPresets in replays
+                    manager.Register((GuitarEngine)engine, notes, _chart, rockMeterPreset);
+                    break;
+                }
+                case GameMode.SixFretGuitar:
+                {
+                    // Must match gameplay note selection (GetSixFretPlayableDifficulty) or replays fail verification
+                    var notes = _chart.GetSixFretPlayableDifficulty(frame.Profile.CurrentInstrument,
+                        frame.Profile.CurrentDifficulty, frame.Profile.LeftyFlip).Clone();
+                    profile.ApplyModifiers(notes, _chart.SyncTrack);
+                    manager.Register((GuitarEngine)engine, notes, _chart, rockMeterPreset);
+                    break;
+                }
+                case GameMode.FourLaneDrums:
+                case GameMode.FiveLaneDrums:
+                case GameMode.EliteDrums:
+                {
+                    var notes = _chart.GetDrumsTrack(profile.CurrentInstrument)
+                        .GetDifficulty(profile.CurrentDifficulty).Clone();
+                    profile.ApplyModifiers(notes, _chart.SyncTrack);
+                    // TODO: Implement support for custom RockMeterPresets in replays
+                    manager.Register((DrumsEngine)engine, notes, _chart, rockMeterPreset);
+                    break;
+                }
+                case GameMode.ProKeys:
+                {
+                    if (profile.CurrentInstrument is Instrument.ProKeys) // Pro Keys
+                    {
+                        // Reset the notes
+                        var notes = _chart.ProKeys.GetDifficulty(profile.CurrentDifficulty).Clone();
+                        profile.ApplyModifiers(notes, _chart.SyncTrack);
+                        // TODO: Implement support for custom RockMeterPresets in replays
+                        manager.Register((ProKeysEngine)engine, notes, _chart, rockMeterPreset);
+                        break;
+                    }
+
+                    // Five-Lane Keys
+                    var fiveLaneNotes = _chart.GetFiveFretTrack(profile.CurrentInstrument)
+                        .GetDifficulty(profile.CurrentDifficulty).Clone();
+                    profile.ApplyModifiers(fiveLaneNotes, _chart.SyncTrack);
+                    manager.Register((FiveLaneKeysEngine)engine, fiveLaneNotes, _chart, rockMeterPreset);
+                    break;
+                }
+                case GameMode.Vocals:
+                {
+                    // Get the notes
+                    var notes = _chart.GetVocalsTrack(profile.CurrentInstrument)
+                        .Parts[profile.HarmonyIndex].Clone();
+                    profile.ApplyVocalModifiers(notes, profile.HarmonyIndex);
+                    manager.Register((VocalsEngine)engine, notes.CloneAsInstrumentDifficulty(), _chart, rockMeterPreset);
+                    break;
+                }
+                default:
+                    throw new InvalidOperationException("Game mode not configured!");
+            }
+        }
+
         private BaseEngine CreateEngine(YargProfile profile, BaseEngineParameters parameters)
         {
             switch (profile.GameMode)
@@ -243,6 +311,26 @@ namespace YARG.Core.Replays.Analyzer
 
                     // Create engine
                     return new YargFiveFretGuitarEngine(
+                        notes,
+                        _chart.SyncTrack,
+                        (GuitarEngineParameters) parameters,
+                        profile.IsBot);
+                }
+                case GameMode.SixFretGuitar:
+                {
+                    // Must match gameplay note selection (GetSixFretPlayableDifficulty) or replays fail verification
+                    var notes = _chart.GetSixFretPlayableDifficulty(profile.CurrentInstrument,
+                        profile.CurrentDifficulty, profile.LeftyFlip).Clone();
+                    profile.ApplyModifiers(notes, _chart.SyncTrack);
+                    foreach (var note in notes.Notes)
+                    {
+                        foreach (var subNote in note.AllNotes)
+                        {
+                            subNote.ResetNoteState();
+                        }
+                    }
+
+                    return new YargSixFretGuitarEngine(
                         notes,
                         _chart.SyncTrack,
                         (GuitarEngineParameters) parameters,
@@ -439,6 +527,7 @@ namespace YARG.Core.Replays.Analyzer
             FormatStat("Activation count", original.StarPowerActivationCount, result.StarPowerActivationCount);
             // FormatStat("Total bars filled", original.TotalStarPowerBarsFilled, result.TotalStarPowerBarsFilled);
             FormatStat("Ended with SP active", original.IsStarPowerActive, result.IsStarPowerActive);
+            FormatStat("Times SP used to revive", original.StarPowerRevives, result.StarPowerRevives);
 
             builder.AppendLine();
 

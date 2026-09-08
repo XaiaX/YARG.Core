@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using Melanchall.DryWetMidi.Core;
 using YARG.Core.Chart.Events;
+using YARG.Core.IO;
 using YARG.Core.Logging;
 using YARG.Core.Parsing;
 
@@ -25,8 +27,9 @@ namespace YARG.Core.Chart
         public VenueTrack VenueTrack { get; set; } = new();
         public LyricsTrack Lyrics { get; set; } = new();
 
-        // TODO: Add support for multiple lipsync tracks
-        public List<LipsyncEvent> LipsyncEvents { get; set; } = new();
+        public List<List<LipsyncEvent>> LipsyncEventsByPart { get; set; } = new();
+        public Performer[] SingerPreference { get; set; } = Array.Empty<Performer>();
+        public MiloAnimation.MiloAnimationGenre AnimationGenre   { get; set; }
 
 
         public InstrumentTrack<GuitarNote> FiveFretGuitar { get; set; } = new(Instrument.FiveFretGuitar);
@@ -47,7 +50,6 @@ namespace YARG.Core.Chart
             }
         }
 
-        // Not supported yet
         public InstrumentTrack<GuitarNote> SixFretGuitar { get; set; } = new(Instrument.SixFretGuitar);
         public InstrumentTrack<GuitarNote> SixFretCoop { get; set; } = new(Instrument.SixFretCoopGuitar);
         public InstrumentTrack<GuitarNote> SixFretRhythm { get; set; } = new(Instrument.SixFretRhythm);
@@ -181,6 +183,7 @@ namespace YARG.Core.Chart
 
             PostProcessSections();
             FixDrumPhraseEnds();
+            GenerateSingerPreference();
         }
 
         public void Append(SongChart song)
@@ -333,6 +336,44 @@ namespace YARG.Core.Chart
                 Instrument.PartyVocals => Harmony,
                 _ => throw new ArgumentException($"Instrument {instrument} is not a vocals instrument!")
             };
+        }
+
+        /// <summary>
+        /// Gets the playable guitar difficulty for a six-fret game mode player.
+        ///
+        /// Natively six-fret instruments read their own track directly. Five-fret instruments have
+        /// their track remapped into legal six-fret chords (see
+        /// <see cref="InstrumentDifficultyExtensions.ConvertFiveFretToSixFret"/> and
+        /// Docs/5fret_to_6fret_conversion.md); gameplay and replay analysis MUST use this same
+        /// mapping or replays will fail verification.
+        /// </summary>
+        /// <remarks>The returned difficulty may be shared chart data for six-fret instruments;
+        /// clone before mutating.</remarks>
+        public InstrumentDifficulty<GuitarNote> GetSixFretPlayableDifficulty(Instrument instrument, Difficulty difficulty,
+            bool leftyFlip = false)
+        {
+            InstrumentDifficulty<GuitarNote> track;
+            if (instrument.IsSixFret())
+            {
+                track = GetSixFretTrack(instrument).GetDifficulty(difficulty);
+            }
+            else
+            {
+                track = GetFiveFretTrack(instrument).GetDifficulty(difficulty).ConvertFiveFretToSixFret();
+            }
+
+            // Lefty flip mirrors the highway, which swaps the black and white pad rows
+            return leftyFlip ? track.FlipSixFretColors() : track;
+        }
+
+        public bool TryGetFiveFretDifficulty(Instrument instrument, Difficulty difficulty, [NotNullWhen(true)] out InstrumentDifficulty<GuitarNote>? track)
+        {
+            return GetFiveFretTrack(instrument).TryGetDifficulty(difficulty, out track);
+        }
+
+        public bool TryGetSixFretDifficulty(Instrument instrument, Difficulty difficulty, [NotNullWhen(true)] out InstrumentDifficulty<GuitarNote>? track)
+        {
+            return GetSixFretTrack(instrument).TryGetDifficulty(difficulty, out track);
         }
 
         /// <summary>

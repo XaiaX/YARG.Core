@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using YARG.Core.Chart;
 using YARG.Core.Input;
@@ -27,6 +27,7 @@ namespace YARG.Core.Engine
         public delegate void CodaEndEvent(CodaSection codaSection);
         public delegate void ComboResetEvent();
         public delegate void ComboIncrementEvent(int amount);
+        public delegate void PlayerRevivedEvent();
 
         public delegate void UnisonBonusAwardedEvent();
         public StarPowerStatusEvent? OnStarPowerStatus;
@@ -38,6 +39,7 @@ namespace YARG.Core.Engine
         public ComboResetEvent?      OnComboReset;
         public ComboIncrementEvent?  OnComboIncrement;
         public UnisonBonusAwardedEvent? OnUnisonBonusAwarded;
+        public PlayerRevivedEvent?    OnPlayerRevived;
 
         public bool CanStarPowerActivate => BaseStats.StarPowerTickAmount >= TicksPerHalfSpBar;
         public int BaseScore { get; protected set; }
@@ -126,7 +128,7 @@ namespace YARG.Core.Engine
 
         public double BaseTimeInStarPower { get; protected set; }
 
-        public          int[]  StarScoreThresholds { get; protected set;  }
+        public          int[]?  StarScoreThresholds { get; protected set;  }
 
         public readonly struct EngineFrameUpdate
         {
@@ -147,7 +149,6 @@ namespace YARG.Core.Engine
 
         protected double LaneAutohitExpireTime;
         public bool IsLaneActive => RequiredLaneNote != -1;
-        public bool LanesExist => CurrentLaneIndex <= TotalLanes;
 
         /// <summary>
         /// Whether or not the specified engine should treat a note as a chord, or separately.
@@ -173,6 +174,8 @@ namespace YARG.Core.Engine
         }
 
         protected bool InhibitCoda = false;
+
+        protected bool PlayerNeedsRevive = false;
 
         public EngineTimer GetStarPowerWhammyTimer() => StarPowerWhammyTimer;
 
@@ -424,7 +427,6 @@ namespace YARG.Core.Engine
             CodaHasStarted = false;
 
             TotalLanes = 0;
-            CurrentLaneIndex = 1;
             RequiredLaneNote = -1;
             NextTrillNote = -1;
             LaneAutohitExpireTime = -1;
@@ -467,6 +469,17 @@ namespace YARG.Core.Engine
 
         protected void ActivateStarPower()
         {
+            // I don't think RB quite did it this way, but we'll let players burn half a bar to revive bandmates
+            // even if they are already in SP, so long as they have enough
+            if (PlayerNeedsRevive && BaseStats.StarPowerTickAmount >= TicksPerHalfSpBar)
+            {
+                // Dock starpower and send revive event
+                BaseStats.StarPowerTickAmount -= TicksPerHalfSpBar;
+                BaseStats.StarPowerRevives++;
+                OnPlayerRevived?.Invoke();
+                return;
+            }
+
             if (BaseStats.IsStarPowerActive)
             {
                 return;
@@ -636,6 +649,16 @@ namespace YARG.Core.Engine
 
             CurrentCodaIndex++;
             InhibitCoda = false;
+        }
+
+        public void PlayerHasFailed()
+        {
+            PlayerNeedsRevive = true;
+        }
+
+        public void PlayerHasRevived()
+        {
+            PlayerNeedsRevive = false;
         }
     }
 }

@@ -12,6 +12,7 @@ namespace YARG.Core.Chart
 {
     internal partial class MoonSongLoader : ISongLoader
     {
+        private DrumsMixSetting _mixSetting = DrumsMixSetting.None;
         private bool _discoFlip = false;
 
         // Used to wipe lane markers from Beginner
@@ -256,7 +257,15 @@ namespace YARG.Core.Chart
                 : FourLaneDrumPad.Wildcard;
             const DrumNoteType noteType = DrumNoteType.Neutral;
 
-            var generalFlags = GetGeneralFlags(moonNote, currentPhrases) & NO_LANE_FLAGS;
+            var generalFlags = GetGeneralFlags(moonNote, currentPhrases);
+
+            // Beginner is all the same note type, so trills become tremolos
+            if ((generalFlags & NoteFlags.Trill) != 0)
+            {
+                generalFlags &= ~NoteFlags.Trill;
+                generalFlags |= NoteFlags.Tremolo;
+            }
+
             var drumFlags = GetDrumNoteFlags(moonNote, currentPhrases);
 
             double time = _moonSong.TickToTime(moonNote.tick);
@@ -270,7 +279,15 @@ namespace YARG.Core.Chart
                 ? FiveLaneDrumPad.Kick
                 : FiveLaneDrumPad.Wildcard;
             const DrumNoteType noteType = DrumNoteType.Neutral;
-            var generalFlags = GetGeneralFlags(moonNote, currentPhrases) & NO_LANE_FLAGS;
+            var generalFlags = GetGeneralFlags(moonNote, currentPhrases);
+
+            // Beginner is all the same note type, so trills become tremolos
+            if ((generalFlags & NoteFlags.Trill) != 0)
+            {
+                generalFlags &= ~NoteFlags.Trill;
+                generalFlags |= NoteFlags.Tremolo;
+            }
+
             var drumFlags = GetDrumNoteFlags(moonNote, currentPhrases);
 
             double time = _moonSong.TickToTime(moonNote.tick);
@@ -297,15 +314,13 @@ namespace YARG.Core.Chart
         {
             return pad switch
             {
-                FiveLaneDrumPad.Kick  => DrumStem.Kick,
-                FiveLaneDrumPad.Red   => DrumStem.Snare,
-                FiveLaneDrumPad.Blue  => DrumStem.Toms,
-                FiveLaneDrumPad.Green => DrumStem.Toms,
-                _                     => DrumStem.Else,
+                FiveLaneDrumPad.Kick   => DrumStem.Kick,
+                FiveLaneDrumPad.Red    => DrumStem.Snare,
+                FiveLaneDrumPad.Blue   => DrumStem.Toms,
+                FiveLaneDrumPad.Green  => DrumStem.Toms,
+                _                      => DrumStem.Else,
             };
         }
-
-        private DrumsMixSetting _mixSetting = DrumsMixSetting.None;
 
         private bool IsDiscoStemFlipEnabled()
         {
@@ -504,7 +519,7 @@ namespace YARG.Core.Chart
                 var flags = moonNote.flags;
 
                 // Disco flip
-                if (_discoFlip)
+                if (_mixSetting == DrumsMixSetting.DiscoFlip)
                 {
                     if (pad == FourLaneDrumPad.RedDrum)
                     {
@@ -597,12 +612,14 @@ namespace YARG.Core.Chart
         private static void DrumsFinalPass(InstrumentDifficulty<DrumNote> chart)
         {
             var noteIndex = 0;
+            var beginner = chart.Difficulty is Difficulty.Beginner;
 
             // All we're here to do is assemble lane phrases, so if there aren't any notes or phrases, then we have nothing to do
             if (chart.Phrases.Count == 0 || chart.Notes.Count == 0)
             {
                 return;
             }
+
 
             for (var phraseIndex = 0; phraseIndex < chart.Phrases.Count; phraseIndex++)
             {
@@ -612,26 +629,34 @@ namespace YARG.Core.Chart
                 {
                     continue;
                 }
-
+                
                 var notesInPhrase = GetNotesInLanePhrase(chart.Phrases, phraseIndex, chart.Notes, noteIndex, out noteIndex, true);
 
                 var fourLane = chart.Instrument is Instrument.FourLaneDrums or Instrument.ProDrums;
 
                 List<DrumNote> laneNotes;
 
-                switch (phrase.Type)
+                if (beginner)
                 {
-                    case PhraseType.TremoloLane:
-                        laneNotes = GetDrumTremoloNotes(notesInPhrase, fourLane);
-                        break;
-                    case PhraseType.TrillLane:
-                        laneNotes = GetDrumTrillNotes(notesInPhrase, fourLane);
-                        break;
-                    case PhraseType.KickLane:
-                        laneNotes = GetKickLaneNotes(notesInPhrase, fourLane);
-                        break;
-                    default:
-                        throw new ArgumentOutOfRangeException("Unreachable.");
+                    // Everything is a tremolo in Beginner, because it's all wildcards
+                    laneNotes = GetDrumTremoloNotes(notesInPhrase, fourLane);
+                }
+                else
+                {
+                    switch (phrase.Type)
+                    {
+                        case PhraseType.TremoloLane:
+                            laneNotes = GetDrumTremoloNotes(notesInPhrase, fourLane);
+                            break;
+                        case PhraseType.TrillLane:
+                            laneNotes = GetDrumTrillNotes(notesInPhrase, fourLane);
+                            break;
+                        case PhraseType.KickLane:
+                            laneNotes = GetKickLaneNotes(notesInPhrase, fourLane);
+                            break;
+                        default:
+                            throw new ArgumentOutOfRangeException("Unreachable.");
+                    }
                 }
 
                 if (laneNotes.Count > 0)
@@ -651,8 +676,9 @@ namespace YARG.Core.Chart
 
             if (chart.Difficulty is Difficulty.Beginner)
             {
-                // Convert kick-lane markers to regular wildcard lanes on Beginner, while removing
-                // overlapping regular lane markers produced by the two lane types.
+                // Convert KickLaneStart and KickLaneEnd to (wildcard) LaneStart and LaneEnd, and remove redundant
+                // start/end flags that result from overlapping lanes
+
                 var inRegularLane = false;
                 var inKickLane = false;
 
@@ -665,8 +691,8 @@ namespace YARG.Core.Chart
                         {
                             note.ClearFlag(NoteFlags.LaneStart);
                         }
+                        
                     }
-
                     if (note.IsKickLaneStart)
                     {
                         inKickLane = true;
@@ -697,35 +723,6 @@ namespace YARG.Core.Chart
                     }
                 }
             }
-        }
-
-        // Isolates all kicks inside a kick-lane phrase. A valid kick lane has at least two kicks.
-        private static List<DrumNote> GetKickLaneNotes(List<DrumNote> notesInPhrase, bool fourLane)
-        {
-            var kickPad = fourLane ? (int) FourLaneDrumPad.Kick : (int) FiveLaneDrumPad.Kick;
-            var kickLaneNotes = new List<DrumNote>();
-
-            foreach (var note in notesInPhrase)
-            {
-                foreach (var child in note.AllNotes)
-                {
-                    if (child.Pad == kickPad)
-                    {
-                        kickLaneNotes.Add(child);
-                    }
-                }
-            }
-
-            if (kickLaneNotes.Count > 1)
-            {
-                foreach (var kickLaneNote in kickLaneNotes)
-                {
-                    kickLaneNote.ActivateFlag(DrumNoteFlags.KickLane);
-                }
-                return kickLaneNotes;
-            }
-
-            return new();
         }
 
         // Takes all notes that are supposedly inside a drum tremolo phrase and validates them.
@@ -1077,6 +1074,45 @@ namespace YARG.Core.Chart
             // If we're here, we never found a valid third hit (presumably because the phrase was nothing but kicks after the second
             // pad); // not a valid trill
             return null;
+        }
+
+        // Isolates all of the kicks inside a kick lane phrase
+        //
+        // If there are more than 1, activates the KickLane flag on each of them and returns the list of kicks. DrumsFinalPass will
+        // assign the KickLaneStart and KickLaneEnd flags
+        //
+        // If there are 0 or 1, activates nothing and returns an empty list (not a valid kick lane)
+        private static List<DrumNote> GetKickLaneNotes(List<DrumNote> notesInPhrase, bool fourLane)
+        {
+            List<DrumNote> kickLaneNotes = new();
+
+            var kickPad = fourLane ? (int) FourLaneDrumPad.Kick : (int) FiveLaneDrumPad.Kick;
+
+            for (var i = 0; i < notesInPhrase.Count; i++)
+            {
+                var note = notesInPhrase[i];
+
+                foreach (var child in note.AllNotes)
+                {
+                    if (child.Pad == kickPad)
+                    {
+                        kickLaneNotes.Add(child);
+                    }
+                }
+            }
+
+            // If more than one kick is in the lane, then this is a valid kick lane. Mark the notes and return them
+            if (kickLaneNotes.Count > 1)
+            {
+                foreach (var kickLaneNote in kickLaneNotes)
+                {
+                    kickLaneNote.ActivateFlag(DrumNoteFlags.KickLane);
+                }
+                return kickLaneNotes;
+            }
+
+            // If this contains 0-1 kick(s), then this is not a valid kick lane. Activate nothing and just return an empty list
+            return new();
         }
     }
 }

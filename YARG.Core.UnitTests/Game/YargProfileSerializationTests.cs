@@ -44,20 +44,19 @@ public sealed class YargProfileSerializationTests
             Assert.That(deserialized.LeftyFlip, Is.True);
             Assert.That(deserialized.RangeEnabled, Is.False);
             Assert.That(deserialized.Name, Is.EqualTo("TestProfile"));
-            Assert.That(deserialized.Version, Is.EqualTo(13));
+            Assert.That(deserialized.Version, Is.EqualTo(14));
         });
     }
 
-    // v10 profiles (with _freeHarmony byte) deserialize cleanly — the byte is
-    // consumed and discarded, IsFreeVocals depends only on CurrentInstrument.
+    // v10 profiles (unified upstream layout) deserialize cleanly;
+    // IsFreeVocals depends only on CurrentInstrument.
     [Test]
-    public void DeserializeVersion10_ConsumesFreeHarmonyByte()
+    public void DeserializeVersion10_ReadsCleanly()
     {
         byte[] bytes = BuildVersion10Stream(
             name: "V10Profile",
             instrument: Instrument.Vocals,
-            harmonyIndex: 0,
-            freeHarmony: true);
+            harmonyIndex: 0);
 
         var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
         bytes.CopyTo(fixedArray.Span);
@@ -79,8 +78,7 @@ public sealed class YargProfileSerializationTests
         byte[] bytes = BuildVersion10Stream(
             name: "V10PartyVocals",
             instrument: Instrument.PartyVocals,
-            harmonyIndex: 1,
-            freeHarmony: false);
+            harmonyIndex: 1);
 
         var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
         bytes.CopyTo(fixedArray.Span);
@@ -162,7 +160,7 @@ public sealed class YargProfileSerializationTests
         };
     }
 
-    private static byte[] BuildVersion10Stream(string name, Instrument instrument, byte harmonyIndex, bool freeHarmony)
+    private static byte[] BuildVersion10Stream(string name, Instrument instrument, byte harmonyIndex)
     {
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms);
@@ -185,9 +183,6 @@ public sealed class YargProfileSerializationTests
         writer.Write((byte)Difficulty.Expert);
         writer.Write((ulong)Modifier.None);
         writer.Write(harmonyIndex);
-
-        // _freeHarmony (v9-v10 only, consumed and discarded by v11+ reader)
-        writer.Write(freeHarmony);
 
         // NoteSpeed, HighwayLength, LeftyFlip
         writer.Write(6.0f);
@@ -226,6 +221,9 @@ public sealed class YargProfileSerializationTests
         };
         writer.Write((byte)fiveLane.Length);
         foreach (var item in fiveLane) writer.Write((byte)item);
+
+        // RockMeterPreset (v9+, unified layout)
+        writer.Write(Guid.Empty);
 
         return ms.ToArray();
     }
@@ -351,8 +349,7 @@ public sealed class YargProfileSerializationTests
         byte[] bytes = BuildVersion10Stream(
             name: "V10Profile",
             instrument: Instrument.PartyVocals,
-            harmonyIndex: 0,
-            freeHarmony: true);
+            harmonyIndex: 0);
 
         var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
         bytes.CopyTo(fixedArray.Span);
@@ -562,8 +559,9 @@ public sealed class YargProfileSerializationTests
         writer.Write((byte) fiveLane.Length);
         foreach (var item in fiveLane) writer.Write((byte) item);
 
-        // _partyVocalsChartPreference (added in v12)
-        writer.Write((byte) PartyVocalsChartPreference.Harmony);
+        // RockMeterPreset (v9+, unified layout). No chart preference or
+        // downchart target: those are v14+ fields.
+        writer.Write(Guid.Empty);
 
         return ms.ToArray();
     }
