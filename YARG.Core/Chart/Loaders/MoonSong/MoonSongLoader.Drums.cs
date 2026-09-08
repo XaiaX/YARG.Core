@@ -251,10 +251,7 @@ namespace YARG.Core.Chart
 
         private DrumNote CreateFourLaneDrumBeginnerNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
         {
-            var pad = currentPhrases.TryGetValue(MoonPhrase.Type.ProDrums_KickLane, out var kickLane) &&
-                IsEventInPhrase(moonNote, kickLane, inclusiveEnd: true) && moonNote.drumPad is DrumPad.Kick
-                ? FourLaneDrumPad.Kick
-                : FourLaneDrumPad.Wildcard;
+            const FourLaneDrumPad pad = FourLaneDrumPad.Wildcard;
             const DrumNoteType noteType = DrumNoteType.Neutral;
 
             var generalFlags = GetGeneralFlags(moonNote, currentPhrases);
@@ -274,10 +271,7 @@ namespace YARG.Core.Chart
 
         private DrumNote CreateFiveLaneDrumBeginnerNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
         {
-            var pad = currentPhrases.TryGetValue(MoonPhrase.Type.ProDrums_KickLane, out var kickLane) &&
-                IsEventInPhrase(moonNote, kickLane, inclusiveEnd: true) && moonNote.drumPad is DrumPad.Kick
-                ? FiveLaneDrumPad.Kick
-                : FiveLaneDrumPad.Wildcard;
+            const FiveLaneDrumPad pad = FiveLaneDrumPad.Wildcard;
             const DrumNoteType noteType = DrumNoteType.Neutral;
             var generalFlags = GetGeneralFlags(moonNote, currentPhrases);
 
