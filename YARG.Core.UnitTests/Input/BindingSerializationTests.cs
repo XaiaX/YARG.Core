@@ -1,4 +1,5 @@
 using NUnit.Framework;
+using Newtonsoft.Json;
 using System;
 
 namespace YARG.Core.UnitTests.Input;
@@ -47,5 +48,33 @@ public sealed class BindingSerializationTests
 
         // Act & Assert
         Assert.That(mic1.Name, Is.Not.EqualTo(mic2.Name));
+    }
+
+    [Test]
+    public void SerializedMic_LegacyJson_MigratesDisplayName()
+    {
+        var mic = JsonConvert.DeserializeObject<YARG.Core.Audio.SerializedMic>("{\"Name\":\"Device - Channel 2\",\"StableId\":\"legacy\"}");
+
+        Assert.That(mic, Is.Not.Null);
+        Assert.That(mic!.BaseName, Is.EqualTo("Device"));
+        Assert.That(mic.Channel, Is.EqualTo(1));
+        Assert.That(mic.StableId, Is.EqualTo("legacy"));
+    }
+
+    [Test]
+    public void SerializedMic_NewJson_RoundTrips()
+    {
+        var original = new YARG.Core.Audio.SerializedMic("Device", 1, "stable");
+        var restored = JsonConvert.DeserializeObject<YARG.Core.Audio.SerializedMic>(JsonConvert.SerializeObject(original));
+
+        Assert.That(restored!.Name, Is.EqualTo(original.Name));
+        Assert.That(restored.StableId, Is.EqualTo(original.StableId));
+    }
+
+    [Test]
+    public void SerializedMic_InvalidJson_IsRejected()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            JsonConvert.DeserializeObject<YARG.Core.Audio.SerializedMic>("{\"StableId\":\"missing-identity\"}"));
     }
 }

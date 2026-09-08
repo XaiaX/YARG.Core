@@ -39,8 +39,21 @@ namespace YARG.Core.Audio
         }
 
         [JsonConstructor]
-        public SerializedMic(string baseName, int channel, string? stableId)
+        public SerializedMic(string? baseName, int channel, string? stableId, string? name = null)
         {
+            if (string.IsNullOrWhiteSpace(baseName))
+            {
+                if (!string.IsNullOrWhiteSpace(name) && InputDeviceInfo.TryParseDisplayName(name, out var parsedBaseName, out var parsedChannel))
+                {
+                    baseName = parsedBaseName;
+                    channel = parsedChannel;
+                }
+                else
+                {
+                    throw new ArgumentException("Serialized microphone is missing a valid identity", nameof(baseName));
+                }
+            }
+
             BaseName = baseName;
             Channel = channel;
             StableId = stableId;
