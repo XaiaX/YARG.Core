@@ -148,7 +148,7 @@ namespace YARG.Core.Engine
                 throw new ArgumentException("Use the indexed overload for non-free vocals registration");
             }
 
-            return Register(engine, instrumentDifficulty, FREE_HARMONY_INDEX, chart, rockMeterPreset);
+            return RegisterCore(engine, instrumentDifficulty, FREE_HARMONY_INDEX, chart, rockMeterPreset);
         }
 
         public EngineContainer Register<TNoteType, TEngineParams, TEngineStats>(
@@ -164,6 +164,17 @@ namespace YARG.Core.Engine
                 YargLogger.FailFormat("Indexed Register requires harmonyIndex >= 0; got {0}", harmonyIndex);
             }
 
+            return RegisterCore(engine, instrumentDifficulty, harmonyIndex, chart, rockMeterPreset);
+        }
+
+        private EngineContainer RegisterCore<TNoteType, TEngineParams, TEngineStats>(
+            BaseEngine<TNoteType, TEngineParams, TEngineStats> engine,
+            InstrumentDifficulty<TNoteType> instrumentDifficulty, int harmonyIndex, SongChart chart,
+            RockMeterPreset rockMeterPreset)
+            where TNoteType : Note<TNoteType>
+            where TEngineParams : BaseEngineParameters
+            where TEngineStats : BaseStats, new()
+        {
             if (_chart == null)
             {
                 _chart = chart;
