@@ -83,7 +83,11 @@ namespace YARG.Core.Replays
 
             if (ReplayVersion > 10)
             {
-                int pauseCount = stream.Read<int>(Endianness.Little);
+                    int pauseCount = stream.Read<int>(Endianness.Little);
+                if (pauseCount < 0 || pauseCount > 100000)
+                {
+                    throw new InvalidDataException($"Invalid pause count: {pauseCount}");
+                }
                 Pauses = new PauseInfo[pauseCount];
                 for (int i = 0; i < pauseCount; i++)
                 {
@@ -101,6 +105,10 @@ namespace YARG.Core.Replays
             }
 
             int statCount = stream.Read<int>(Endianness.Little);
+            if (statCount < 0 || statCount > 1000)
+            {
+                throw new InvalidDataException($"Invalid stats count: {statCount}");
+            }
             Stats = new ReplayStats[statCount];
             for (int i = 0; i < statCount; i++)
             {
@@ -116,6 +124,11 @@ namespace YARG.Core.Replays
                     GameMode.PartyVocals => new VocalsReplayStats(ref stream, ReplayVersion),
                     _ => throw new Exception($"Stats for {mode} not supported"),
                 };
+            }
+
+            if (stream.Remaining != 0)
+            {
+                throw new InvalidDataException($"Replay metadata has {stream.Remaining} trailing bytes");
             }
         }
 

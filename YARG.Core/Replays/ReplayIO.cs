@@ -39,7 +39,8 @@ namespace YARG.Core.Replays
         /// by the YOLO party-vocals line (per-mic replay frames) and by upstream (rock meter
         /// presets / NoFail at 17, censorship flag at 18). This build follows the upstream
         /// interpretation for everything <= 18 and adds Party Vocals game-mode frames at 19.
-        /// Replays written by the YOLO line at its forked versions 15-17 are not readable.
+        /// Replays written by the YOLO line at its forked versions 15-17 are not readable;
+        /// they are rejected by deserialization validation rather than a version gate.
         /// </remarks>
         public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 19);
         /// <remarks>

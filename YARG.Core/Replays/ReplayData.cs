@@ -50,6 +50,10 @@ namespace YARG.Core.Replays
             }
 
             int count = stream.Read<int>(Endianness.Little);
+            if (count < 0 || count > 1000000)
+            {
+                throw new InvalidDataException($"Invalid frame count: {count}");
+            }
             Frames = new ReplayFrame[count];
             for (int i = 0; i != count; i++)
             {
@@ -57,6 +61,10 @@ namespace YARG.Core.Replays
             }
 
             int frameCount = stream.Read<int>(Endianness.Little);
+            if (frameCount < 0 || frameCount > 1000000)
+            {
+                throw new InvalidDataException($"Invalid frame time count: {frameCount}");
+            }
             var frameTimes = new double[frameCount];
 
             for (int i = 0; i < frameCount; i++)
@@ -71,6 +79,11 @@ namespace YARG.Core.Replays
             else
             {
                 FrameTimes = Array.Empty<double>();
+            }
+
+            if (stream.Remaining != 0)
+            {
+                throw new InvalidDataException($"Replay data has {stream.Remaining} trailing bytes");
             }
         }
 
@@ -188,6 +201,10 @@ namespace YARG.Core.Replays
         {
             var dict = new Dictionary<Guid, T>();
             int len = stream.Read<int>(Endianness.Little);
+            if (len < 0 || len > 10000)
+            {
+                throw new InvalidDataException($"Invalid preset count: {len}");
+            }
             for (int i = 0; i < len; i++)
             {
                 // Read key
