@@ -75,6 +75,13 @@ namespace YARG.Core.Game
                     Modifier.RangeCompress |
                     Modifier.OpensToGreens,
 
+                GameMode.SixFretGuitar =>
+                    Modifier.AllStrums     |
+                    Modifier.AllHopos      |
+                    Modifier.AllTaps       |
+                    Modifier.HoposToTaps   |
+                    Modifier.TapsToHopos,
+
                 GameMode.FourLaneDrums or
                 GameMode.FiveLaneDrums or
                 GameMode.EliteDrums =>
@@ -93,7 +100,6 @@ namespace YARG.Core.Game
                     Modifier.RangeCompress |
                     Modifier.OpensToGreens,
 
-                GameMode.SixFretGuitar or
                 GameMode.ProGuitar     or
             //  GameMode.Dj            or
                 GameMode.ProKeys       => Modifier.None,

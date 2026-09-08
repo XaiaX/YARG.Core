@@ -10,14 +10,12 @@ namespace YARG.Core.Audio
         private bool _disposed;
 
         protected readonly string _path;
-        protected readonly int _playbackCount;
 
         public readonly SfxSample Sample;
-        protected SampleChannel(SfxSample sample, string path, int playbackCount)
+        protected SampleChannel(SfxSample sample, string path)
         {
             Sample = sample;
             _path = path;
-            _playbackCount = playbackCount;
 
             GlobalAudioHandler.StemSettings[SongStem.Sfx].OnVolumeChange += SetVolume;
         }
@@ -30,6 +28,17 @@ namespace YARG.Core.Audio
                 {
                     Play_Internal(duration);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Creates an owned decode stream for sample-accurate playback in a song mixer.
+        /// </summary>
+        internal int CreateStream()
+        {
+            lock (this)
+            {
+                return _disposed ? 0 : CreateStream_Internal();
             }
         }
 
@@ -94,36 +103,13 @@ namespace YARG.Core.Audio
             }
         }
 
-        protected void SetEndCallback()
-        {
-            lock (this)
-            {
-                if (!_disposed)
-                {
-                    SetEndCallback_Internal();
-                }
-            }
-        }
-
-        protected void EndCallback(int _, int __, int ___, IntPtr ____)
-        {
-            lock (this)
-            {
-                if (!_disposed)
-                {
-                    EndCallback_Internal(_, __, ___, ____);
-                }
-            }
-        }
-
         protected abstract void Play_Internal(double duration);
+        protected abstract int CreateStream_Internal();
         protected abstract void Stop_Internal(double duration);
         protected abstract void Pause_Internal();
         protected abstract void Resume_Internal();
         protected abstract void SetVolume_Internal(double volume);
-        protected abstract void SetEndCallback_Internal();
         protected abstract void SetOutputChannel_Internal(OutputChannel? channel);
-        protected abstract void EndCallback_Internal(int _, int __, int ___, IntPtr ____);
 
         protected virtual void DisposeManagedResources() { }
         protected virtual void DisposeUnmanagedResources() { }

@@ -52,7 +52,7 @@ public sealed class PartyVocalsCoordinatorEngineTests
     // ================================================================
 
     private static VocalsPart CreateVocalsPart(bool isHarmony = false) =>
-        new(isHarmony, new(), new(), new(), new());
+        new(isHarmony, new(), new(), new(), new(), new());
 
     private static SyncTrack CreateSyncTrack()
     {

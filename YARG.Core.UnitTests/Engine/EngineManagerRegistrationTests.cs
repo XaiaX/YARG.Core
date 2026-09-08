@@ -38,10 +38,10 @@ public sealed class EngineManagerRegistrationTests : EngineTester
         var chart = GetChart();
         var guitarEngine = CreateGuitarEngine(chart);
 
-        var container = manager.Register(guitarEngine, Instrument.Vocals, freeVocals: true, chart, RockMeterPreset.Normal);
+        var container = manager.Register(guitarEngine, GetGuitarDifficulty(chart), freeVocals: true, chart, RockMeterPreset.Normal);
 
         Assert.That(container.HarmonyIndex, Is.EqualTo(EngineManager.FREE_HARMONY_INDEX));
-        Assert.That(container.Instrument, Is.EqualTo(Instrument.Vocals));
+        Assert.That(container.Instrument, Is.EqualTo(Instrument.FiveFretGuitar));
     }
 
     // ================================================================
@@ -59,11 +59,11 @@ public sealed class EngineManagerRegistrationTests : EngineTester
         var harm1Engine = CreateGuitarEngine(chart);
 
         // Register free vocals engine
-        var freeContainer = manager.Register(freeEngine, Instrument.Vocals, freeVocals: true, chart, RockMeterPreset.Normal);
+        var freeContainer = manager.Register(freeEngine, GetGuitarDifficulty(chart), freeVocals: true, chart, RockMeterPreset.Normal);
 
         // Register harmony-indexed vocals engines (harmonyIndex 0 and 1)
-        var harm0Container = manager.Register(harm0Engine, Instrument.Vocals, harmonyIndex: 0, chart, RockMeterPreset.Normal);
-        var harm1Container = manager.Register(harm1Engine, Instrument.Vocals, harmonyIndex: 1, chart, RockMeterPreset.Normal);
+        var harm0Container = manager.Register(harm0Engine, GetGuitarDifficulty(chart), harmonyIndex: 0, chart, RockMeterPreset.Normal);
+        var harm1Container = manager.Register(harm1Engine, GetGuitarDifficulty(chart), harmonyIndex: 1, chart, RockMeterPreset.Normal);
 
         Assert.That(manager.Engines, Has.Count.EqualTo(3));
         Assert.That(freeContainer.HarmonyIndex, Is.EqualTo(EngineManager.FREE_HARMONY_INDEX));
@@ -89,7 +89,7 @@ public sealed class EngineManagerRegistrationTests : EngineTester
         for (int i = 0; i <= 3; i++)
         {
             var engine = CreateGuitarEngine(chart);
-            var container = manager.Register(engine, Instrument.Vocals, harmonyIndex: i, chart, RockMeterPreset.Normal);
+            var container = manager.Register(engine, GetGuitarDifficulty(chart), harmonyIndex: i, chart, RockMeterPreset.Normal);
             Assert.That(container.HarmonyIndex, Is.EqualTo(i), $"HarmonyIndex should be {i}");
         }
 
@@ -109,7 +109,7 @@ public sealed class EngineManagerRegistrationTests : EngineTester
 
         Assert.Throws<ArgumentException>(() =>
         {
-            manager.Register(engine, Instrument.Vocals, freeVocals: false, chart, RockMeterPreset.Normal);
+            manager.Register(engine, GetGuitarDifficulty(chart), freeVocals: false, chart, RockMeterPreset.Normal);
         });
     }
 
@@ -132,7 +132,7 @@ public sealed class EngineManagerRegistrationTests : EngineTester
         var engine = CreateGuitarEngine(chart);
 
         // This will log a failure via YargLogger but not throw
-        var container = manager.Register(engine, Instrument.Vocals, harmonyIndex: -1, chart, RockMeterPreset.Normal);
+        var container = manager.Register(engine, GetGuitarDifficulty(chart), harmonyIndex: -1, chart, RockMeterPreset.Normal);
 
         // The container is still created -- the guard is advisory, not blocking
         Assert.That(container, Is.Not.Null);
@@ -150,7 +150,7 @@ public sealed class EngineManagerRegistrationTests : EngineTester
         var chart = GetChart();
         var engine = CreateGuitarEngine(chart);
 
-        var container = manager.Register(engine, Instrument.Vocals, chart, RockMeterPreset.Normal);
+        var container = manager.Register(engine, GetGuitarDifficulty(chart), chart, RockMeterPreset.Normal);
 
         Assert.That(container.HarmonyIndex, Is.EqualTo(0));
     }
@@ -168,6 +168,11 @@ public sealed class EngineManagerRegistrationTests : EngineTester
     // ================================================================
     // Helper: create a guitar engine from the test chart
     // ================================================================
+
+    private static InstrumentDifficulty<GuitarNote> GetGuitarDifficulty(SongChart chart)
+    {
+        return chart.FiveFretGuitar.GetDifficulty(Difficulty.Expert);
+    }
 
     private YargFiveFretGuitarEngine CreateGuitarEngine(SongChart chart)
     {

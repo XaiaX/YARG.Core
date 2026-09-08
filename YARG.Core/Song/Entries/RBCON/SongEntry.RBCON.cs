@@ -134,7 +134,7 @@ namespace YARG.Core.Song
 
                 using var updateMidi = FixedArray.LoadFile(updateFilename);
                 var update = MidiFile.Read(updateMidi.ToReferenceStream(), readingSettings);
-                midi.Merge(update);
+                midi.Merge(update, false);
             }
 
             // Merge upgrade MIDI
@@ -147,7 +147,7 @@ namespace YARG.Core.Song
                 }
 
                 var upgrade = MidiFile.Read(upgradeMidi.ToReferenceStream(), readingSettings);
-                midi.Merge(upgrade);
+                midi.Merge(upgrade, false);
             }
 
             var parseSettings = new ParseSettings()
@@ -184,7 +184,7 @@ namespace YARG.Core.Song
             return version is UNENCRYPTED_MOGG or YARG_MOGG;
         }
 
-        public override StemMixer? LoadAudio(float speed, double volume, params SongStem[] ignoreStems)
+        public override StemMixer? LoadAudio(float speed, double volume, bool enableCensoring, params SongStem[] ignoreStems)
         {
             var stream = GetMoggStream();
             if (stream == null)
@@ -203,7 +203,7 @@ namespace YARG.Core.Song
             int start = stream.Read<int>(Endianness.Little);
             stream.Seek(start, SeekOrigin.Begin);
 
-            bool clampStemVolume = _metadata.Source.ToLowerInvariant() == "yarg";
+            bool clampStemVolume = GlobalAudioHandler.CLAMPED_AUDIO_SOURCES.Contains(_metadata.Source.ToLowerInvariant());
             var mixer = GlobalAudioHandler.CreateMixer(ToString(), speed, volume, clampStemVolume: clampStemVolume,
                 normalize: true);
             if (mixer == null)
@@ -282,9 +282,9 @@ namespace YARG.Core.Song
             return mixer;
         }
 
-        public override StemMixer? LoadPreviewAudio(float speed)
+        public override StemMixer? LoadPreviewAudio(float speed, bool enableCensoring)
         {
-            return LoadAudio(speed, 0, SongStem.Crowd);
+            return LoadAudio(speed, 0, enableCensoring, SongStem.Crowd);
         }
 
         internal void UpdateInfo(in AbridgedFileInfo? updateDirectory, in DateTime? updateMidi, RBProUpgrade? upgrade)
@@ -669,6 +669,20 @@ namespace YARG.Core.Song
             return data;
         }
 
+        protected FixedArray<byte>? LoadUpdateVocData()
+        {
+            var data = default(FixedArray<byte>);
+            if (_updateDirectoryAndDtaLastWrite.HasValue)
+            {
+                string updateVocPath = Path.Combine(_updateDirectoryAndDtaLastWrite.Value.FullName, _subName, _subName + ".voc");
+                if (File.Exists(updateVocPath))
+                {
+                    data = FixedArray.LoadFile(updateVocPath);
+                }
+            }
+            return data;
+        }
+
         private static void WriteUpdateInfo(in AbridgedFileInfo? info, MemoryStream stream)
         {
             stream.Write(info != null);
@@ -768,6 +782,16 @@ namespace YARG.Core.Song
             if (dta.CoveredBy != null)            { entry._metadata.CoveredBy     = YARGDTAReader.DecodeString(dta.CoveredBy.Value, dta.MetadataEncoding); }
             if (dta.Album != null)                { entry._metadata.Album         = YARGDTAReader.DecodeString(dta.Album.Value, dta.MetadataEncoding); }
             if (dta.Charter != null)              { entry._metadata.Charter       = YARGDTAReader.DecodeString(dta.Charter.Value, dta.MetadataEncoding); }
+            if (dta.CharterKeys != null)
+            {
+                entry._metadata.CharterKeys    = YARGDTAReader.DecodeString(dta.CharterKeys.Value, dta.MetadataEncoding);
+                entry._metadata.CharterProKeys = YARGDTAReader.DecodeString(dta.CharterKeys.Value, dta.MetadataEncoding);
+            }
+            if (dta.CharterProStrings != null)
+            {
+                entry._metadata.CharterProGuitar = YARGDTAReader.DecodeString(dta.CharterProStrings.Value, dta.MetadataEncoding);
+                entry._metadata.CharterProBass   = YARGDTAReader.DecodeString(dta.CharterProStrings.Value, dta.MetadataEncoding);
+            }
             if (dta.LoadingPhrase != null)        { entry._metadata.LoadingPhrase = YARGDTAReader.DecodeString(dta.LoadingPhrase.Value, dta.MetadataEncoding); }
             if (dta.Playlist != null)             { entry._metadata.Playlist      = YARGDTAReader.DecodeString(dta.Playlist.Value, dta.MetadataEncoding); }
             if (dta.Genre != null)
@@ -794,6 +818,13 @@ namespace YARG.Core.Song
                 else
                 {
                     entry._metadata.Source = dta.Source;
+                }
+
+                if (dta.Source == "beatles")
+                {
+                    entry._metadata.Artist = "The Beatles";
+                    entry._rbMetadata.RbVocalGender = RbVocalGender.Male;
+                    entry._metadata.VocalGender = VocalGender.Male;
                 }
             }
             if (dta.SongLength != null)           { entry._metadata.SongLength    = dta.SongLength.Value; }
@@ -858,7 +889,11 @@ namespace YARG.Core.Song
             if (dta.Intensities.LeadVocals >= 0)     { entry._rbIntensities.LeadVocals     = dta.Intensities.LeadVocals; }
             if (dta.Intensities.HarmonyVocals >= 0)  { entry._rbIntensities.HarmonyVocals  = dta.Intensities.HarmonyVocals; }
 
-            entry._metadata.VocalGender = DTAEntry.ConvertVocalGender(dta.VocalGender);
+            // This if ensures that updates that don't have a specified vocal gender don't overwrite the existing value
+            if (dta.VocalGender != null)
+            {
+                entry._metadata.VocalGender = DTAEntry.ConvertVocalGender(dta.VocalGender);
+            }
         }
 
         private static int GetIntensity(int rank, int[] values)

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Threading.Tasks;
 using YARG.Core.Logging;
 
 namespace YARG.Core.Audio
@@ -15,13 +14,14 @@ namespace YARG.Core.Audio
 
     public static class GlobalAudioHandler
     {
-        public const int WHAMMY_FFT_DEFAULT = 2048;
+        public const int WHAMMY_FFT_DEFAULT        = 2048;
         public const int WHAMMY_OVERSAMPLE_DEFAULT = 8;
+        public static readonly string[] CLAMPED_AUDIO_SOURCES = { "yarg", "yargdlc", "yarn" };
         public static readonly int MAX_THREADS = Environment.ProcessorCount switch
         {
             >= 16 => 16,
-            >= 6 => Environment.ProcessorCount / 2,
-            _ => 2
+            >= 6  => Environment.ProcessorCount / 2,
+            _     => 2
         };
 
         internal static readonly Dictionary<SongStem, StemSettings> StemSettings;
@@ -30,22 +30,23 @@ namespace YARG.Core.Audio
         {
             StemSettings = new()
             {
-                { SongStem.Song,     new StemSettings() },
-                { SongStem.Guitar,   new StemSettings() },
-                { SongStem.Bass,     new StemSettings() },
-                { SongStem.Rhythm,   new StemSettings() },
-                { SongStem.Keys,     new StemSettings() },
-                { SongStem.Vocals,   new StemSettings() },
-                { SongStem.Drums1,   new StemSettings() },
-                { SongStem.Drums2,   new StemSettings() },
-                { SongStem.Drums3,   new StemSettings() },
-                { SongStem.Drums4,   new StemSettings() },
-                { SongStem.Crowd,    new StemSettings() },
-                { SongStem.Sfx,      new StemSettings() },
-                { SongStem.DrumSfx,  new StemSettings() },
-                { SongStem.VoxSample, new StemSettings() },
-                { SongStem.Metronome, new StemSettings() },
-                { SongStem.Preview, new StemSettings() },
+                { SongStem.Song,        new StemSettings() },
+                { SongStem.Guitar,      new StemSettings() },
+                { SongStem.Bass,        new StemSettings() },
+                { SongStem.Rhythm,      new StemSettings() },
+                { SongStem.Keys,        new StemSettings() },
+                { SongStem.Vocals,      new StemSettings() },
+                { SongStem.Drums1,      new StemSettings() },
+                { SongStem.Drums2,      new StemSettings() },
+                { SongStem.Drums3,      new StemSettings() },
+                { SongStem.Drums4,      new StemSettings() },
+                { SongStem.Crowd,       new StemSettings() },
+                { SongStem.Sfx,         new StemSettings() },
+                { SongStem.DrumSfx,     new StemSettings() },
+                { SongStem.VoxSample,   new StemSettings() },
+                { SongStem.VenueSample, new StemSettings() },
+                { SongStem.Metronome,   new StemSettings() },
+                { SongStem.Preview,     new StemSettings() },
             };
         }
 
@@ -149,6 +150,14 @@ namespace YARG.Core.Audio
             {
                 _instance?.Dispose();
                 _instance = null;
+            }
+        }
+
+        public static void Update()
+        {
+            lock (_instanceLock)
+            {
+                _instance?.Update();
             }
         }
 
@@ -256,13 +265,26 @@ namespace YARG.Core.Audio
             }
         }
 
-        public static void StopSoundEffect(SfxSample sample, double duration = 0)
+        public static int CreateSoundEffectStream(SfxSample sample)
         {
             lock (_instanceLock)
             {
                 if (_instance == null)
                 {
                     throw new NotInitializedException();
+                }
+
+                return _instance.SfxSamples[(int) sample]?.CreateStream() ?? 0;
+            }
+        }
+
+        public static void StopSoundEffect(SfxSample sample, double duration = 0)
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    return;
                 }
                 _instance.SfxSamples[(int) sample]?.Stop(duration);
             }
@@ -301,6 +323,16 @@ namespace YARG.Core.Audio
                     PauseSoundEffect(sample.Kind);
                 }
             }
+
+            lock (_instanceLock)
+            {
+                if (_instance == null) { throw new NotInitializedException(); }
+
+                foreach (var sample in _instance.VenueSamples.Values)
+                {
+                    sample.Pause();
+                }
+            }
         }
 
         public static void ResumeAllSfx()
@@ -310,6 +342,16 @@ namespace YARG.Core.Audio
                 if (sample.IsPlaying)
                 {
                     ResumeSoundEffect(sample.Kind);
+                }
+            }
+
+            lock (_instanceLock)
+            {
+                if (_instance == null) { throw new NotInitializedException(); }
+
+                foreach (var sample in _instance.VenueSamples.Values)
+                {
+                    sample.Resume();
                 }
             }
         }
@@ -339,6 +381,48 @@ namespace YARG.Core.Audio
             }
         }
 
+        public static void PlayVenueSample(string sampleName)
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+
+                if (_instance.VenueSamples.ContainsKey(sampleName))
+                {
+                    _instance.VenueSamples[sampleName]?.Play();
+                }
+            }
+        }
+
+        public static void AddVenueSample(string sampleName, byte[] sampleData)
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+
+                _instance.LoadVenueSample(sampleName, sampleData);
+            }
+        }
+
+        public static void ClearVenueSamples()
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+
+                _instance.ClearVenueSamples();
+            }
+        }
+
         public static void PlayMetronomeSoundEffect(MetronomeSample sample, MetronomePitch pitch)
         {
             lock (_instanceLock)
@@ -356,6 +440,33 @@ namespace YARG.Core.Audio
                 }
 
                 _instance.MetronomeSamples[(int) sample]?.PlayLo();
+            }
+        }
+
+        public static void PlayMetronomeSoundEffectToChannel(MetronomeSample sample, MetronomePitch pitch,
+            int channelId)
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+
+                _instance.PlayMetronomeSoundEffectToChannel(sample, pitch, channelId);
+            }
+        }
+
+        public static int CreateMetronomeStream(MetronomeSample sample, MetronomePitch pitch)
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+
+                return _instance.MetronomeSamples[(int) sample]?.CreateStream(pitch) ?? 0;
             }
         }
 
@@ -407,7 +518,19 @@ namespace YARG.Core.Audio
             }
         }
 
-        public static List<(int id, string name)> GetAllInputDevices()
+        public static MicDevice? GetInputDevice(string baseName, int channel)
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+                return _instance.GetInputDevice(baseName, channel);
+            }
+        }
+
+        public static List<InputDeviceInfo> GetAllInputDevices()
         {
             lock (_instanceLock)
             {
@@ -419,7 +542,7 @@ namespace YARG.Core.Audio
             }
         }
 
-        public static MicDevice? CreateInputDevice(int deviceId, string name)
+        public static MicDevice? CreateInputDevice(InputDeviceInfo device)
         {
             lock (_instanceLock)
             {
@@ -427,7 +550,7 @@ namespace YARG.Core.Audio
                 {
                     throw new NotInitializedException();
                 }
-                return _instance.CreateInputDevice(deviceId, name);
+                return _instance.CreateInputDevice(device);
             }
         }
 
@@ -455,7 +578,6 @@ namespace YARG.Core.Audio
                 _instance.SetBufferLength(length);
             }
         }
-
         public static List<(int id, string name)> GetAllOutputDevices()
         {
             lock (_instanceLock)
@@ -480,7 +602,7 @@ namespace YARG.Core.Audio
             }
         }
 
-        public static OutputDevice? GetOutputDevice(string name)
+        public static OutputChannel? CreateOutputChannel(int channelId)
         {
             lock (_instanceLock)
             {
@@ -488,7 +610,44 @@ namespace YARG.Core.Audio
                 {
                     throw new NotInitializedException();
                 }
-                return _instance.GetOutputDevice(name);
+
+                return _instance.CreateOutputChannel(channelId);
+            }
+        }
+
+        public static OutputBufferInfo? GetOutputBufferInfo()
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+                return _instance.GetOutputBufferInfo();
+            }
+        }
+
+        public static bool OpenOutputControlPanel()
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+                return _instance.OpenOutputControlPanel();
+            }
+        }
+
+        public static AudioOutputMode GetOutputMode(string name)
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+                return _instance.GetOutputMode(name);
             }
         }
 
@@ -559,7 +718,7 @@ namespace YARG.Core.Audio
             }
         }
 
-        public static void SetOutputDevice(string name)
+        public static bool SetOutputDevice(string name)
         {
             lock (_instanceLock)
             {
@@ -567,7 +726,19 @@ namespace YARG.Core.Audio
                 {
                     throw new NotInitializedException();
                 }
-                _instance.SetOutputDevice(name);
+                return _instance.SetOutputDevice(name);
+            }
+        }
+
+        public static bool ReinitializeOutput()
+        {
+            lock (_instanceLock)
+            {
+                if (_instance == null)
+                {
+                    throw new NotInitializedException();
+                }
+                return _instance.ReinitializeOutput();
             }
         }
     }

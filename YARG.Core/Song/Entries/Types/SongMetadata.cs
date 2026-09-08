@@ -42,6 +42,7 @@ namespace YARG.Core.Song
             VideoLoop = false,
             AlbumTrack = int.MaxValue,
             PlaylistTrack = int.MaxValue,
+            YargGuid = string.Empty,
             LoadingPhrase = string.Empty,
             LinkBandcamp = string.Empty,
             LinkBluesky = string.Empty,
@@ -57,6 +58,7 @@ namespace YARG.Core.Song
             Location = string.Empty,
             CreditAlbumArtDesignedBy = string.Empty,
             CreditArrangedBy = string.Empty,
+            CreditBackground = string.Empty,
             CreditComposedBy = string.Empty,
             CreditCourtesyOf = string.Empty,
             CreditEngineeredBy = string.Empty,
@@ -70,14 +72,18 @@ namespace YARG.Core.Song
             CreditWrittenBy = string.Empty,
             CharterAudio = string.Empty,
             CharterBass = string.Empty,
+            CharterBass6F = string.Empty,
             CharterDrums = string.Empty,
             CharterEliteDrums = string.Empty,
             CharterGuitar = string.Empty,
+            CharterGuitar6F = string.Empty,
             CharterKeys = string.Empty,
             CharterLowerDiff = string.Empty,
             CharterProBass = string.Empty,
             CharterProKeys = string.Empty,
             CharterProGuitar = string.Empty,
+            CharterRhythm = string.Empty,
+            CharterRhythm6F = string.Empty,
             CharterVenue = string.Empty,
             CharterVocals = string.Empty,
             SongLength = 0,
@@ -87,6 +93,9 @@ namespace YARG.Core.Song
             Video = (0, -1),
             VocalScrollSpeedScalingFactor = null,
             VocalGender = VocalGender.Unspecified,
+            CleanVocals = false,
+            VenueHint = string.Empty,
+            VocalCharacterHint = string.Empty,
         };
 
         public string Name;
@@ -113,6 +122,8 @@ namespace YARG.Core.Song
 
         public int AlbumTrack;
         public int PlaylistTrack;
+
+        public string YargGuid;
 
         public string LoadingPhrase;
 
@@ -147,19 +158,28 @@ namespace YARG.Core.Song
 
         public string CharterAudio;
         public string CharterBass;
+        public string CharterBass6F;
         public string CharterDrums;
         public string CharterEliteDrums;
         public string CharterGuitar;
+        public string CharterGuitar6F;
         public string CharterKeys;
         public string CharterLowerDiff;
         public string CharterProBass;
         public string CharterProKeys;
         public string CharterProGuitar;
-        public string CharterVocals;
+        public string CharterRhythm;
+        public string CharterRhythm6F;
         public string CharterVenue;
+        public string CharterVocals;
 
         public float? VocalScrollSpeedScalingFactor;
         public VocalGender VocalGender;
+        public bool        CleanVocals;
+
+        // Venue hints
+        public string VenueHint;
+        public string VocalCharacterHint;
 
         public static SongMetadata CreateFromIni(IniModifierCollection modifiers)
         {
@@ -236,6 +256,11 @@ namespace YARG.Core.Song
             if (modifiers.Extract("playlist", out string playlist) && playlist.Length > 0)
             {
                 metadata.Playlist = playlist;
+            }
+
+            if (modifiers.Extract("yarg_guid", out string guid) && guid.Length > 0)
+            {
+                metadata.YargGuid = guid;
             }
 
             if (modifiers.Extract("loading_phrase", out string loadingPhrase))
@@ -378,6 +403,11 @@ namespace YARG.Core.Song
                 metadata.CharterBass = charterBass;
             }
 
+            if (modifiers.Extract("charter_bass_6f", out string charterBass6F))
+            {
+                metadata.CharterBass6F = charterBass6F;
+            }
+
             if (modifiers.Extract("charter_drums", out string charterDrums))
             {
                 metadata.CharterDrums = charterDrums;
@@ -391,6 +421,11 @@ namespace YARG.Core.Song
             if (modifiers.Extract("charter_guitar", out string charterGuitar))
             {
                 metadata.CharterGuitar = charterGuitar;
+            }
+
+            if (modifiers.Extract("charter_guitar_6f", out string charterGuitar6F))
+            {
+                metadata.CharterGuitar6F = charterGuitar6F;
             }
 
             if (modifiers.Extract("charter_keys", out string charterKeys))
@@ -416,6 +451,16 @@ namespace YARG.Core.Song
             if (modifiers.Extract("charter_pro_guitar", out string charterProGuitar))
             {
                 metadata.CharterProGuitar = charterProGuitar;
+            }
+
+            if (modifiers.Extract("charter_rhythm", out string charterRhythm))
+            {
+                metadata.CharterRhythm = charterRhythm;
+            }
+
+            if (modifiers.Extract("charter_rhythm_6f", out string charterRhythm6F))
+            {
+                metadata.CharterRhythm6F = charterRhythm6F;
             }
 
             if (modifiers.Extract("charter_vocals", out string charterVocals))
@@ -515,6 +560,11 @@ namespace YARG.Core.Song
                 metadata.LinkBandcamp = linkBandcamp;
             }
 
+            if (modifiers.Extract("vocal_character_hint", out string vocalCharacterHint))
+            {
+                metadata.VocalCharacterHint = vocalCharacterHint;
+            }
+
             if (modifiers.Extract("vocal_scroll_speed", out short vocalScrollSpeed))
             {
                 // INI vocal scroll speed is interpreted as a percentage
@@ -523,7 +573,24 @@ namespace YARG.Core.Song
 
             if (modifiers.Extract("vocal_gender", out string vocalGender))
             {
-                metadata.VocalGender = Enum.Parse<VocalGender>(vocalGender);
+                if (Enum.TryParse<VocalGender>(vocalGender, true, out var genderValue))
+                {
+                    metadata.VocalGender = genderValue;
+                }
+                else
+                {
+                    metadata.VocalGender = VocalGender.Unspecified;
+                }
+            }
+
+            if (modifiers.Extract("venue_hint", out string venueHint))
+            {
+                metadata.VenueHint = venueHint;
+            }
+
+            if (modifiers.Extract("clean_vocals", out bool cleanVocals))
+            {
+                metadata.CleanVocals = cleanVocals;
             }
         }
     }

@@ -169,9 +169,18 @@ public sealed class ProfileBindingsTests
         {
         }
 
+        public override void SetReverbLevel(float wet)
+        {
+        }
+
+        public override MicBufferInfo? GetBufferInfo()
+        {
+            return null;
+        }
+
         public override SerializedMic Serialize()
         {
-            return new SerializedMic(TestDeviceId, StableId);
+            return new SerializedMic(TestDeviceId, 0, StableId);
         }
 
         protected override void DisposeManagedResources()

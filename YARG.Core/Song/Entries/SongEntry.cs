@@ -1,10 +1,7 @@
 ﻿using System;
 using System.IO;
-using YARG.Core.Chart;
 using YARG.Core.Extensions;
 using YARG.Core.IO;
-using YARG.Core.Song.Cache;
-using YARG.Core.Utility;
 
 namespace YARG.Core.Song
 {
@@ -63,6 +60,8 @@ namespace YARG.Core.Song
 
         protected const string YARGROUND_EXTENSION = ".yarground";
         protected const string YARGROUND_FULLNAME = "bg.yarground";
+        protected const string CLEAN_BACKGROUND_SUFFIX = "_clean";
+        protected const string EXPLICIT_BACKGROUND_SUFFIX = "_explicit";
         protected static readonly Random BACKROUND_RNG = new();
 
         private SortString _name = SortString.Empty;
@@ -98,6 +97,8 @@ namespace YARG.Core.Song
         public SortString Source => _source;
         public SortString Playlist => _playlist;
 
+        public string YargGuid => _metadata.YargGuid;
+
         public string CoveredBy => _metadata.CoveredBy;
 
         public string UnmodifiedYear => _metadata.Year;
@@ -111,8 +112,6 @@ namespace YARG.Core.Song
         public int AlbumTrack => _metadata.AlbumTrack;
 
         public int PlaylistTrack => _metadata.PlaylistTrack;
-
-        public SongRating SongRating => _metadata.SongRating;
 
         public string LoadingPhrase => _metadata.LoadingPhrase;
 
@@ -144,13 +143,17 @@ namespace YARG.Core.Song
 
         public string CharterAudio       => _metadata.CharterAudio;
         public string CharterBass       => _metadata.CharterBass;
+        public string CharterBass6F     => _metadata.CharterBass6F;
         public string CharterDrums      => _metadata.CharterDrums;
         public string CharterEliteDrums => _metadata.CharterEliteDrums;
         public string CharterGuitar     => _metadata.CharterGuitar;
+        public string CharterGuitar6F   => _metadata.CharterGuitar6F;
         public string CharterKeys       => _metadata.CharterKeys;
         public string CharterLowerDiff  => _metadata.CharterLowerDiff;
         public string CharterProBass    => _metadata.CharterProBass;
         public string CharterProKeys    => _metadata.CharterProKeys;
+        public string CharterRhythm     => _metadata.CharterRhythm;
+        public string CharterRhythm6F   => _metadata.CharterRhythm6F;
         public string CharterProGuitar  => _metadata.CharterProGuitar;
         public string CharterVocals     => _metadata.CharterVocals;
         public string CharterVenue      => _metadata.CharterVenue;
@@ -182,6 +185,10 @@ namespace YARG.Core.Song
         public float? VocalScrollSpeedScalingFactor => _metadata.VocalScrollSpeedScalingFactor;
 
         public VocalGender VocalGender => _metadata.VocalGender;
+
+        // Venue hints
+        public string VenueHint  => _metadata.VenueHint;
+        public string VocalCharacterHint => _metadata.VocalCharacterHint;
 
         public int VocalsCount
         {
@@ -403,6 +410,8 @@ namespace YARG.Core.Song
             stream.Write(node.Playlist, Endianness.Little);
             stream.Write(node.Source, Endianness.Little);
 
+            stream.Write(_metadata.YargGuid);
+
             stream.Write(_metadata.IsMaster);
             stream.Write(_metadata.VideoLoop);
 
@@ -412,12 +421,17 @@ namespace YARG.Core.Song
             stream.Write(_metadata.SongLength, Endianness.Little);
             stream.Write(_metadata.SongOffset, Endianness.Little);
             stream.Write((int)_metadata.SongRating, Endianness.Little);
+            stream.Write(_metadata.CleanVocals);
 
             stream.Write(_metadata.Preview.Start, Endianness.Little);
             stream.Write(_metadata.Preview.End, Endianness.Little);
 
             stream.Write(_metadata.Video.Start, Endianness.Little);
             stream.Write(_metadata.Video.End, Endianness.Little);
+
+            stream.Write(_metadata.VenueHint);
+            stream.Write(_metadata.VocalCharacterHint);
+            stream.Write((int) _metadata.VocalGender, Endianness.Little);
 
             stream.Write(_metadata.CoveredBy);
             stream.Write(_metadata.LoadingPhrase);
@@ -439,6 +453,7 @@ namespace YARG.Core.Song
 
             stream.Write(_metadata.CreditAlbumArtDesignedBy);
             stream.Write(_metadata.CreditArrangedBy);
+            stream.Write(_metadata.CreditBackground);
             stream.Write(_metadata.CreditComposedBy);
             stream.Write(_metadata.CreditCourtesyOf);
             stream.Write(_metadata.CreditEngineeredBy);
@@ -453,14 +468,18 @@ namespace YARG.Core.Song
 
             stream.Write(_metadata.CharterAudio);
             stream.Write(_metadata.CharterBass);
+            stream.Write(_metadata.CharterBass6F);
             stream.Write(_metadata.CharterDrums);
             stream.Write(_metadata.CharterEliteDrums);
             stream.Write(_metadata.CharterGuitar);
+            stream.Write(_metadata.CharterGuitar6F);
             stream.Write(_metadata.CharterKeys);
             stream.Write(_metadata.CharterLowerDiff);
             stream.Write(_metadata.CharterProBass);
             stream.Write(_metadata.CharterProKeys);
             stream.Write(_metadata.CharterProGuitar);
+            stream.Write(_metadata.CharterRhythm);
+            stream.Write(_metadata.CharterRhythm6F);
             stream.Write(_metadata.CharterVenue);
             stream.Write(_metadata.CharterVocals);
 
@@ -491,6 +510,8 @@ namespace YARG.Core.Song
             _metadata.Playlist = strings.Playlists[stream.Read<int>(Endianness.Little)];
             _metadata.Source =   strings.Sources  [stream.Read<int>(Endianness.Little)];
 
+            _metadata.YargGuid = stream.ReadString();
+
             _metadata.IsMaster =  stream.ReadBoolean();
             _metadata.VideoLoop = stream.ReadBoolean();
 
@@ -500,12 +521,17 @@ namespace YARG.Core.Song
             _metadata.SongLength = stream.Read<long>(Endianness.Little);
             _metadata.SongOffset = stream.Read<long>(Endianness.Little);
             _metadata.SongRating = (SongRating)stream.Read<uint>(Endianness.Little);
+            _metadata.CleanVocals = stream.ReadBoolean();
 
             _metadata.Preview.Start = stream.Read<long>(Endianness.Little);
             _metadata.Preview.End   = stream.Read<long>(Endianness.Little);
 
             _metadata.Video.Start = stream.Read<long>(Endianness.Little);
             _metadata.Video.End = stream.Read<long>(Endianness.Little);
+
+            _metadata.VenueHint = stream.ReadString();
+            _metadata.VocalCharacterHint = stream.ReadString();
+            _metadata.VocalGender = (VocalGender) stream.Read<int>(Endianness.Little);
 
             _metadata.CoveredBy = stream.ReadString();
             _metadata.LoadingPhrase = stream.ReadString();
@@ -527,6 +553,7 @@ namespace YARG.Core.Song
 
             _metadata.CreditAlbumArtDesignedBy = stream.ReadString();
             _metadata.CreditArrangedBy = stream.ReadString();
+            _metadata.CreditBackground = stream.ReadString();
             _metadata.CreditComposedBy = stream.ReadString();
             _metadata.CreditCourtesyOf = stream.ReadString();
             _metadata.CreditEngineeredBy = stream.ReadString();
@@ -541,14 +568,18 @@ namespace YARG.Core.Song
 
             _metadata.CharterAudio = stream.ReadString();
             _metadata.CharterBass = stream.ReadString();
+            _metadata.CharterBass6F = stream.ReadString();
             _metadata.CharterDrums = stream.ReadString();
             _metadata.CharterEliteDrums = stream.ReadString();
             _metadata.CharterGuitar = stream.ReadString();
+            _metadata.CharterGuitar6F = stream.ReadString();
             _metadata.CharterKeys = stream.ReadString();
             _metadata.CharterLowerDiff = stream.ReadString();
             _metadata.CharterProBass = stream.ReadString();
             _metadata.CharterProKeys = stream.ReadString();
             _metadata.CharterProGuitar = stream.ReadString();
+            _metadata.CharterRhythm = stream.ReadString();
+            _metadata.CharterRhythm6F = stream.ReadString();
             _metadata.CharterVenue = stream.ReadString();
             _metadata.CharterVocals = stream.ReadString();
 
@@ -571,6 +602,15 @@ namespace YARG.Core.Song
             _charter = new SortString(_metadata.Charter);
             _source = new SortString(_metadata.Source);
             _playlist = new SortString(_metadata.Playlist);
+        }
+
+        public SongRating GetSongRating(bool censorshipEnabled)
+        {
+            if (_metadata.CleanVocals && censorshipEnabled && _metadata.SongRating is SongRating.Sensitive_Content or SongRating.Mature)
+            {
+                return SongRating.Supervision_Recommended;
+            }
+            return _metadata.SongRating;
         }
     }
 }

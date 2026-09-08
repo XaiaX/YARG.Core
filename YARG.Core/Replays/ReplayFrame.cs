@@ -77,21 +77,9 @@ namespace YARG.Core.Replays
                 Inputs[i] = new GameInput(time, action, value);
             }
 
-            if (version == 15)
-            {
-                // Read and discard legacy MicCount/MicPitches
-                int micCount = stream.Read<int>(Endianness.Little);
-                for (int i = 0; i < micCount; i++)
-                {
-                    int len = stream.Read<int>(Endianness.Little);
-                    for (int j = 0; j < len; j++)
-                    {
-                        stream.Read<float>(Endianness.Little); // discard
-                    }
-                }
-            }
-            // version >= 16: flat stream only — no trailing mic block.
-            // version < 15: never had a mic block.
+            // Note: versions 15-18 follow the upstream layout. The YOLO party-vocals line
+            // once wrote a trailing per-mic block at v15; those replays are not readable
+            // by this build. Party Vocals frames (>= 19) are self-describing via GameMode.
         }
 
         public void Serialize(BinaryWriter writer)

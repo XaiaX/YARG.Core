@@ -72,6 +72,8 @@ public sealed class ReplayDataEliteDrumsDownchartTests
         return new ReplayData(
             new Dictionary<Guid, ColorProfile>(),
             new Dictionary<Guid, CameraPreset>(),
+            new Dictionary<Guid, RockMeterPreset>(),
+            noFail: false,
             frames,
             Array.Empty<double>());
     }
@@ -243,7 +245,8 @@ public sealed class ReplayDataEliteDrumsDownchartTests
         writer.Write((byte) fiveLane.Length);
         foreach (var item in fiveLane) writer.Write((byte) item);
 
-        // v12 trailer: party vocals preference only, no downchart-target block.
-        writer.Write((byte) PartyVocalsChartPreference.Harmony);
+        // v12 trailer under the unified layout: RockMeterPreset (v9+) only.
+        // No chart preference or downchart target — those are v14+ fields.
+        writer.Write(Guid.Empty);
     }
 }

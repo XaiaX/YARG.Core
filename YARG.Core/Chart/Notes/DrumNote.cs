@@ -16,7 +16,7 @@ namespace YARG.Core.Chart
 
         private int _padMask;
 
-        // Base class lane fields reflect only hand lanes (regular trills and tremolos).
+        // Base class IsLane fields reflect only hand lanes (regular trills and tremolos)
         public bool IsKickLane => (DrumFlags & DrumNoteFlags.KickLane) != 0;
         public bool IsKickLaneStart => (DrumFlags & DrumNoteFlags.KickLaneStart) != 0;
         public bool IsKickLaneEnd => (DrumFlags & DrumNoteFlags.KickLaneEnd) != 0;
@@ -148,14 +148,6 @@ namespace YARG.Core.Chart
         Accent,
     }
 
-    public enum DrumStem
-    {
-        Kick,
-        Snare,
-        Toms,
-        Else,
-    }
-
     [Flags]
     public enum DrumNoteFlags
     {
@@ -165,5 +157,13 @@ namespace YARG.Core.Chart
         KickLane = 1 << 1,
         KickLaneStart = 1 << 2,
         KickLaneEnd = 1 << 3,
+    }
+
+    public enum DrumStem
+    {
+        Kick,
+        Snare,
+        Toms,
+        Else,
     }
 }
