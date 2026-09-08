@@ -11,6 +11,8 @@ namespace YARG.Core.IO
         private readonly        int   _length;
         private                 int   _position;
 
+        public int Remaining => _length - _position;
+
         public int Position
         {
             readonly get => _position;
