@@ -63,15 +63,17 @@ namespace YARG.Core.UnitTests.Parsing
 
             using (Assert.EnterMultipleScope())
             {
-                // Beginner derives from Easy; kick pads are preserved.
+                // Beginner derives from Easy, but every pad is unconditionally wildcard.
                 Assert.That(notes, Has.Count.EqualTo(3));
-                Assert.That(notes[0].Pad, Is.EqualTo((int) FourLaneDrumPad.Kick));
+                Assert.That(notes[0].Pad, Is.EqualTo((int) FourLaneDrumPad.Wildcard));
+                Assert.That(notes[1].Pad, Is.EqualTo((int) FourLaneDrumPad.Wildcard));
+                Assert.That(notes[2].Pad, Is.EqualTo((int) FourLaneDrumPad.Wildcard));
 
-                // Pure-kick kick-lane phrase: no valid tremolo pad, so no lane markers.
-                Assert.That(notes[0].IsLaneStart, Is.False);
+                // Kick-lane phrases are converted to wildcard lane markers.
+                Assert.That(notes[0].IsLaneStart, Is.True);
                 Assert.That(notes[1].IsKickLane, Is.False);
                 Assert.That(notes[1].IsLaneEnd, Is.False);
-                Assert.That(notes[2].IsLaneEnd, Is.False);
+                Assert.That(notes[2].IsLaneEnd, Is.True);
             }
 
             // With two hand notes in the phrase, the kick-lane boundaries ARE
@@ -90,14 +92,15 @@ namespace YARG.Core.UnitTests.Parsing
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(notes2, Has.Count.EqualTo(4));
-                // Verified against the upstream loader: even with two hand notes
-                // available, a kick-lane phrase on Beginner produces no lane markers
-                // (the wildcard-tremolo pass does not adopt the kicks). Kick lanes are
-                // a non-Beginner concept under the upstream semantics.
-                Assert.That(notes2[0].IsLaneStart, Is.False);
+                // Beginner pads remain wildcard even when the source phrase contains kicks.
+                Assert.That(notes2[0].Pad, Is.EqualTo((int) FourLaneDrumPad.Wildcard));
+                Assert.That(notes2[1].Pad, Is.EqualTo((int) FourLaneDrumPad.Wildcard));
+                Assert.That(notes2[2].Pad, Is.EqualTo((int) FourLaneDrumPad.Wildcard));
+                Assert.That(notes2[3].Pad, Is.EqualTo((int) FourLaneDrumPad.Wildcard));
+                Assert.That(notes2[0].IsLaneStart, Is.True);
                 Assert.That(notes2[1].IsLaneStart, Is.False);
                 Assert.That(notes2[2].IsLaneStart, Is.False);
-                Assert.That(notes2[3].IsLaneEnd, Is.False);
+                Assert.That(notes2[3].IsLaneEnd, Is.True);
                 Assert.That(notes2[2].IsKickLane, Is.False);
                 Assert.That(notes2[3].IsKickLane, Is.False);
             }
