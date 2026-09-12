@@ -91,7 +91,16 @@ namespace YARG.Core.Engine.Vocals.Engines
             foreach (var partPhrase in _allParts[partIndex].NotePhrases)
             {
                 var pn = partPhrase.PhraseParentNote;
+                // Lyric phrase parents can end before a sustaining child. Keep the phrase
+                // active through the child's actual end so bots retain their target across
+                // phrase boundaries.
                 if (CurrentTick >= pn.Tick && CurrentTick <= pn.TotalTickEnd)
+                {
+                    return pn;
+                }
+
+                if (CurrentTick >= pn.Tick && pn.ChildNotes.Any(note =>
+                    !note.IsPercussion && CurrentTick <= note.TotalTickEnd))
                 {
                     return pn;
                 }
@@ -603,14 +612,21 @@ namespace YARG.Core.Engine.Vocals.Engines
             foreach (var partPhrase in part.NotePhrases)
             {
                 var phraseNote = partPhrase.PhraseParentNote;
-                if (phraseNote.Tick >= masterEnd || phraseNote.TickEnd <= masterStart) continue;
+                // A lyric phrase's declared end can precede a child sustain's actual end.
+                if (phraseNote.Tick >= masterEnd) continue;
 
+                bool hasOverlap = false;
                 foreach (var noteInPhrase in phraseNote.ChildNotes)
                 {
-                    if (noteInPhrase.IsPercussion) continue;
-                    totalTime += phraseNote.GetTicksForNote(noteInPhrase);
+                    if (noteInPhrase.IsPercussion || noteInPhrase.Tick >= masterEnd
+                        || noteInPhrase.TotalTickEnd <= masterStart) continue;
+
+                    // Clamp to the master phrase window, not the source phrase window.
+                    totalTime += masterPhrase.GetTicksForNote(noteInPhrase);
+                    hasOverlap = true;
                 }
-                break;
+
+                if (hasOverlap) break;
             }
             return totalTime;
         }

@@ -736,6 +736,93 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     // ================================================================
+    // Carried-note meter regression
+    // ================================================================
+
+    [Test]
+    public void CarriedNote_CrossingMasterPhraseBoundary_CountsInNextPartMeter()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+
+        // The phrase parent ends at tick 960, but its child sustain reaches tick 1920.
+        // This is the representation used by charts for a note carried over a phrase edge.
+        var sourcePhrase = new VocalNote(NoteFlags.None, false, 0.0, 1.0, 0, 960);
+        var carriedNote = new VocalNote(60, 0, VocalNoteType.Lyric, 0.0, 2.0, 0, 1920);
+        sourcePhrase.AddChildNote(carriedNote);
+        parts[0].NotePhrases.Add(new VocalsPhrase(
+            0.0, 1.0, 0, 960, sourcePhrase,
+            new List<LyricEvent> { new(LyricSymbolFlags.None, "Carry", 0.0, 0) }));
+
+        // Master phrase 2 has no HARM0 child of its own; only the carried HARM0 note
+        // should provide its denominator. HARM1 has a normal note in the same phrase.
+        var emptyPhrase = new VocalNote(NoteFlags.None, false, 0.0, 1.0, 960, 960);
+        parts[0].NotePhrases.Add(new VocalsPhrase(
+            0.0, 1.0, 960, 960, emptyPhrase, new List<LyricEvent>()));
+        AddPhrase(parts[1], 960, 960, 64);
+
+        var engine = CreateCoordinator(parts, 2);
+        var grades = new List<PhraseGrade>();
+        var meters = new List<IReadOnlyList<PartyPartResult>>();
+        engine.OnPartyVocalsPhrase += (grade, partResults, _) =>
+        {
+            grades.Add(grade);
+            meters.Add(partResults);
+        };
+
+        engine.Update(0.05);
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { 64f } }, 0.05, 2.1);
+        engine.Update(2.2);
+
+        Assert.AreEqual(2, grades.Count, "Both master phrases should be graded");
+        Assert.AreEqual(PhraseGrade.DoubleAwesome, grades[1],
+            "The carried HARM0 portion and HARM1 must both remain targetable in phrase 2");
+        Assert.That(meters[1].Count, Is.EqualTo(2), "Phrase 2 should expose both active parts");
+        Assert.That(meters[1][0].Meter, Is.GreaterThanOrEqualTo(AwesomeThreshold));
+        Assert.That(meters[1][1].Meter, Is.GreaterThanOrEqualTo(AwesomeThreshold));
+    }
+
+    [Test]
+    public void Bot_CarriedNote_CrossingMasterPhraseBoundary_RemainsTargetable()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+
+        // The lyric phrase parent ends at tick 960, but its child sustain reaches tick 1920.
+        // This exercises the bot target lookup as well as the coordinator's meter denominator.
+        var sourcePhrase = new VocalNote(NoteFlags.None, false, 0.0, 1.0, 0, 960);
+        var carriedNote = new VocalNote(60, 0, VocalNoteType.Lyric, 0.0, 2.0, 0, 1920);
+        sourcePhrase.AddChildNote(carriedNote);
+        parts[0].NotePhrases.Add(new VocalsPhrase(
+            0.0, 1.0, 0, 960, sourcePhrase,
+            new List<LyricEvent> { new(LyricSymbolFlags.None, "Carry", 0.0, 0) }));
+
+        var emptyPhrase = new VocalNote(NoteFlags.None, false, 0.0, 1.0, 960, 960);
+        parts[0].NotePhrases.Add(new VocalsPhrase(
+            0.0, 1.0, 960, 960, emptyPhrase, new List<LyricEvent>()));
+        AddPhrase(parts[1], 960, 960, 64);
+
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var engine = new PartyVocalsCoordinatorEngine(
+            primaryChart, parts, CreateSyncTrack(), EngineParams, isBot: true, micCount: 2);
+        var grades = new List<PhraseGrade>();
+        var meters = new List<IReadOnlyList<PartyPartResult>>();
+        engine.OnPartyVocalsPhrase += (grade, partResults, _) =>
+        {
+            grades.Add(grade);
+            meters.Add(partResults);
+        };
+
+        // Do not feed inputs: each sub-engine must target its assigned note through UpdateBot.
+        for (int f = 0; f < (int)(2.2 * ApproximateVocalFps); f++)
+            engine.Update((f + 1) / ApproximateVocalFps);
+
+        Assert.AreEqual(2, grades.Count, "Both master phrases should be graded");
+        Assert.AreEqual(PhraseGrade.DoubleAwesome, grades[1],
+            "The bot must keep targeting the carried HARM0 note while HARM1 sings phrase 2");
+        Assert.That(meters[1][0].Meter, Is.GreaterThanOrEqualTo(AwesomeThreshold));
+        Assert.That(meters[1][1].Meter, Is.GreaterThanOrEqualTo(AwesomeThreshold));
+    }
+
+    // ================================================================
     // Per-phrase state reset regression (issue: coordinator's ResetPhraseState
     // was not clearing _micPartHits, leaving stale accumulation across phrase
     // boundaries. Fixed by clearing all per-phrase arrays in ResetPhraseState.)

@@ -706,14 +706,23 @@ namespace YARG.Core.Engine.Vocals.Engines
             foreach (var partPhrase in part.NotePhrases)
             {
                 var phraseNote = partPhrase.PhraseParentNote;
-                if (phraseNote.Tick >= masterEnd || phraseNote.TickEnd <= masterStart) continue;
+                // A lyric phrase's declared TickEnd does not include a child sustain that
+                // carries beyond it. Find overlap from each child instead of the parent end.
+                if (phraseNote.Tick >= masterEnd) continue;
 
+                bool hasOverlap = false;
                 foreach (var noteInPhrase in phraseNote.ChildNotes)
                 {
-                    if (noteInPhrase.IsPercussion) continue;
-                    totalTime += phraseNote.GetTicksForNote(noteInPhrase);
+                    if (noteInPhrase.IsPercussion || noteInPhrase.Tick >= masterEnd
+                        || noteInPhrase.TotalTickEnd <= masterStart) continue;
+
+                    // Clamp against the master phrase, not the source phrase. This counts
+                    // only the overlap and avoids dropping a carried note at the boundary.
+                    totalTime += masterPhrase.GetTicksForNote(noteInPhrase);
+                    hasOverlap = true;
                 }
-                break;
+
+                if (hasOverlap) break;
             }
             return totalTime;
         }
