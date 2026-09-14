@@ -62,6 +62,14 @@ public sealed class PartyVocalsCoordinatorEngineTests
         return sync;
     }
 
+    private static SyncTrack CreateMeterSyncTrack(uint numerator, uint denominator)
+    {
+        var sync = new SyncTrack(480);
+        sync.Tempos.Add(new TempoChange(120.0, 0.0, 0));
+        sync.TimeSignatures.Add(new TimeSignatureChange(numerator, denominator, 0.0, 0, 0, 0, 0, 0));
+        return sync;
+    }
+
     private static void AddPhrase(VocalsPart part, uint tickOffset, uint tickLength, int midiPitch)
     {
         var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, tickLength);
@@ -108,9 +116,14 @@ public sealed class PartyVocalsCoordinatorEngineTests
     private static PartyVocalsCoordinatorEngine CreateCoordinator(
         List<VocalsPart> parts, int micCount, VocalsEngineParameters engineParams)
     {
+        return CreateCoordinator(parts, micCount, engineParams, CreateSyncTrack());
+    }
+
+    private static PartyVocalsCoordinatorEngine CreateCoordinator(
+        List<VocalsPart> parts, int micCount, VocalsEngineParameters engineParams, SyncTrack sync)
+    {
         var primaryChart = parts[0].CloneAsInstrumentDifficulty();
-        return new PartyVocalsCoordinatorEngine(
-            primaryChart, parts, CreateSyncTrack(), engineParams, false, micCount);
+        return new PartyVocalsCoordinatorEngine(primaryChart, parts, sync, engineParams, false, micCount);
     }
 
     private static (PartyVocalsCoordinatorEngine engine, List<PhraseGrade> grades) RunCoordinatorScenario(
@@ -1114,6 +1127,603 @@ public sealed class PartyVocalsCoordinatorEngineTests
         Assert.IsFalse(engine.PartInNextPhrase(2), "HARM2 is only in the current phrase");
         Assert.IsFalse(engine.PartInNextPhrase(-1), "Negative index → false");
         Assert.IsFalse(engine.PartInNextPhrase(99), "Out-of-range index → false");
+    }
+
+    [Test]
+    public void NextPhraseIndexWithPart_SkipsEmptyMasterPhrases()
+    {
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true)
+        };
+        AddPhrase(parts[0], 0, 960, 60);     // master phrase 0
+        AddPhrase(parts[0], 1920, 960, 60);  // master phrase 1
+        AddPhrase(parts[0], 3840, 960, 60);  // master phrase 2
+        AddPhrase(parts[1], 3840, 960, 64);  // HARM1 returns only in phrase 2
+        AddPhrase(parts[2], 0, 960, 67);     // HARM2 has no later content
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.1);
+
+        Assert.AreEqual(1, engine.NextPhraseIndexWithPart(0));
+        Assert.AreEqual(2, engine.NextPhraseIndexWithPart(1),
+            "HARM1 should skip the immediate empty master phrase");
+        Assert.AreEqual(-1, engine.NextPhraseIndexWithPart(2));
+        Assert.AreEqual(-1, engine.NextPhraseIndexWithPart(-1));
+        Assert.AreEqual(-1, engine.NextPhraseIndexWithPart(99));
+    }
+
+    [Test]
+    public void CountInProgress_TracksNextContentPhraseStart()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);     // master phrase 0, starts at 0s
+        AddPhrase(parts[0], 1920, 960, 60);  // master phrase 1, starts at 2s
+        AddPhrase(parts[0], 3840, 960, 60);  // master phrase 2, starts at 4s
+        AddPhrase(parts[1], 3840, 960, 64);  // HARM1 returns at 4s
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.0);
+        var atSongStart = engine.GetCountInState(1);
+        Assert.That(atSongStart.IsPending, Is.False,
+            "A lane whose first content is in a later canonical phrase remains at rest at song start");
+        engine.Update(2.5);
+
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.TargetTick, Is.EqualTo(3840), "Target is the actual first future child note");
+        Assert.That(state.PulseCount, Is.EqualTo(state.PulseTicks.Count), "State exposes the actual scheduled denominator pulses");
+        Assert.That(state.StartTick, Is.EqualTo(1920),
+            "The later destination count-in begins at the immediately preceding inactive phrase");
+        Assert.That(state.StartTick, Is.GreaterThanOrEqualTo(0), "Count-in start is anchored to the canonical schedule");
+        Assert.That(state.FillAmount, Is.InRange(0.0, 1.0));
+        engine.Update(4.0);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False, "At onset the countdown is no longer pending");
+    }
+
+    private static (PartyVocalsCoordinatorEngine Engine, uint TargetTick, SyncTrack Sync) CreateAlignedDenominatorScenario(
+        uint numerator, uint denominator, int targetMeasure)
+    {
+        uint measureTicks = denominator == 8 ? numerator * 480u * 4u / 8u : numerator * 480u * 4u / denominator;
+        uint priorStart = measureTicks;
+        uint activeStart = measureTicks * 2;
+        uint target = activeStart + (uint)(targetMeasure - 1) * measureTicks + measureTicks / 8;
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, priorStart, 60);
+        AddPhrase(parts[0], priorStart, measureTicks, 60);
+        parts[0].NotePhrases[1].PhraseParentNote.ChildNotes.Clear();
+        AddPhrase(parts[0], activeStart, measureTicks * 3, 60);
+        AddPhrase(parts[1], 0, priorStart, 64);
+        AddPhrase(parts[1], target, 480, 64);
+        var sync = CreateMeterSyncTrack(numerator, denominator);
+        return (CreateCoordinator(parts, 2, EngineParams, sync), target, sync);
+    }
+
+    [TestCase(6u, 8u, 1, 6)]
+    [TestCase(6u, 8u, 2, 11)]
+    [TestCase(6u, 8u, 3, 17)]
+    [TestCase(7u, 8u, 1, 7)]
+    [TestCase(7u, 8u, 2, 13)]
+    [TestCase(7u, 8u, 3, 20)]
+    public void CountInState_DenominatorScheduleMatrixExact(uint numerator, uint denominator,
+        int targetMeasure, int expectedPulseCount)
+    {
+        var scenario = CreateAlignedDenominatorScenario(numerator, denominator, targetMeasure);
+        scenario.Engine.Update((scenario.TargetTick - 1) / 960.0);
+        var state = scenario.Engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.PulseCount, Is.EqualTo(expectedPulseCount));
+        Assert.That(state.PulseTicks.Zip(state.PulseTicks.Skip(1), (a, b) => b > a).All(v => v), Is.True);
+        double targetMeasurePosition = scenario.Sync.GetMeasurePosition(scenario.TargetTick);
+        long targetMeasureStart = scenario.TargetTick;
+        while (targetMeasureStart > 0 && scenario.Sync.GetMeasurePosition((uint)targetMeasureStart - 1) >= Math.Floor(targetMeasurePosition))
+            targetMeasureStart--;
+        Assert.That(state.PulseTicks.All(tick => tick < targetMeasureStart), Is.True);
+        if (targetMeasure > 1)
+            Assert.That(state.DrainEndTick, Is.LessThan(state.TargetTick));
+    }
+
+    [Test]
+    public void CountInState_MixedSignatureScheduleUsesBothDenominatorGrids()
+    {
+        var sync = CreateMeterSyncTrack(6, 8);
+        sync.TimeSignatures.Add(new TimeSignatureChange(7, 8, 8.0, 3840, 2, 2, 12, 12));
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 1920, 60);
+        AddPhrase(parts[0], 1920, 1920, 60);
+        AddPhrase(parts[0], 3840, 3840, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 5280, 480, 64);
+        var engine = CreateCoordinator(parts, 2, EngineParams, sync);
+        engine.Update(5.0);
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.PulseCount, Is.GreaterThan(0));
+        Assert.That(state.PulseTicks.Zip(state.PulseTicks.Skip(1), (a, b) => b > a).All(v => v), Is.True);
+        Assert.That(state.PulseTicks.Any(tick => sync.GetDenominatorBeatPosition((uint)tick + 1) - sync.GetDenominatorBeatPosition((uint)tick) > 1.0), Is.False);
+    }
+
+    [Test]
+    public void CountInState_DenominatorScheduleUsesActualAvailablePulses()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 1920, 60);
+        AddPhrase(parts[0], 1920, 1920, 60);
+        AddPhrase(parts[0], 3840, 1920, 60);
+        AddPhrase(parts[0], 5760, 480, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 5760, 480, 64);
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(4.5);
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.PulseCount, Is.GreaterThan(0));
+        Assert.That(state.PulseTicks, Is.Ordered);
+        Assert.That(state.FillAmount, Is.InRange(0.0, 1.0));
+        Assert.That(state.DrainEndTick, Is.GreaterThanOrEqualTo(state.StartTick));
+    }
+
+    [Test]
+    public void CountInState_DenominatorSixEightHasGlobalPulseSchedule()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 1920, 60);
+        AddPhrase(parts[0], 1920, 1920, 60);
+        AddPhrase(parts[0], 3840, 1920, 60);
+        AddPhrase(parts[0], 5760, 480, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 5760, 480, 64);
+        var engine = CreateCoordinator(parts, 2, EngineParams, CreateMeterSyncTrack(6, 8));
+        engine.Update(5.5);
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.PulseCount, Is.GreaterThanOrEqualTo(6));
+        Assert.That(state.PulseTicks.Zip(state.PulseTicks.Skip(1), (a, b) => b > a).All(v => v), Is.True);
+    }
+
+    [Test]
+    public void CountInState_DenominatorSevenEightHasGlobalPulseSchedule()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 2240, 60);
+        AddPhrase(parts[0], 2240, 2240, 60);
+        AddPhrase(parts[0], 4480, 2240, 60);
+        AddPhrase(parts[0], 6720, 480, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 6720, 480, 64);
+        var engine = CreateCoordinator(parts, 2, EngineParams, CreateMeterSyncTrack(7, 8));
+        engine.Update(6.5);
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.PulseCount, Is.GreaterThanOrEqualTo(7));
+        Assert.That(state.PulseTicks.Zip(state.PulseTicks.Skip(1), (a, b) => b > a).All(v => v), Is.True);
+    }
+
+    [Test]
+    public void CountInState_AllowsOnlyInactiveToActiveTransitionAndStopsAtOnset()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[0], 960, 960, 60);
+        AddPhrase(parts[0], 1920, 960, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 2400, 480, 64);
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(2.0); // tick 1920: lane 1 is still in its inactive preceding phrase
+
+        Assert.That(engine.PartInCurrentMasterPhraseWithContent(1), Is.False);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.True,
+            "An inactive → active lane transition may expose count-in before its first onset");
+
+        engine.Update(2.5); // tick 2400: lane 1's actual onset
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.True);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "Count-in ends at the first actual onset");
+    }
+
+    [Test]
+    public void CountInState_ContinuesPastCanonicalTransitionUntilLaneOnset()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[0], 960, 960, 60);
+        // Percussion-only content in canonical phrase zero: it must not count as lane
+        // activity, so the lane is still eligible for a phrase-one count-in.
+        AddPercussionPhrase(parts[1], 0, 480);
+        AddPhrase(parts[1], 960, 960, 64);
+        var delayedPhrase = parts[1].NotePhrases[1].PhraseParentNote;
+        delayedPhrase.ChildNotes.Clear();
+        delayedPhrase.AddChildNote(new VocalNote(64, 0, VocalNoteType.Lyric, 1.5, 0.125, 1440, 120));
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(1.25); // canonical phrase 1 has begun from HARM1, HARM2 has not yet started
+        var state = engine.GetCountInState(1);
+
+        Assert.That(engine.PartInCurrentMasterPhraseWithContent(1), Is.True);
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.False);
+        Assert.That(state.IsPending, Is.True,
+            "The lane-specific count-in continues through a canonical transition until its actual onset");
+        Assert.That(state.TargetTick, Is.EqualTo(1440));
+
+        engine.Update(1.5);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "The count-in ends exactly at the delayed lane onset");
+    }
+
+    [Test]
+    public void CountInState_SongStartPendsFromTickZeroUntilFirstLaneOnset()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        var phrase = parts[1].NotePhrases[0].PhraseParentNote;
+        phrase.ChildNotes.Clear();
+        phrase.AddChildNote(new VocalNote(64, 0, VocalNoteType.Lyric, 0.25, 0.125, 240, 120));
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.0); // tick 0, before the lane's first actual onset
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True,
+            "Song-start content in canonical phrase zero pends from tick zero");
+        Assert.That(state.TargetTick, Is.EqualTo(240));
+        Assert.That(state.StartTick, Is.EqualTo(0));
+        Assert.That(state.FillAmount, Is.EqualTo(1.0));
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.False);
+
+        engine.Update(240 / 960.0); // exactly the first actual lane onset
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.True);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "The song-start count-in ends at the first actual lane onset");
+    }
+
+    [Test]
+    public void CountInState_ShortInactivePhraseStillGetsCountIn()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 3840, 60);   // canonical phrase 0 (lane active)
+        AddPhrase(parts[0], 3840, 960, 60); // canonical phrase 1, short and lane-inactive
+        AddPhrase(parts[0], 4800, 1920, 60);// canonical phrase 2 (lane active)
+        AddPhrase(parts[1], 0, 240, 64);    // lane run in phrase 0
+        AddPhrase(parts[1], 5280, 480, 64); // lane onset late in phrase 2
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.05); // tick 48: lane is actively singing phrase 0
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "No count-in while the lane's own phrase-zero run is the current content");
+
+        engine.Update(4000 / 960.0); // tick 4000: inside the short inactive phrase
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True,
+            "A short lane-inactive canonical phrase still grants a count-in");
+        Assert.That(state.TargetTick, Is.EqualTo(5280));
+
+        engine.Update(5000 / 960.0); // tick 5000: destination phrase, before the onset
+        Assert.That(engine.GetCountInState(1).IsPending, Is.True,
+            "The count-in holds through the inactive → active canonical transition");
+
+        engine.Update(5280 / 960.0); // first actual onset in phrase 2
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.True);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False);
+    }
+
+    [Test]
+    public void CountInState_ActiveToActiveSuppressedIncludingLaterGap()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[0], 960, 960, 60);
+        AddPhrase(parts[0], 1920, 960, 60);
+        AddPhrase(parts[1], 0, 240, 64);    // lane active in canonical phrase 0
+        AddPhrase(parts[1], 960, 240, 64);  // lane active in canonical phrase 1 (consecutive)
+        AddPhrase(parts[1], 1920, 960, 64); // two separated runs in canonical phrase 2
+        var destination = parts[1].NotePhrases[2].PhraseParentNote;
+        destination.ChildNotes.Clear();
+        destination.AddChildNote(new VocalNote(64, 0, VocalNoteType.Lyric, 2.0, 0.125, 1920, 120));
+        destination.AddChildNote(new VocalNote(64, 0, VocalNoteType.Lyric, 2.5, 0.125, 2400, 120));
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(1000 / 960.0); // phrase 1, lane actively singing
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.True);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "Lane activity in consecutive canonical phrases suppresses count-in");
+
+        engine.Update(1500 / 960.0); // gap inside phrase 1 after its run ended
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.False);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "A later gap after consecutive activity cannot re-arm count-in");
+
+        engine.Update(2200 / 960.0); // gap between the two runs in phrase 2
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "No re-arm in the destination phrase's later gap either");
+    }
+
+    [Test]
+    public void CountInState_MisalignedLanePhraseMarkerUsesCanonicalGrid()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[0], 960, 960, 60);
+        AddPhrase(parts[0], 1920, 960, 60);
+        // The lane's own phrase marker spans canonical phrases 1-2 (misaligned), and its
+        // only actual child onset is at 2400 inside canonical phrase 2. The lane has no
+        // content of its own in canonical phrase 1, so phrase 2 is an eligible destination.
+        AddPhrase(parts[1], 960, 1920, 64);
+        var marker = parts[1].NotePhrases[0].PhraseParentNote;
+        marker.ChildNotes.Clear();
+        marker.AddChildNote(new VocalNote(64, 0, VocalNoteType.Lyric, 2.5, 0.125, 2400, 120));
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(1.5); // tick 1440, inside the lane's misaligned marker, before onset
+        var state = engine.GetCountInState(1);
+        Assert.That(engine.PartInCurrentMasterPhraseWithContent(1), Is.False,
+            "The misaligned marker alone does not create canonical phrase content");
+        Assert.That(state.IsPending, Is.True,
+            "Actual children are evaluated against the canonical Notes grid, not lane markers");
+        Assert.That(state.TargetTick, Is.EqualTo(2400));
+
+        engine.Update(2400 / 960.0);
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.True);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False);
+    }
+
+    [Test]
+    public void CountInState_DoesNotRearmForSecondRunInSameCanonicalPhrase()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[0], 960, 960, 60);
+        AddPhrase(parts[0], 1920, 960, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 1920, 960, 64);
+        var destinationPhrase = parts[1].NotePhrases[1].PhraseParentNote;
+        destinationPhrase.ChildNotes.Clear();
+        destinationPhrase.AddChildNote(new VocalNote(64, 0, VocalNoteType.Lyric, 2.0, 0.125, 1920, 120));
+        destinationPhrase.AddChildNote(new VocalNote(64, 0, VocalNoteType.Lyric, 2.5, 0.125, 2400, 120));
+
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(2.05); // first run is active
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.True);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "The second run cannot arm count-in while the phrase's first run is active");
+
+        engine.Update(2.25); // silent gap before the second run
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.False);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "The second run cannot arm count-in in a gap after the phrase's first onset");
+    }
+
+    [Test]
+    public void CountInState_SuppressesActiveMasterPhraseAndReturnsAfterInactivePhrase()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[0], 960, 960, 60);
+        AddPhrase(parts[0], 1920, 960, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 1920, 480, 64);
+        var consecutive = CreateCoordinator(parts, 2);
+        consecutive.Update(1.5);
+        Assert.That(consecutive.PartInCurrentMasterPhraseWithContent(0), Is.True,
+            "Consecutive active canonical phrases keep the lane active throughout the boundary");
+        Assert.That(consecutive.GetCountInState(0).IsPending, Is.False,
+            "Consecutive active canonical phrases suppress count-in");
+        Assert.That(consecutive.GetCountInState(1).IsPending, Is.True,
+            "A lane with an inactive preceding phrase retains its lane-specific count-in");
+
+        parts[0].NotePhrases[1].PhraseParentNote.ChildNotes.Clear();
+        var afterInactive = CreateCoordinator(parts, 2);
+        afterInactive.Update(1.5);
+        Assert.That(afterInactive.GetCountInState(1).IsPending, Is.True,
+            "A count-in returns only after a whole inactive master phrase");
+    }
+
+    [Test]
+    public void CountInState_ReturnCountdownHasExplicitFillAndZeroHoldPhases()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[0], 960, 960, 60);
+        parts[0].NotePhrases[1].PhraseParentNote.ChildNotes.Clear();
+        AddPhrase(parts[0], 1920, 960, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 2400, 480, 64);
+        var engine = CreateCoordinator(parts, 2);
+        // The initial run owns the meter at song start; sample the inactive canonical
+        // phrase gap before the return countdown so the active/count-in states remain exclusive.
+        engine.Update(2.0);
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.FillAmount, Is.InRange(0.0, 1.0));
+        Assert.That(state.PulseStrength, Is.GreaterThanOrEqualTo(0.0));
+        Assert.That(state.PulseCount, Is.GreaterThan(0));
+        long drainEndTick = state.DrainEndTick;
+        engine.Update((drainEndTick - 1) / 960.0);
+        state = engine.GetCountInState(1);
+        Assert.That(state.FillAmount, Is.InRange(0.0, 1.0));
+        engine.Update(state.DrainEndTick / 960.0);
+        state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.FillAmount, Is.EqualTo(0.0));
+        Assert.That(state.PulseStrength, Is.EqualTo(0.0));
+        engine.Reset();
+        engine.Update((state.DrainEndTick + 1) / 960.0);
+        state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.FillAmount, Is.EqualTo(0.0));
+        engine.Update(3.0);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False);
+    }
+
+    [Test]
+    public void CountInState_PulseStrengthUsesScheduledCellsNotParity()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 480, 60);
+        AddPhrase(parts[0], 960, 480, 60);
+        parts[0].NotePhrases[1].PhraseParentNote.ChildNotes.Clear(); // inactive master phrase
+        AddPhrase(parts[0], 2400, 480, 60);
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 2400, 480, 64);
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(2.0); // tick 1920: subdivision index 8
+        Assert.That(engine.GetCountInState(1).PulseStrength, Is.GreaterThanOrEqualTo(0.0));
+        engine.Update(2.25); // tick 2160
+        Assert.That(engine.GetCountInState(1).PulseStrength, Is.GreaterThanOrEqualTo(0.0),
+            "Pulse strength is continuous and deterministic, not parity based");
+    }
+
+    [Test]
+    public void CountInState_ExcludesPercussionIncludesTalkieAndMergesContinuousNotes()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 480, 60);
+        AddPercussionPhrase(parts[1], 0, 480);
+        AddTalkiePhrase(parts[1], 960, 480);
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.0);
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.False,
+            "Content outside the canonical phrase grid is not eligible for count-in");
+        Assert.That(state.TargetTick, Is.EqualTo(-1), "Percussion is not a target");
+
+        var continuousParts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(continuousParts[0], 0, 480, 60);
+        AddPhrase(continuousParts[1], 0, 1920, 64);
+        AddPhrase(continuousParts[1], 480, 480, 64);
+        var continuous = CreateCoordinator(continuousParts, 2);
+        continuous.Update(1.0);
+        Assert.That(continuous.GetCountInState(1).IsPending, Is.False,
+            "Overlapping/adjacent child notes are one active run, not a re-entry");
+    }
+
+    [Test]
+    public void CountInState_InvalidAndSeekAreStateless()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 480, 60);
+        AddPhrase(parts[1], 4800, 480, 64);
+        var engine = CreateCoordinator(parts, 2);
+        Assert.That(engine.GetCountInState(-1).IsPending, Is.False);
+        Assert.That(engine.GetCountInState(99).IsPending, Is.False);
+        engine.Update(2.0);
+        var later = engine.GetCountInState(1);
+        engine.Reset();
+        engine.Update(0.1);
+        var earlier = engine.GetCountInState(1);
+        Assert.That(earlier.IsPending, Is.False,
+            "A seek before the bounded warning window remains at rest");
+        engine.Update(4.0);
+        earlier = engine.GetCountInState(1);
+        Assert.That(earlier.TargetTick, Is.EqualTo(later.TargetTick));
+        Assert.That(earlier.FillAmount, Is.GreaterThanOrEqualTo(0.0));
+        Assert.That(earlier.PulseStrength, Is.GreaterThanOrEqualTo(0.0));
+    }
+
+    [Test]
+    public void CountInState_MidMeasurePriorPhraseCannotStartInPhraseTwoBack()
+    {
+        // Clint Eastwood-shaped canonical grid: the lane's destination begins at 18840,
+        // its actual onset is 18870, and the immediately prior inactive phrase is
+        // 17025–18825 (ending near the end of the 17280–19200 measure).
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 13080, 1980, 60);
+        AddPhrase(parts[0], 15075, 1935, 60);
+        AddPhrase(parts[0], 17025, 1800, 60);
+        AddPhrase(parts[0], 18840, 1920, 60);
+        AddPhrase(parts[1], 18870, 480, 64);
+        var engine = CreateCoordinator(parts, 2);
+
+        engine.Update(15360 / 960.0);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "A mid-measure prior phrase end must not begin the count-in in phrase two back");
+
+        engine.Update(17025 / 960.0);
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.StartTick, Is.EqualTo(17025),
+            "The count-in is clamped to the start of the immediately preceding inactive phrase");
+        Assert.That(state.TargetTick, Is.EqualTo(18870));
+        Assert.That(state.StartTick, Is.GreaterThanOrEqualTo(17025));
+    }
+
+    [Test]
+    public void CountInState_LateFirstExactMeasureBoundaryUsesOnlyFinalMeasure()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 1920, 60);
+        AddPhrase(parts[0], 1920, 1920, 60);
+        AddPhrase(parts[0], 3840, 1920, 60);
+        AddPhrase(parts[1], 3840, 480, 64);
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.0);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False);
+
+        engine.Update(3.5);
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.True);
+        Assert.That(state.TargetTick, Is.EqualTo(3840));
+        Assert.That(state.StartTick, Is.EqualTo(1920));
+        Assert.That(state.DrainEndTick, Is.EqualTo(3840));
+        Assert.That(state.PulseTicks, Is.EqualTo(new long[] { 1920, 2400, 2880, 3360 }));
+        Assert.That(state.PulseTicks.All(tick => tick >= state.StartTick && tick < state.TargetTick), Is.True);
+
+        engine.Update(4.0);
+        state = engine.GetCountInState(1);
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.True);
+        Assert.That(state.IsPending, Is.False);
+        engine.Update(4.1);
+        Assert.That(engine.PartInCurrentVocalRun(1), Is.True);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False);
+    }
+
+    [Test]
+    public void CountInState_UnmappedLateFirstEntryFailsClosed()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60);
+        AddPhrase(parts[1], 4800, 480, 64);
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(0.0);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False);
+        engine.Update(4.0);
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.False);
+        Assert.That(state.PulseCount, Is.EqualTo(0));
+        Assert.That(state.PulseTicks, Is.Empty);
+    }
+
+    [Test]
+    public void CountInState_FractionalGapUsesExactTicksAndAbsolutePulseParity()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 480, 60);
+        AddPhrase(parts[1], 0, 2000, 64); // child run ends at tick 1000
+        AddPhrase(parts[1], 2500, 480, 64); // gap is 1500 ticks (3.125 beats)
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(2.0); // absolute tick 1920, a global quarter boundary
+        var state = engine.GetCountInState(1);
+        Assert.That(state.IsPending, Is.False, "Unmapped return phrases fail closed");
+        Assert.That(state.PulseCount, Is.EqualTo(0));
+        Assert.That(state.PulseStrength, Is.EqualTo(0.0));
+    }
+
+    [Test]
+    public void CountInState_UsesTotalTickEndForSlideContinuation()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 480, 60);
+        // The phrase root is short, but its child sustains through tick 2400.
+        AddPhrase(parts[1], 0, 480, 64);
+        var phrase = parts[1].NotePhrases[0];
+        var extending = new VocalNote(64, 0, VocalNoteType.Lyric, 0.0, 1.0, 0, 2400);
+        phrase.PhraseParentNote.ChildNotes.Clear();
+        phrase.PhraseParentNote.AddChildNote(extending);
+        AddPhrase(parts[1], 2400, 480, 64);
+        var engine = CreateCoordinator(parts, 2);
+        engine.Update(1.0);
+        Assert.That(engine.GetCountInState(1).IsPending, Is.False,
+            "A child extending TotalTickEnd keeps the lane in the same active run");
     }
 
     [Test]
