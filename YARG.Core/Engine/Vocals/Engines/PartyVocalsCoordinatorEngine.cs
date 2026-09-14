@@ -27,13 +27,76 @@ namespace YARG.Core.Engine.Vocals.Engines
         }
     }
 
+    /// <summary>Stateless presentation data for a HARM lane's upcoming vocal run.</summary>
+    public readonly struct PartyVocalsCountInState
+    {
+        public bool IsPending { get; }
+        public long TargetTick { get; }
+        public long StartTick { get; }
+        public long WindowTicks { get; }
+        public long DrainEndTick { get; }
+        public int WindowBeats { get; }
+        public double Progress { get; }
+        public double FillAmount { get; }
+        public double PulseStrength { get; }
+        public int PulseCount { get; }
+        public IReadOnlyList<long> PulseTicks { get; }
+        public bool PulseStateB => PulseStrength > 0.0;
+
+        public PartyVocalsCountInState(bool pending, long target, long start, long window,
+            int beats, double progress, double pulseStrength, IReadOnlyList<long> pulseTicks = null)
+        {
+            IsPending = pending; TargetTick = target; StartTick = start; WindowTicks = window;
+            DrainEndTick = start + window; WindowBeats = beats; Progress = progress; FillAmount = progress; PulseStrength = pulseStrength;
+            PulseTicks = pulseTicks ?? Array.Empty<long>(); PulseCount = PulseTicks.Count;
+        }
+
+        public static PartyVocalsCountInState Empty => new(false, -1, 0, 0, 0, 1, 0.0);
+    }
+
     public sealed class PartyVocalsCoordinatorEngine : VocalsEngine
     {
+        /// <summary>
+        /// One immutable count-in descriptor per lane × canonical destination phrase. The
+        /// canonical <see cref="Notes"/> grid controls eligibility and the warning window;
+        /// the target is the lane's first actual non-percussion child onset inside the
+        /// destination phrase, so lanes without their own aligned phrase markers (HARM3)
+        /// are still represented whenever their children overlap a canonical phrase.
+        /// </summary>
+        private readonly struct CountInTimelineEntry
+        {
+            public readonly long TargetTick;
+            public readonly long StartTick;
+            public readonly long DrainEndTick;
+            public readonly long WindowTicks;
+            public readonly int WindowBeats;
+            public readonly long[] PulseTicks;
+
+            public CountInTimelineEntry(long targetTick, long startTick, long drainEndTick,
+                long windowTicks, int windowBeats, long[] pulseTicks)
+            {
+                TargetTick = targetTick;
+                StartTick = startTick;
+                DrainEndTick = drainEndTick;
+                WindowTicks = windowTicks;
+                WindowBeats = windowBeats;
+                PulseTicks = pulseTicks;
+            }
+        }
+
         // Multi-mic state owned directly by the coordinator (was hoisted into
         // YargFreeVocalsEngine in Phase 3 so the subclass could see them).
         private readonly int _micCount;
         private readonly VocalsPart[] _allParts;
         private readonly bool[] _partHasContent;
+        private readonly int[][] _partPhraseIndices;
+        private readonly bool[,] _partPhraseHasVocalContent;
+        private readonly CountInTimelineEntry[][] _countInTimelines;
+        // Merged contiguous non-percussion child runs per lane. Kept separately from the
+        // count-in descriptors because PartInCurrentVocalRun is a run-presence query, not
+        // an eligibility query; it must never drive count-in eligibility.
+        private readonly (long Start, long End)[][] _partVocalRuns;
+        private readonly long[] _denominatorPulseTicks;
         private readonly double[] _canonicalMeters;
         private readonly uint[] _phraseTicksTotalPerPart;
         private readonly double[,] _micPartHits;
@@ -96,6 +159,16 @@ namespace YARG.Core.Engine.Vocals.Engines
             _micCount = micCount;
             _allParts = allParts.ToArray();
             _partHasContent = new bool[partCount];
+            _partPhraseIndices = new int[partCount][];
+            _partPhraseHasVocalContent = new bool[partCount, Notes.Count];
+            for (int i = 0; i < Notes.Count; i++)
+            {
+                for (int j = 0; j < partCount; j++)
+                    _partPhraseHasVocalContent[j, i] = GetTicksInPhraseForPart(_allParts[j], Notes[i]) > 0u;
+            }
+            _denominatorPulseTicks = BuildDenominatorPulseTicks();
+            _countInTimelines = new CountInTimelineEntry[partCount][];
+            _partVocalRuns = new (long Start, long End)[partCount][];
             _canonicalMeters = new double[partCount];
             _phraseTicksTotalPerPart = new uint[partCount];
             _micPartHits = new double[micCount, partCount];
@@ -148,6 +221,14 @@ namespace YARG.Core.Engine.Vocals.Engines
             for (int j = 0; j < partCount; j++)
             {
                 _partHasContent[j] = allParts[j].NotePhrases.Count > 0;
+                var phraseIndices = new List<int>();
+                for (int i = 0; i < Notes.Count; i++)
+                {
+                    if (GetTicksInPhraseForPart(_allParts[j], Notes[i]) > 0u)
+                        phraseIndices.Add(i);
+                }
+                _partPhraseIndices[j] = phraseIndices.ToArray();
+                _countInTimelines[j] = BuildCountInTimeline(j);
             }
 
             GetWaitCountdowns(PartyVocalsCountdownNotes.ExcludingPercussion(allParts.ToList()));
@@ -175,17 +256,235 @@ namespace YARG.Core.Engine.Vocals.Engines
             partIndex >= 0 && partIndex < _phraseTicksTotalPerPart.Length
             && _phraseTicksTotalPerPart[partIndex] > 0u;
 
-        // True if the part has a (non-percussion) note in the NEXT master phrase. Used by
-        // the HUD count-in drain so a meter can warn the player a phrase before their line
-        // returns. Computed on demand (the next phrase hasn't started, so the per-tick
-        // _phraseTicksTotalPerPart array doesn't cover it).
-        public bool PartInNextPhrase(int partIndex)
+        /// <summary>
+        /// True while the canonical master phrase at <see cref="NoteIndex"/> contains
+        /// vocal content for this lane. This deliberately covers child-run gaps inside the
+        /// phrase and does not depend on live scoring tick state.
+        /// </summary>
+        public bool PartInCurrentMasterPhraseWithContent(int partIndex)
         {
-            if (partIndex < 0 || partIndex >= _allParts.Length) return false;
-            int next = NoteIndex + 1;
-            if (next < 0 || next >= Notes.Count) return false;
-            return GetTicksInPhraseForPart(_allParts[partIndex], Notes[next]) > 0u;
+            if (partIndex < 0 || partIndex >= _partPhraseHasVocalContent.GetLength(0)) return false;
+            int phraseIndex = NoteIndex;
+            return phraseIndex >= 0 && phraseIndex < _partPhraseHasVocalContent.GetLength(1)
+                && _partPhraseHasVocalContent[partIndex, phraseIndex];
         }
+
+        /// <summary>True only while a non-percussion child run is active at the current tick.</summary>
+        public bool PartInCurrentVocalRun(int partIndex)
+        {
+            if (partIndex < 0 || partIndex >= _partVocalRuns.Length) return false;
+            long now = CurrentTick;
+            foreach (var run in _partVocalRuns[partIndex])
+            {
+                if (now < run.Start) return false;
+                if (now < run.End) return true;
+            }
+            return false;
+        }
+
+        // Returns the first future master phrase that contains non-percussion content for
+        // this part, or -1 when it has no remaining content. The precomputed indices use the
+        // same clamped phrase-overlap predicate as current-phrase presence.
+        public int NextPhraseIndexWithPart(int partIndex)
+        {
+            if (partIndex < 0 || partIndex >= _partPhraseIndices.Length) return -1;
+
+            foreach (int phraseIndex in _partPhraseIndices[partIndex])
+            {
+                if (phraseIndex > NoteIndex)
+                    return phraseIndex;
+            }
+            return -1;
+        }
+
+        // Compatibility helper for callers that specifically need immediate-next presence.
+        public bool PartInNextPhrase(int partIndex) =>
+            NextPhraseIndexWithPart(partIndex) == NoteIndex + 1;
+
+        /// <summary>
+        /// Returns the pending re-entry countdown for a lane. This deliberately scans chart
+        /// children on every query: presentation must remain correct after seek/rewind and must
+        /// not depend on the coordinator's scoring cursor or master phrase boundaries.
+        /// </summary>
+        public PartyVocalsCountInState GetCountInState(int partIndex)
+        {
+            if (partIndex < 0 || partIndex >= _countInTimelines.Length) return PartyVocalsCountInState.Empty;
+
+            // Eligibility is precomputed per lane and canonical phrase. It permits only the
+            // song-start or inactive-phrase → active-phrase pre-onset window. Once the target
+            // onset is reached, this half-open query ends permanently for that phrase; child-run
+            // gaps cannot create another pending entry.
+            long now = CurrentTick;
+            foreach (var entry in _countInTimelines[partIndex])
+            {
+                if (now < entry.StartTick) return PartyVocalsCountInState.Empty;
+                if (now < entry.TargetTick)
+                {
+                    long firstPulse = entry.PulseTicks.Length > 0 ? entry.PulseTicks[0] : entry.DrainEndTick;
+                    double progress = firstPulse >= entry.DrainEndTick ? 0.0
+                        : Math.Clamp((double)(now - firstPulse) / Math.Max(1L, entry.DrainEndTick - firstPulse), 0.0, 1.0);
+                    double fill = entry.PulseTicks.Length == 0 || now < firstPulse ? 1.0
+                        : now >= entry.DrainEndTick ? 0.0 : 1.0 - progress;
+                    double pulseStrength = 0.0;
+                    for (int p = 0; p < entry.PulseTicks.Length; p++)
+                    {
+                        long pulseTick = entry.PulseTicks[p];
+                        if (now < pulseTick) break;
+                        long next = p + 1 < entry.PulseTicks.Length ? entry.PulseTicks[p + 1] : entry.DrainEndTick;
+                        if (next > pulseTick)
+                            pulseStrength = Math.Max(pulseStrength, 1.0 - Math.Clamp((double)(now - pulseTick) / (next - pulseTick), 0.0, 1.0));
+                    }
+                    return new PartyVocalsCountInState(true, entry.TargetTick, entry.StartTick,
+                        entry.WindowTicks, entry.WindowBeats, fill, pulseStrength, entry.PulseTicks);
+                }
+            }
+            return PartyVocalsCountInState.Empty;
+        }
+
+        private long[] BuildDenominatorPulseTicks()
+        {
+            if (Notes.Count == 0) return Array.Empty<long>();
+            uint maxTick = Notes.Count == 0 ? 0u : Notes.Max(n => n.TickEnd);
+            foreach (var part in _allParts)
+                foreach (var phrase in part.NotePhrases)
+                    foreach (var child in phrase.PhraseParentNote.ChildNotes)
+                        maxTick = Math.Max(maxTick, child.TotalTickEnd);
+            double maxPosition = SyncTrack.GetDenominatorBeatPosition(maxTick);
+            int count = Math.Max(1, (int)Math.Ceiling(maxPosition) + 1);
+            var ticks = new List<long>(count);
+            for (int beat = 0; beat < count; beat++)
+            {
+                uint lo = 0, hi = maxTick;
+                while (lo < hi)
+                {
+                    uint mid = lo + (hi - lo) / 2;
+                    if (SyncTrack.GetDenominatorBeatPosition(mid) >= beat) hi = mid;
+                    else lo = mid + 1;
+                }
+                if (SyncTrack.GetDenominatorBeatPosition(lo) >= beat)
+                    ticks.Add(lo);
+            }
+            return ticks.ToArray();
+        }
+
+        private long FindMeasureBoundary(double measureNumber, uint upperBound)
+        {
+            if (measureNumber <= 0) return 0;
+            uint lo = 0, hi = upperBound;
+            while (lo < hi)
+            {
+                uint mid = lo + (hi - lo) / 2;
+                if (SyncTrack.GetMeasurePosition(mid) >= measureNumber) hi = mid;
+                else lo = mid + 1;
+            }
+            return lo;
+        }
+
+        private long[] GetPulses(long start, uint end)
+        {
+            var pulses = new List<long>();
+            foreach (long tick in _denominatorPulseTicks)
+                if (tick >= start && tick < end) pulses.Add(tick);
+            return pulses.ToArray();
+        }
+
+        private CountInTimelineEntry[] BuildCountInTimeline(int partIndex)
+        {
+            var part = _allParts[partIndex];
+            var children = new List<VocalNote>();
+            foreach (var phrase in part.NotePhrases)
+                foreach (var child in phrase.PhraseParentNote.ChildNotes)
+                    if (!child.IsPercussion) children.Add(child);
+            children.Sort((a, b) => a.Tick.CompareTo(b.Tick));
+            var runs = new List<(long start, long end)>();
+            foreach (var child in children)
+            {
+                long start = child.Tick;
+                long end = child.TotalTickEnd;
+                if (runs.Count > 0 && start <= runs[^1].end)
+                {
+                    var prior = runs[^1];
+                    runs[^1] = (prior.start, Math.Max(prior.end, end));
+                }
+                else runs.Add((start, end));
+            }
+            _partVocalRuns[partIndex] = runs.ToArray();
+
+            // One descriptor per lane × canonical destination phrase. The canonical Notes
+            // grid — not per-lane phrase markers — defines the destination, and the target
+            // is the first actual non-percussion child onset starting inside that phrase.
+            // A descriptor exists only when the destination is eligible: phrase zero (song
+            // start) or a lane-inactive immediately preceding canonical phrase. Later runs
+            // in the same phrase never create a second descriptor, so the count-in cannot
+            // re-arm after the first onset for the rest of the phrase, and content outside
+            // every canonical Notes range fails closed (no descriptor at all).
+            var result = new List<CountInTimelineEntry>();
+            int runIndex = 0;
+            for (int phraseIndex = 0; phraseIndex < Notes.Count; phraseIndex++)
+            {
+                uint phraseStart = Notes[phraseIndex].Tick;
+                uint phraseEnd = Notes[phraseIndex].TickEnd;
+                // Skip runs that begin in an earlier canonical phrase; their destination
+                // is that earlier phrase, even when they carry into this one.
+                while (runIndex < runs.Count && runs[runIndex].start < phraseStart)
+                    runIndex++;
+                if (runIndex >= runs.Count || runs[runIndex].start >= phraseEnd)
+                    continue;
+                long target = runs[runIndex].start;
+
+                bool eligible = phraseIndex == 0
+                    || !_partPhraseHasVocalContent[partIndex, phraseIndex - 1];
+                if (!eligible) continue;
+
+                long start;
+                long drainEnd;
+                var pulseList = new List<long>();
+                if (phraseIndex == 0)
+                {
+                    // Song start: drain from tick zero to the lane's first actual onset.
+                    start = 0;
+                    drainEnd = target;
+                    pulseList.AddRange(GetPulses(0, (uint)target));
+                }
+                else
+                {
+                    long priorEnd = Notes[phraseIndex - 1].TickEnd;
+                    long priorStart = Notes[phraseIndex - 1].Tick;
+                    double priorMeasure = SyncTrack.GetMeasurePosition((uint)priorEnd);
+                    // Use the preceding measure boundary when available, but never enter a
+                    // canonical phrase before the immediately preceding inactive phrase. A
+                    // mid-measure phrase end would otherwise make the one-measure lead-in
+                    // visibly start two phrases before the target lane's next onset.
+                    double previousMeasureNumber = Math.Floor(priorMeasure) - 1.0;
+                    start = FindMeasureBoundary(previousMeasureNumber, (uint)Math.Max(0, priorEnd));
+                    start = Math.Max(priorStart, Math.Min(start, priorEnd));
+                    pulseList.AddRange(GetPulses(start, (uint)priorEnd));
+                    long targetMeasureStart = FindMeasureBoundary(
+                        Math.Floor(SyncTrack.GetMeasurePosition((uint)target)), (uint)Math.Max(0, target));
+                    if (targetMeasureStart > phraseStart)
+                    {
+                        var activePrefix = GetPulses(phraseStart, (uint)targetMeasureStart);
+                        if (activePrefix.Length > 0)
+                        {
+                            drainEnd = activePrefix[^1];
+                            Array.Resize(ref activePrefix, activePrefix.Length - 1);
+                            pulseList.AddRange(activePrefix);
+                        }
+                        else drainEnd = targetMeasureStart;
+                    }
+                    else drainEnd = priorEnd;
+                }
+                pulseList.Sort();
+                pulseList = pulseList.Distinct().Where(pulse => pulse < drainEnd).ToList();
+                long window = Math.Max(1L, drainEnd - start);
+                result.Add(new CountInTimelineEntry(target, start, drainEnd, window,
+                    pulseList.Count, pulseList.ToArray()));
+            }
+            return result.ToArray();
+        }
+
+        // Retained for compatibility with existing callers; the new query is tick-anchored.
+        public double CountInProgress(int partIndex) => GetCountInState(partIndex).Progress;
 
         // Progress 0..1 through the CURRENT phrase's tick span. Drives the count-in drain.
         // Uses the phrase span (Tick..TickEnd), NOT PhraseTicksTotal — that is the sung-hit
