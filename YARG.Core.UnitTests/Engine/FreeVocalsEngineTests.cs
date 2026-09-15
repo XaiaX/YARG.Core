@@ -685,7 +685,7 @@ public sealed class FreeVocalsEngineTests
 
     private static VocalsPart CreateVocalsPart(bool isHarmony)
     {
-        return new VocalsPart(isHarmony, new(), new(), new(), new());
+        return new VocalsPart(isHarmony, new(), new(), new(), new(), new());
     }
 
     private static void AddPhraseWithPitch(VocalsPart part, int midiPitch, uint tickOffset)
