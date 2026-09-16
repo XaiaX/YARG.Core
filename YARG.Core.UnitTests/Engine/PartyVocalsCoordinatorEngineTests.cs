@@ -520,6 +520,204 @@ public sealed class PartyVocalsCoordinatorEngineTests
     }
 
     // ================================================================
+    // Talkie Broadcast Regression (party-vocals "stickiness" defects)
+    //
+    // Target behavior (design step A): when a mic's sample matches notes
+    // across multiple parts and EVERY matched note is a talkie (non-pitched),
+    // the credit is BROADCAST to every matched part — each capped by that
+    // part's own remaining phrase duration. If the matched set contains ANY
+    // pitched note, the whole set is treated as pitched: credit is conserved
+    // through the ambiguity bucket exactly as today, NOT broadcast.
+    //
+    // The tests below define that target. The current conserved-bucket
+    // allocator hands the entire ambiguous credit to a single part (the
+    // least-credited tie-break), so all-talkie scenarios leave every other
+    // matched part's meter stuck at 0.
+    // ================================================================
+
+    /// <summary>
+    /// Like <see cref="AddTalkiePhrase"/>, but with an explicit child-note
+    /// (lyric) tick length. The per-part phrase tick totals are computed from
+    /// child-note spans, so this is what models a "short" vs "long" talkie
+    /// line when all parts must share one parent span (the merged track
+    /// dedupes master phrases by exact (Tick, TickEnd) — overlapping-but-
+    /// different parent spans would split into separate master phrases).
+    /// </summary>
+    private static void AddTalkiePhraseWithChildSpan(
+        VocalsPart part, uint tickOffset, uint parentTickLength, uint childTickLength)
+    {
+        var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, parentTickLength);
+        var talkieNote = new VocalNote(-1, 0, VocalNoteType.Lyric, 0.0, 1.0, tickOffset, childTickLength);
+        note.AddChildNote(talkieNote);
+        var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.NonPitched, "Talk", 0.0, tickOffset) };
+        part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, parentTickLength, note, lyrics));
+    }
+
+    /// <summary>
+    /// Coordinator constructor for HARM-only scenarios (lead instrumental, the
+    /// Aug-29 repro shape). The engine does NOT merge parts internally — the
+    /// caller must pass the pre-merged track (see BuildMergedTrack's game-side
+    /// call sites), and <see cref="CreateCoordinator"/> passes parts[0]'s chart,
+    /// which has no phrases here and would leave the engine with zero master
+    /// phrases (no phrase-end events ever fire).
+    /// </summary>
+    private static PartyVocalsCoordinatorEngine CreateHarmonyOnlyCoordinator(
+        List<VocalsPart> parts, int micCount)
+    {
+        var mergedTrack = PartyVocalsCoordinatorEngine.BuildMergedTrack(
+            parts, parts[0].CloneAsInstrumentDifficulty());
+        return new PartyVocalsCoordinatorEngine(
+            mergedTrack, parts, CreateSyncTrack(), EngineParams, false, micCount);
+    }
+
+    [Test]
+    public void Scenario_AllTalkieMatch_BroadcastsCreditToEveryMatchedPart()
+    {
+        // Aug-29 "Clint Eastwood" defect: one mic singing through overlapping
+        // TALKIE phrases on HARM1+HARM2 (lead instrumental) must credit BOTH
+        // parts — an all-talkie match broadcasts to every matched part, each
+        // capped by its own remaining phrase duration.
+        //
+        // RED today: the conserved bucket pours the whole ambiguous credit into
+        // one part (least-credited tie-break), so only HARM1 completes and the
+        // grade is Awesome instead of DoubleAwesome.
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true)
+        };
+        AddTalkiePhraseWithChildSpan(parts[1], 0, 960, 480); // HARM1 talkie line
+        AddTalkiePhraseWithChildSpan(parts[2], 0, 960, 480); // HARM2 talkie line (same span)
+
+        var engine = CreateHarmonyOnlyCoordinator(parts, 1);
+        var grades = new List<PhraseGrade>();
+        var metersByPart = new Dictionary<int, double>();
+        engine.OnPartyVocalsPhrase += (grade, partResults, isLast) =>
+        {
+            grades.Add(grade);
+            foreach (var result in partResults)
+                metersByPart[result.PartIndex] = result.Meter;
+        };
+
+        // One mic makes noise through the full talkie window (child notes span
+        // ticks 0-480 = 0.0-0.5s at 480 tpqn / 120 BPM). Pitch is irrelevant
+        // for talkies.
+        FeedPitches(engine, 1, new[] { new[] { 60f } }, 0.0, 0.55);
+        engine.Update(1.5); // past phrase end
+
+        Assert.AreEqual(1, grades.Count, "One phrase grade");
+        Assert.AreEqual(PhraseGrade.DoubleAwesome, grades[0],
+            "All-talkie match must broadcast credit to EVERY matched part — both " +
+            "HARM1 and HARM2 meters complete (RED today: Awesome, one part only).");
+        Assert.AreEqual(1.0, metersByPart[1], Epsilon,
+            "HARM1 meter completes from the broadcast");
+        Assert.AreEqual(1.0, metersByPart[2], Epsilon,
+            "HARM2 meter must ALSO complete from the same samples (RED today: 0.0 " +
+            "— the conserved bucket gave all credit to HARM1).");
+    }
+
+    [Test]
+    public void Scenario_TalkiePlusPitchedMatch_ConservesPitchedOnly()
+    {
+        // Pitched-wins conservation: one mic simultaneously matches a TALKIE on
+        // HARM2 and a PITCHED note (C4) on HARM1. The matched set contains a
+        // pitched note, so the whole set is treated as pitched — credit flows
+        // through the conserved ambiguity bucket, NOT broadcast. The pitched
+        // part completes; the talkie-only part must NOT auto-complete from the
+        // same samples.
+        //
+        // RED/GUARD SPLIT: no half of this test is RED today. The current
+        // allocator conserves ALL ambiguous matches (talkie or pitched), so
+        // these assertions already pass. This test is the REGRESSION GUARD for
+        // design step A: it fails if the broadcast fix is implemented naively —
+        // a broadcast-everything implementation would complete the talkie-only
+        // HARM2 as well and grade DoubleAwesome instead of Awesome.
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true)
+        };
+        AddPhrase(parts[1], 0, 960, 60);      // HARM1 pitched at C4
+        AddTalkiePhraseWithChildSpan(parts[2], 0, 960, 480); // HARM2 talkie, same span
+
+        var engine = CreateHarmonyOnlyCoordinator(parts, 1);
+        var grades = new List<PhraseGrade>();
+        var metersByPart = new Dictionary<int, double>();
+        engine.OnPartyVocalsPhrase += (grade, partResults, isLast) =>
+        {
+            grades.Add(grade);
+            foreach (var result in partResults)
+                metersByPart[result.PartIndex] = result.Meter;
+        };
+
+        // One mic sings C4: matches the pitched HARM1 note exactly and the
+        // HARM2 talkie unconditionally → ambiguous set {HARM1, HARM2}.
+        FeedPitches(engine, 1, new[] { new[] { 60f } }, 0.0, 0.55);
+        engine.Update(1.5); // past phrase end
+
+        Assert.AreEqual(1, grades.Count, "One phrase grade");
+        Assert.AreEqual(PhraseGrade.Awesome, grades[0],
+            "Exactly one part completes: pitched-wins conserves the credit through " +
+            "the bucket (GUARD: naive broadcast would grade DoubleAwesome).");
+        Assert.AreEqual(1.0, metersByPart[1], Epsilon,
+            "Pitched HARM1 completes through the conserved bucket");
+        Assert.Less(metersByPart[2], AwesomeThreshold,
+            "Talkie-only HARM2 must NOT auto-complete from the same samples " +
+            "(GUARD: naive broadcast would fill it to 1.0).");
+    }
+
+    [Test]
+    public void LongTalkieOnHarm3_CompletesAlongsideShortHarm1Talkies()
+    {
+        // Aug-29 repro shape: short HARM1/HARM2 talkie lines, one long HARM3
+        // talkie line, one mic singing through everything. Each line's meter
+        // must independently complete: the all-talkie window {HARM1, HARM2,
+        // HARM3} broadcasts to all three parts (each capped by its own
+        // remaining phrase duration), and HARM3's tail (after the short lines
+        // end) is unambiguous direct credit.
+        //
+        // All three parent spans are identical (ticks 0-2880) so the merged
+        // track has a single master phrase; the short/long difference lives in
+        // the child notes (480 vs 1440 ticks), which is what the per-part tick
+        // totals are computed from.
+        //
+        // RED today: the conserved bucket fills HARM1 only → HARM2 sticks at
+        // 0, HARM3 reaches ~0.67, and the grade is Awesome not TripleAwesome.
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true), CreateVocalsPart(true)
+        };
+        AddTalkiePhraseWithChildSpan(parts[1], 0, 2880, 480);  // HARM1 short talkie
+        AddTalkiePhraseWithChildSpan(parts[2], 0, 2880, 480);  // HARM2 short talkie
+        AddTalkiePhraseWithChildSpan(parts[3], 0, 2880, 1440); // HARM3 long talkie
+
+        var engine = CreateHarmonyOnlyCoordinator(parts, 1);
+        var grades = new List<PhraseGrade>();
+        var metersByPart = new Dictionary<int, double>();
+        engine.OnPartyVocalsPhrase += (grade, partResults, isLast) =>
+        {
+            grades.Add(grade);
+            foreach (var result in partResults)
+                metersByPart[result.PartIndex] = result.Meter;
+        };
+
+        // One mic sings through the long talkie's full window (ticks 0-1440
+        // = 0.0-1.5s), covering both short talkie windows on the way.
+        FeedPitches(engine, 1, new[] { new[] { 60f } }, 0.0, 1.55);
+        engine.Update(3.5); // past the 0-2880 master phrase
+
+        Assert.AreEqual(1, grades.Count, "One phrase grade");
+        Assert.AreEqual(PhraseGrade.TripleAwesome, grades[0],
+            "All three talkie lines complete independently (RED today: Awesome — " +
+            "conserved bucket fills HARM1 only).");
+        Assert.AreEqual(1.0, metersByPart[1], Epsilon,
+            "HARM1 short talkie completes");
+        Assert.AreEqual(1.0, metersByPart[2], Epsilon,
+            "HARM2 short talkie completes (RED today: 0.0)");
+        Assert.AreEqual(1.0, metersByPart[3], Epsilon,
+            "HARM3 long talkie completes (RED today: ~0.67 — the broadcast-window " +
+            "credit was conserved into HARM1 instead of shared)");
+    }
+
+    // ================================================================
     // Scoring Tests (14-15)
     // AC12: Scoring through the standard path
     // ================================================================

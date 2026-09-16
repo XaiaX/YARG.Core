@@ -595,6 +595,68 @@ public sealed class FreeVocalsEngineTests
     }
 
     // ================================================================
+    // Tie hysteresis: the visual target-part selection (CheckSingingHit)
+    // must RETAIN the currently-displayed part when a new candidate merely
+    // TIES its hit percent; it may only switch on a strictly greater percent.
+    //
+    // Today's selection loop seeds bestHitPercent = 0 (not the current part's
+    // matched percent) and uses a strict `>` while scanning parts in ascending
+    // index order, so the LOWEST-index part among the maxima always wins each
+    // frame's re-scan. When the current target is a higher-index part and a
+    // lower-index part ties it, the display flips down to the lower part.
+    // ================================================================
+    [Test]
+    public void VisualTarget_RetainsPartOnEqualPercent()
+    {
+        // Part 0 (HARM1): C4 (ticks 0-240), E4 (240-480), E4 (480-720)
+        // Part 1 (HARM2): E4 (ticks 0-480), F4 (480-720)
+        //
+        // Segment 1 (ticks ~25-192): sing E4 — only part 1 has E4 active →
+        //   target establishes as part 1.
+        // Segment 2 (ticks ~243-346): part 0's E4 (240-480) becomes active and
+        //   TIES part 1's E4 at hit percent 1.0. The display must RETAIN part 1.
+        //   RED today: the ascending strict-`>` re-scan flips to part 0 (the
+        //   lowest-index maximizer) the moment part 0's E4 activates.
+        // Segment 3 (ticks ~496-672): part 0's E4 (480-720) vs part 1's F4
+        //   (480-720); singing E4 + 0.25 semitones gives part 0 percent 1.0 vs
+        //   part 1 percent 0.75 — strictly better → switching to part 0 is
+        //   required (guard: hysteresis must not freeze the display).
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(isHarmony: false),
+            CreateVocalsPart(isHarmony: true),
+        };
+        AddPitchedPhraseWithChildren(parts[0], 0, 960,
+            (60, 0u, 240u), (64, 240u, 240u), (64, 480u, 240u));
+        AddPitchedPhraseWithChildren(parts[1], 0, 960,
+            (64, 0u, 480u), (65, 480u, 240u));
+
+        // SyncTrack MUST have a tempo entry — without one, TimeToTick always
+        // returns 0 and CurrentTick never advances (see FreeVocals_MultiPartMatch).
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var syncTrack = new SyncTrack(480);
+        syncTrack.Tempos.Add(new TempoChange(120.0, 0.0, 0));
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, isBot: false);
+
+        // Segment 1: establish part 1 as the displayed target.
+        DrivePitch(engine, 0.01, 0.20, 64f);
+        Assert.That(engine.CurrentTargetHarmonyIndex, Is.EqualTo(1),
+            "Segment 1: singing E4 while only part 1 has E4 active should target part 1");
+
+        // Segment 2: part 0's E4 (ticks 240-480) ties part 1's E4 at percent 1.0.
+        DrivePitch(engine, 0.22, 0.35, 64f);
+        Assert.That(engine.CurrentTargetHarmonyIndex, Is.EqualTo(1),
+            "Segment 2: an equal-percent candidate must NOT displace the " +
+            "currently-displayed part (RED today: flips down to part 0)");
+
+        // Segment 3: part 0 becomes strictly better (1.0 vs 0.75) → must switch.
+        DrivePitch(engine, 0.50, 0.70, 64.25f);
+        Assert.That(engine.CurrentTargetHarmonyIndex, Is.EqualTo(0),
+            "Segment 3: a strictly greater hit percent must switch the target " +
+            "(guard: hysteresis must not freeze the display)");
+    }
+
+    // ================================================================
     // AC.2: A mic whose pitch satisfies >1 HARM part records per-part
     // masks/deltas for ALL satisfied parts (not a single best).
     // ================================================================
@@ -698,6 +760,50 @@ public sealed class FreeVocalsEngineTests
             new LyricEvent(LyricSymbolFlags.None, "Test", 0.0, tickOffset)
         };
         part.NotePhrases.Add(new VocalsPhrase(0.0, 1.0, tickOffset, 480, note, lyrics));
+    }
+
+    /// <summary>
+    /// Phrase with multiple pitched child notes at arbitrary tick spans
+    /// (absolute ticks). Used to stage tie/switch sequences for
+    /// CurrentTargetHarmonyIndex hysteresis tests: child spans, not the parent
+    /// span, determine when each note is matchable.
+    /// </summary>
+    private static void AddPitchedPhraseWithChildren(
+        VocalsPart part, uint tickOffset, uint parentTickLength,
+        params (int pitch, uint startTick, uint length)[] children)
+    {
+        var note = new VocalNote(NoteFlags.None, false, 0.0, 1.0, tickOffset, parentTickLength);
+        foreach (var (pitch, startTick, length) in children)
+        {
+            // 480 tpqn @ 120 BPM → 1s = 960 ticks; keep Time spans consistent
+            // with the tick spans so PitchAtSongTime stays well-defined.
+            double time = startTick / 960.0;
+            double timeLength = length / 960.0;
+            note.AddChildNote(new VocalNote(pitch, 0, VocalNoteType.Lyric,
+                time, timeLength, startTick, length));
+        }
+        var lyrics = new List<LyricEvent>
+        {
+            new LyricEvent(LyricSymbolFlags.None, "Test", 0.0, tickOffset)
+        };
+        part.NotePhrases.Add(new VocalsPhrase(
+            0.0, 1.0, tickOffset, parentTickLength, note, lyrics));
+    }
+
+    /// <summary>
+    /// Feeds a constant pitch at ~60 fps across [startTime, endTime], updating
+    /// the engine per frame (mirrors the coordinator tests' FeedPitches shape)
+    /// so CheckSingingHit's per-frame target-part selection runs in real time.
+    /// </summary>
+    private static void DrivePitch(
+        YargFreeVocalsEngine engine, double startTime, double endTime, float pitch)
+    {
+        for (double t = startTime + 1.0 / 60.0; t <= endTime; t += 1.0 / 60.0)
+        {
+            var input = GameInput.Create(t, VocalsAction.Pitch, pitch);
+            engine.QueueInput(ref input);
+            engine.Update(t);
+        }
     }
 
     /// <summary>
