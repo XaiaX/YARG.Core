@@ -657,6 +657,142 @@ public sealed class FreeVocalsEngineTests
     }
 
     // ================================================================
+    // 0%-boundary tie on the CURRENT part: a match at exactly the outer
+    // pitch-window edge returns hit == true with hitPercent 0, so the
+    // retain branch's `currentPartNote ?? bestNote` must still have a note
+    // to emit — OnTargetNoteChanged must never carry null.
+    // ================================================================
+    [Test]
+    public void VisualTarget_RetainsCurrentPartOnZeroPercentTie()
+    {
+        // Part 0 (HARM1): E4 (ticks 0-480), G4 (480-720)
+        // Part 1 (HARM2): G4 (ticks 0-720)
+        //
+        // Segment 1 (ticks ~26-192): sing G4 — only part 1 has G4 active →
+        //   target establishes as part 1.
+        // Segment 2 (ticks ~211-336): sing G4 + 1.5 semitones — exactly the
+        //   outer pitch-window edge, so part 1 matches with hitPercent 0 (a
+        //   0%-boundary match) while part 0's E4 is out of range. This is
+        //   the all-zero edge: the retain branch must still supply the
+        //   current part's note to OnTargetNoteChanged.
+        // Segment 3 (ticks ~496-672): part 0's G4 (480-720) activates and
+        //   TIES part 1's G4 at the same 0% boundary. The tie must not
+        //   displace the current part, and every emit stays non-null.
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(isHarmony: false),
+            CreateVocalsPart(isHarmony: true),
+        };
+        AddPitchedPhraseWithChildren(parts[0], 0, 960,
+            (64, 0u, 480u), (67, 480u, 240u));
+        AddPitchedPhraseWithChildren(parts[1], 0, 960,
+            (67, 0u, 720u));
+
+        // SyncTrack MUST have a tempo entry — without one, TimeToTick always
+        // returns 0 and CurrentTick never advances (see FreeVocals_MultiPartMatch).
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var syncTrack = new SyncTrack(480);
+        syncTrack.Tempos.Add(new TempoChange(120.0, 0.0, 0));
+        var engine = new YargFreeVocalsEngine(primaryChart, parts, syncTrack, EngineParameters, isBot: false);
+
+        // Setup sanity: G4 + 1.5 semitones is exactly the outer window edge —
+        // still a hit, but scoring 0% (the boundary this test is built on).
+        var part1Note = parts[1].NotePhrases[0].PhraseParentNote.ChildNotes[0];
+        var (boundaryHit, boundaryPercent) = InvokeCanVocalNoteBeHit(engine, part1Note, sungPitch: 68.5f);
+        Assert.That(boundaryHit, Is.True, "Setup: the outer-window pitch must still be a hit");
+        Assert.That(boundaryPercent, Is.EqualTo(0f), "Setup: the outer-window pitch must score 0%");
+
+        var emittedNotes = new List<VocalNote?>();
+        engine.OnTargetNoteChanged += note => emittedNotes.Add(note);
+
+        // Segment 1: establish part 1 as the displayed target.
+        DrivePitch(engine, 0.01, 0.20, 67f);
+        Assert.That(engine.CurrentTargetHarmonyIndex, Is.EqualTo(1),
+            "Segment 1: singing G4 while only part 1 has G4 active should target part 1");
+
+        // Segment 2: current part matches at the 0% boundary; no other part
+        // matches. The emit must carry the current part's note, not null.
+        int segment2Start = emittedNotes.Count;
+        DrivePitch(engine, 0.22, 0.35, 68.5f);
+        Assert.That(engine.CurrentTargetHarmonyIndex, Is.EqualTo(1),
+            "Segment 2: a 0%-boundary match must retain the current part");
+        Assert.That(emittedNotes.Count, Is.GreaterThan(segment2Start),
+            "Segment 2: the 0%-boundary frames must still emit a target note");
+        Assert.That(emittedNotes.GetRange(segment2Start, emittedNotes.Count - segment2Start),
+            Has.None.Null, "Segment 2: every emitted target note must be non-null " +
+            "(RED before the fix: the all-zero edge emitted null)");
+
+        // Segment 3: part 0's G4 ties part 1's G4 at the same 0% boundary.
+        int segment3Start = emittedNotes.Count;
+        DrivePitch(engine, 0.50, 0.70, 68.5f);
+        Assert.That(engine.CurrentTargetHarmonyIndex, Is.EqualTo(1),
+            "Segment 3: a 0%-boundary tie must not displace the current part");
+        Assert.That(emittedNotes.Count, Is.GreaterThan(segment3Start),
+            "Segment 3: the tie frames must still emit a target note");
+        Assert.That(emittedNotes.GetRange(segment3Start, emittedNotes.Count - segment3Start),
+            Has.None.Null, "Segment 3: every emitted target note must be non-null " +
+            "(RED before the fix: the all-zero edge emitted null)");
+    }
+
+    // ================================================================
+    // Stale hitting masks: GetMicHittingParts/GetMicHittingPitchedParts are
+    // per-tick transients cleared at the top of AccumulateMicPartHits. Once
+    // NoteIndex >= Notes.Count, UpdateHitLogic returns at its no-notes-left
+    // check and that clearing never runs again — so the getters keep exposing
+    // the last nonzero match after the chart ends, and a Reset() (rewind/
+    // practice seek) keeps exposing it too. Both paths must clear the masks.
+    // ================================================================
+    [Test]
+    public void MicHittingMasks_ClearAfterChartExhaustionOrReset()
+    {
+        // Master part 0 drives the phrase layout. Its pitched child (E4) is
+        // 40 ticks LONGER than the parent phrase, so the update that crosses
+        // the phrase end still matches: the mask is set and NoteIndex advances
+        // in the same frame. Every UpdateHitLogic pass after that returns at
+        // the no-notes-left check, so the masks freeze at that last match.
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(isHarmony: false),
+            CreateVocalsPart(isHarmony: true),
+        };
+        AddPitchedPhraseWithChildren(parts[0], 0, 960, (64, 0u, 1000u));
+        var primaryChart = parts[0].CloneAsInstrumentDifficulty();
+        var syncTrack = new SyncTrack(480);
+        syncTrack.Tempos.Add(new TempoChange(120.0, 0.0, 0));
+
+        var engine = new YargFreeVocalsEngine(
+            primaryChart, parts, syncTrack, EngineParameters, isBot: false);
+
+        DrivePitch(engine, 0.01, 1.20, 64f); // well past the phrase end
+
+        // Setup sanity: the mic genuinely matched E4 during the drive. (The
+        // per-part hit accumulator persists across ticks, unlike the per-tick
+        // masks under test.)
+        var singleMicPartHitsField = typeof(YargFreeVocalsEngine)
+            .GetField("_singleMicPartHits", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("_singleMicPartHits not found");
+        var partHits = (double[])singleMicPartHitsField.GetValue(engine)!;
+        Assert.That(partHits[0], Is.GreaterThan(0.0),
+            "Setup: the mic matched the pitched E4 line during the drive");
+
+        // Chart exhaustion: the getters must not keep exposing the last match.
+        Assert.That(engine.GetMicHittingParts(), Is.EqualTo(0u),
+            "After the chart is exhausted the hitting mask must clear (RED " +
+            "today: the last pre-exhaustion match stays exposed)");
+        Assert.That(engine.GetMicHittingPitchedParts(), Is.EqualTo(0u),
+            "After the chart is exhausted the pitched mask must clear (RED " +
+            "today)");
+
+        // Reset (rewind/practice seek): the stale masks must not survive it.
+        engine.Reset();
+        Assert.That(engine.GetMicHittingParts(), Is.EqualTo(0u),
+            "After Reset() the stale hitting mask must be gone (RED today: the " +
+            "pre-reset match stays exposed)");
+        Assert.That(engine.GetMicHittingPitchedParts(), Is.EqualTo(0u),
+            "After Reset() the stale pitched mask must be gone (RED today)");
+    }
+
+    // ================================================================
     // AC.2: A mic whose pitch satisfies >1 HARM part records per-part
     // masks/deltas for ALL satisfied parts (not a single best).
     // ================================================================

@@ -90,6 +90,33 @@ namespace YARG.Core.Engine.Vocals.Engines
         // NOT suitable for the visual layer, which reads one frame later — see below.
         private readonly uint[] _micCurrentlyHittingParts;
 
+        // Per-mic bitmask of which of the parts above were matched via a PITCHED note
+        // this tick (same single-tick lifecycle as _micCurrentlyHittingParts, read from
+        // the sub-engine's GetMicHittingPitchedParts). A matched part without its bit
+        // here was matched through a talkie (non-pitched) note.
+        private readonly uint[] _micCurrentlyHittingPitchedParts;
+
+        // Per-mic classification of the current matched set: true when the mic matched
+        // at least one part and NONE of them via a pitched note. All-talkie sets
+        // broadcast their credit to every matched part; sets containing any pitched
+        // note keep the conserved-bucket routing.
+        private readonly bool[] _micMatchedAllTalkie;
+
+        // Broadcast anti-stacking bookkeeping (per phrase). For each part we
+        // track the MERGED covered tick spans of every all-talkie broadcast it
+        // received: when mic i vouches part j, the tick span it just sang
+        // ([LastCreditSpanStartTick, CurrentTick)) is unioned into
+        // _partCoveredSpans[j]. A part's broadcast credit is capped at the
+        // union's total size — the TEMPORAL UNION of all mics' covered spans —
+        // so overlapping talkie coverage counts once (two mics stacking the
+        // same line never complete it faster than one) while DISJOINT coverage
+        // adds (mic A on the first half and mic B on the second half vouch the
+        // full line, not the longer half). _broadcastDirectTicks[j] is how much
+        // broadcast credit part j has actually received; it can never exceed
+        // the union size.
+        private readonly List<(uint Start, uint End)>[] _partCoveredSpans;
+        private readonly double[] _broadcastDirectTicks;
+
         // Per-mic bitmask of parts each mic hit at ANY point during the current visual frame.
         // OR-accumulated across ticks and reset per frame (ResetMicSangFlags), mirroring
         // _micSangThisTick. The visual-facing GetMicHittingParts returns this so the per-mic
@@ -145,6 +172,16 @@ namespace YARG.Core.Engine.Vocals.Engines
             _cumulativeAssignedTicks = new double[partCount];
             _lastTickMicDeltas = new double[micCount];
             _micCurrentlyHittingParts = new uint[micCount];
+            _micCurrentlyHittingPitchedParts = new uint[micCount];
+            _micMatchedAllTalkie = new bool[micCount];
+            _partCoveredSpans = new List<(uint Start, uint End)>[partCount];
+            for (int j = 0; j < partCount; j++)
+            {
+                // Allocated once; ResetPhraseState clears (not reallocates) the
+                // contents each phrase, and per-event merging is O(1) amortized.
+                _partCoveredSpans[j] = new List<(uint Start, uint End)>(4);
+            }
+            _broadcastDirectTicks = new double[partCount];
             _micHittingPartsThisFrame = new uint[micCount];
             _micSangThisTick = new bool[micCount];
 
@@ -421,8 +458,10 @@ namespace YARG.Core.Engine.Vocals.Engines
                 }
                 _lastTickMicDeltas[i] = totalDelta;
 
-                // Read the sub-engine's per-mic hitting-parts bitmask (single-tick).
+                // Read the sub-engine's per-mic hitting-parts bitmask (single-tick),
+                // plus which of those matches were pitched (note-kind per matched part).
                 _micCurrentlyHittingParts[i] = _subEngines[i].GetMicHittingParts();
+                _micCurrentlyHittingPitchedParts[i] = _subEngines[i].GetMicHittingPitchedParts();
 
                 // OR-accumulate into the per-frame signal the visual layer reads, so a hit
                 // on any tick this frame keeps the trail's on-note gate satisfied.
@@ -591,6 +630,15 @@ namespace YARG.Core.Engine.Vocals.Engines
             Array.Clear(_ambiguityBuckets, 0, _ambiguityBuckets.Length);
             Array.Clear(_bucketPerMic, 0, _bucketPerMic.Length);
             Array.Clear(_micCurrentlyHittingParts, 0, _micCurrentlyHittingParts.Length);
+            Array.Clear(_micCurrentlyHittingPitchedParts, 0, _micCurrentlyHittingPitchedParts.Length);
+            Array.Clear(_micMatchedAllTalkie, 0, _micMatchedAllTalkie.Length);
+            // Keep the per-part list instances (allocation-sane); just drop the
+            // span contents so the next phrase starts with empty coverage.
+            foreach (var spans in _partCoveredSpans)
+            {
+                spans.Clear();
+            }
+            Array.Clear(_broadcastDirectTicks, 0, _broadcastDirectTicks.Length);
             Array.Clear(_micHittingPartsThisFrame, 0, _micHittingPartsThisFrame.Length);
             Array.Clear(_micSangThisTick, 0, _micSangThisTick.Length);
 
@@ -609,6 +657,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             for (int i = 0; i < _micCount; i++)
             {
                 uint rawMask = _micCurrentlyHittingParts[i];
+                uint rawPitchedMask = _micCurrentlyHittingPitchedParts[i];
                 uint mask = 0u;
                 for (int j = 0; j < partCount; j++)
                 {
@@ -616,21 +665,62 @@ namespace YARG.Core.Engine.Vocals.Engines
                         mask |= 1u << j;
                 }
                 _micHitMaskScratch[i] = mask;
+
+                // Note-kind of the matched set: all-talkie when at least one part
+                // matched and NO matched part's current note is pitched. The pitched
+                // test ANDs against the filtered mask so a part excluded above (no
+                // phrase content) cannot flip the verdict. Deliberately PopCount-free —
+                // that helper only counts bits 0-2, while this stays correct for any
+                // part count.
+                _micMatchedAllTalkie[i] = mask != 0u && (rawPitchedMask & mask) == 0u;
             }
 
-            // Direct credit: binary across mics
+            // Direct credit: binary across mics. All-talkie matched sets BROADCAST
+            // here instead of entering the conserved buckets: every matched part is
+            // credited the mic's own per-part delta for it (capped by that part's own
+            // phrase total in the allocator), so overlapping talkie lines all complete.
+            // Pitched/mixed sets keep the prior routing unchanged.
             for (int j = 0; j < partCount; j++)
             {
                 double maxDelta = 0;
+                double maxBroadcast = 0;
                 for (int i = 0; i < _micCount; i++)
                 {
                     uint m = _micHitMaskScratch[i];
-                    if (PopCount(m) == 1 && (m & (1u << j)) != 0u)
+                    if ((m & (1u << j)) == 0u)
+                        continue;
+
+                    if (_micMatchedAllTalkie[i])
                     {
-                        double d = _lastTickMicDeltas[i];
-                        if (d > maxDelta) maxDelta = d;
+                        // Broadcast: this part takes this mic's per-part delta for it,
+                        // and the tick span the mic just sang joins the part's
+                        // temporal-union coverage (the budget below).
+                        double d = _subEngines[i].LastTickPartDeltas[j];
+                        RecordCoveredSpan(j, _subEngines[i].LastCreditSpanStartTick, CurrentTick);
+                        if (d > maxBroadcast) maxBroadcast = d;
                     }
+                    else if (PopCount(m) == 1)
+                    {
+                        if (_lastTickMicDeltas[i] > maxDelta) maxDelta = _lastTickMicDeltas[i];
+                    }
+                    // else: pitched/mixed ambiguous set → conserved bucket only
                 }
+
+                // Broadcast budget = TEMPORAL UNION of every mic's covered ticks
+                // for this part (NOT the max single-mic total): a tick sung by
+                // any mic counts once, so overlapping talkie coverage never
+                // stacks, while disjoint coverage adds. The cap never binds for
+                // a single mic — the union grows by exactly the span being
+                // credited.
+                double broadcastCeiling = CoveredSpanUnion(j);
+                double broadcastBudget = broadcastCeiling - _broadcastDirectTicks[j];
+                if (broadcastBudget > 0)
+                {
+                    double add = maxBroadcast < broadcastBudget ? maxBroadcast : broadcastBudget;
+                    _broadcastDirectTicks[j] += add;
+                    maxDelta += add;
+                }
+
                 _harmDirectTicks[j] += maxDelta;
             }
 
@@ -640,7 +730,10 @@ namespace YARG.Core.Engine.Vocals.Engines
             for (int i = 0; i < _micCount; i++)
             {
                 uint m = _micHitMaskScratch[i];
-                if (PopCount(m) >= 2)
+                // All-talkie matched sets were broadcast directly above; they get no
+                // allocator and no conservation. Sets containing ANY pitched note keep
+                // the exact prior conserved-bucket semantics.
+                if (!_micMatchedAllTalkie[i] && PopCount(m) >= 2)
                 {
                     var deltas = _subEngines[i].LastTickPartDeltas;
                     double partDelta = 0;
@@ -764,6 +857,48 @@ namespace YARG.Core.Engine.Vocals.Engines
                 return a - b;
             });
             return masks.ToArray();
+        }
+
+        /// <summary>
+        /// Records a mic's covered tick span [start, end) into a part's
+        /// temporal-union coverage. Spans arrive with non-decreasing ends (engine
+        /// time advances between records), so a new span can only overlap a
+        /// SUFFIX of the stored, disjoint list; that suffix is replaced by its
+        /// union. O(1) for the common non-overlapping case, zero allocations
+        /// beyond list growth (capacity is retained across phrase resets).
+        /// </summary>
+        private void RecordCoveredSpan(int partIndex, uint start, uint end)
+        {
+            if (end <= start) return; // zero-length span covers nothing
+
+            var spans = _partCoveredSpans[partIndex];
+            int i = spans.Count;
+            while (i > 0 && spans[i - 1].End > start) i--;
+
+            if (i == spans.Count)
+            {
+                spans.Add((start, end));
+                return;
+            }
+
+            // Union the overlapping suffix into a single tail span.
+            uint mergedStart = start < spans[i].Start ? start : spans[i].Start;
+            spans.RemoveRange(i + 1, spans.Count - (i + 1));
+            spans[i] = (mergedStart, end);
+        }
+
+        /// <summary>
+        /// Total size of a part's merged covered spans — the temporal union of
+        /// every mic's broadcast coverage for it, in phrase ticks.
+        /// </summary>
+        private double CoveredSpanUnion(int partIndex)
+        {
+            double total = 0;
+            foreach (var (start, end) in _partCoveredSpans[partIndex])
+            {
+                total += end - start;
+            }
+            return total;
         }
 
         private static int PopCount(uint m)

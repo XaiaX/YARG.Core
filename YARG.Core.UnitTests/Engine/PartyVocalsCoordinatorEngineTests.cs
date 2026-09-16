@@ -717,6 +717,76 @@ public sealed class PartyVocalsCoordinatorEngineTests
             "credit was conserved into HARM1 instead of shared)");
     }
 
+    /// <summary>
+    /// Talkie phrase whose line is split across MULTIPLE child-note spans
+    /// (absolute ticks within the phrase). Per-part phrase tick totals sum
+    /// child-note spans, so this models a single part's talkie line that two
+    /// alternating mics cover in disjoint halves.
+    /// </summary>
+    private static void AddTalkiePhraseWithChildSpans(
+        VocalsPart part, uint tickOffset, uint parentTickLength,
+        params (uint startTick, uint length)[] children)
+    {
+        var note = new VocalNote(NoteFlags.None, false, 0.0, 2.0, tickOffset, parentTickLength);
+        foreach (var (startTick, length) in children)
+        {
+            // 480 tpqn @ 120 BPM → 1s = 960 ticks; keep Time spans consistent
+            // with the tick spans (mirrors AddTalkiePhraseWithChildSpan).
+            note.AddChildNote(new VocalNote(-1, 0, VocalNoteType.Lyric,
+                startTick / 960.0, length / 960.0, startTick, length));
+        }
+        var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.NonPitched, "Talk", 0.0, tickOffset) };
+        part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, parentTickLength, note, lyrics));
+    }
+
+    [Test]
+    public void Scenario_AlternatingMicsDisjointTalkieSpans_BothCount()
+    {
+        // Temporal-union broadcast budget: a part's broadcast credit is capped
+        // at the UNION of the tick spans its all-talkie matchers covered, not
+        // the MAX single-mic total. Mic A sings the first half of the part's
+        // talkie line and mic B the second half — DISJOINT spans — so the two
+        // mics together vouch the full line and its meter completes.
+        //
+        // RED against the max-per-mic cap: ceiling = max(A_total, B_total) ≈
+        // one half → the meter sticks at ~0.5 even though 100% of the line's
+        // distinct ticks were sung (conservation in TIME, not per mic).
+        var parts = new List<VocalsPart>
+        {
+            CreateVocalsPart(), CreateVocalsPart(true)
+        };
+        // One talkie line in two disjoint child halves: ticks 0-480 and
+        // 480-960 (0.0-0.5s and 0.5-1.0s at 480 tpqn / 120 BPM).
+        AddTalkiePhraseWithChildSpans(parts[1], 0, 960, (0u, 480u), (480u, 480u));
+
+        var engine = CreateHarmonyOnlyCoordinator(parts, 2);
+        var grades = new List<PhraseGrade>();
+        var metersByPart = new Dictionary<int, double>();
+        engine.OnPartyVocalsPhrase += (grade, partResults, isLast) =>
+        {
+            grades.Add(grade);
+            foreach (var result in partResults)
+                metersByPart[result.PartIndex] = result.Meter;
+        };
+
+        // Mic 0 sings the first half (any pitch — talkies are always hittable),
+        // then falls silent exactly as mic 1 takes over the second half. The
+        // halves are disjoint in time: neither mic ever overlaps the other.
+        FeedPitches(engine, 2, new[] { new[] { 60f }, new[] { float.NaN } }, 0.0, 0.50);
+        FeedPitches(engine, 2, new[] { new[] { float.NaN }, new[] { 60f } }, 0.50, 0.48);
+        engine.Update(1.5); // past the 0-960 master phrase
+
+        Assert.AreEqual(1, grades.Count, "One phrase grade");
+        Assert.AreEqual(PhraseGrade.Awesome, grades[0],
+            "The part's meter completes from the two mics' DISJOINT halves " +
+            "(RED against the max-per-mic cap: it tops out near one half → no " +
+            "awesome).");
+        Assert.GreaterOrEqual(metersByPart[1], 0.9,
+            "HARM1's meter must reflect the TEMPORAL UNION of the mics' covered " +
+            "spans (full line), not the MAX single-mic total (~half) — disjoint " +
+            "mic coverage counts twice, overlapping coverage once.");
+    }
+
     // ================================================================
     // Scoring Tests (14-15)
     // AC12: Scoring through the standard path

@@ -40,6 +40,17 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// </summary>
         public IReadOnlyList<double> LastTickPartDeltas => _lastTickPartDeltas;
 
+        /// <summary>
+        /// Chart tick at which the most recent per-part credit accumulation began.
+        /// Together with <see cref="LastTickPartDeltas"/> this gives the exact
+        /// covered span of the just-committed credit:
+        /// [LastCreditSpanStartTick, CurrentTick). Only meaningful on a tick where
+        /// a delta was committed (the masks/deltas are zero otherwise). Used by
+        /// PartyVocalsCoordinatorEngine to track the temporal union of
+        /// broadcast-covered ticks per part.
+        /// </summary>
+        public uint LastCreditSpanStartTick { get; private set; }
+
         // Store reference to all parts for hit testing
         protected readonly IReadOnlyList<VocalsPart> _allParts;
         private readonly int _botPartIndex;
@@ -58,6 +69,12 @@ namespace YARG.Core.Engine.Vocals.Engines
         private readonly double[] _singleMicPartHits;
         // Bitmask of parts that the single mic is hitting this tick
         private uint _singleMicHittingParts;
+        // Bitmask of the parts above whose CURRENT matched note is pitched (has a real
+        // MIDI pitch). A bit set in _singleMicHittingParts but not here means that part
+        // was matched through a talkie (non-pitched) note this tick. Consumed by
+        // PartyVocalsCoordinatorEngine to classify a mic's matched set as all-talkie
+        // (broadcast credit) vs any-pitched (conserved bucket).
+        private uint _singleMicHittingPitchedParts;
 
         public YargFreeVocalsEngine(
             InstrumentDifficulty<VocalNote> primaryChart,
@@ -83,11 +100,27 @@ namespace YARG.Core.Engine.Vocals.Engines
             _lastTickPartDeltas = new double[allParts.Count];
             _singleMicPartHits = new double[allParts.Count];
             _singleMicHittingParts = 0u;
+            _singleMicHittingPitchedParts = 0u;
 
             // Build countdowns from all parts for free vocals; exclude percussion so
             // percussion-only stretches show the countdown wheel instead of being
             // hidden as a continuous note stream.
             GetWaitCountdowns(PartyVocalsCountdownNotes.ExcludingPercussion(allParts.ToList()));
+        }
+
+        public override void Reset(bool keepCurrentButtons = false)
+        {
+            // The hitting masks are per-tick transients normally re-cleared by
+            // AccumulateMicPartHits; a rewind/practice seek must not leave the
+            // pre-seek match exposed through GetMicHittingParts().
+            // (Safety: BaseEngine's constructor calls this virtual before the
+            // derived fields exist — these two are plain scalar fields with
+            // inline initializers, so clearing them here is safe; nothing
+            // array-backed is touched.)
+            _singleMicHittingParts = 0u;
+            _singleMicHittingPitchedParts = 0u;
+
+            base.Reset(keepCurrentButtons);
         }
 
         private VocalNote? FindActivePhraseInPart(int partIndex)
@@ -193,6 +226,12 @@ namespace YARG.Core.Engine.Vocals.Engines
             if (NoteIndex >= Notes.Count)
             {
                 HasSang = false;
+                // Chart exhausted: AccumulateMicPartHits (which re-clears these
+                // masks every tick) never runs again, so clear them here or
+                // GetMicHittingParts()/GetMicHittingPitchedParts() would keep
+                // exposing the last match forever after the chart ends.
+                _singleMicHittingParts = 0u;
+                _singleMicHittingPitchedParts = 0u;
                 return;
             }
 
@@ -274,8 +313,9 @@ namespace YARG.Core.Engine.Vocals.Engines
             bool anyMicHit = false;
             representativeHitNote = null;
 
-            // Reset the "currently hitting parts" bitmask for single-mic
+            // Reset the "currently hitting parts" bitmasks for single-mic
             _singleMicHittingParts = 0u;
+            _singleMicHittingPitchedParts = 0u;
 
             if (!wasSinging)
                 return false;
@@ -287,6 +327,11 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             if (ticksSinceLast == 0)
                 return false;
+
+            // Chart-tick start of the span credited by this accumulation; with
+            // LastTickPartDeltas this tells the coordinator exactly which ticks
+            // the just-committed credit covers ([start, CurrentTick)).
+            LastCreditSpanStartTick = lastTick;
 
             // Accumulate hits for all parts to feed the HUD's HARM1/2/3 %
             for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
@@ -306,6 +351,10 @@ namespace YARG.Core.Engine.Vocals.Engines
                                 anyMicHit = true;
                                 representativeHitNote ??= note;
                                 _singleMicHittingParts |= 1u << partIndex;
+                                if (!note.IsNonPitched)
+                                {
+                                    _singleMicHittingPitchedParts |= 1u << partIndex;
+                                }
                             }
                         }
                     }
@@ -347,6 +396,15 @@ namespace YARG.Core.Engine.Vocals.Engines
             int bestPartIndex = CurrentTargetHarmonyIndex;
             VocalNote? bestNote = null;
 
+            // Tie hysteresis: also track the CURRENT target part's own matched percent.
+            // The ascending-index strict-`>` scan below makes the lowest-index maximizer
+            // win every frame, so an equal-percent candidate would displace the part
+            // being displayed. Seeding the switch decision with the current part's own
+            // percent means a candidate must be STRICTLY greater to take over.
+            bool currentPartMatched = false;
+            float currentPartPercent = 0f;
+            VocalNote? currentPartNote = null;
+
             // Check each part for active notes
             for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
             {
@@ -365,6 +423,25 @@ namespace YARG.Core.Engine.Vocals.Engines
                             {
                                 hitAnyNote = true;
 
+                                if (partIndex == CurrentTargetHarmonyIndex)
+                                {
+                                    // ANY match on the current part marks it matched — even a
+                                    // 0% window-boundary match — so the retain branch below can
+                                    // supply the current part's note in the all-zero edge. Capture
+                                    // the FIRST matched note even at 0% (bestNote is null there),
+                                    // then only upgrade the recorded percent/note when strictly greater.
+                                    currentPartMatched = true;
+                                    if (hitPercent > currentPartPercent)
+                                    {
+                                        currentPartPercent = hitPercent;
+                                        currentPartNote = note;
+                                    }
+                                    else if (currentPartNote is null)
+                                    {
+                                        currentPartNote = note;
+                                    }
+                                }
+
                                 // For free vocals, we take the best hit percent from any note
                                 if (hitPercent > bestHitPercent)
                                 {
@@ -380,6 +457,15 @@ namespace YARG.Core.Engine.Vocals.Engines
 
             if (hitAnyNote)
             {
+                // Retain the current part unless a candidate strictly beats its own
+                // matched percent (equal candidates never displace; the current part's
+                // note wins the target-note emit so the needle stays on the retained lane)
+                if (currentPartMatched && bestHitPercent <= currentPartPercent)
+                {
+                    bestPartIndex = CurrentTargetHarmonyIndex;
+                    bestNote = currentPartNote ?? bestNote;
+                }
+
                 // Update target harmony index only if it changed (retains last value when no match)
                 if (bestPartIndex != CurrentTargetHarmonyIndex)
                 {
@@ -486,6 +572,15 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// Used by the coordinator for visual feedback.
         /// </summary>
         public uint GetMicHittingParts() => _singleMicHittingParts;
+
+        /// <summary>
+        /// Get the bitmask of parts that the single mic is hitting this tick through a
+        /// PITCHED note (a bit in <see cref="GetMicHittingParts"/> without the matching
+        /// bit here means that part was matched via a talkie/non-pitched note). Used by
+        /// the coordinator to classify a mic's matched set as all-talkie (broadcast
+        /// credit) vs any-pitched (conserved bucket).
+        /// </summary>
+        public uint GetMicHittingPitchedParts() => _singleMicHittingPitchedParts;
 
         /// <summary>
         /// Submit a pitch reading for the single mic. Used by the coordinator under
