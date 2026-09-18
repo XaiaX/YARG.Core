@@ -47,6 +47,11 @@ public sealed class PartyVocalsCoordinatorEngineTests
             BindingFlags.NonPublic | BindingFlags.Instance)
         ?? throw new InvalidOperationException("Could not find RunAllocatorIntoCanonicalMeters");
 
+    private static readonly MethodInfo GetTicksInPhraseForPartMethod =
+        typeof(PartyVocalsCoordinatorEngine).GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
+            .Single(method => method.Name == "GetTicksInPhraseForPart"
+                && method.GetParameters().Length == 2);
+
     // ================================================================
     // Helpers
     // ================================================================
@@ -69,6 +74,58 @@ public sealed class PartyVocalsCoordinatorEngineTests
         note.AddChildNote(lyricNote);
         var lyrics = new List<LyricEvent> { new(LyricSymbolFlags.None, "La", 0.0, tickOffset) };
         part.NotePhrases.Add(new VocalsPhrase(0.0, 2.0, tickOffset, tickLength, note, lyrics));
+    }
+
+    [Test]
+    public void GetTicksInPhraseForPart_SumsAllOverlappingSubPhrases()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60); // Master phrase spans both HARM1 sub-phrases.
+        AddPhrase(parts[1], 0, 480, 64);
+        AddPhrase(parts[1], 480, 480, 67);
+
+        var engine = CreateCoordinator(parts, micCount: 2);
+        var masterPhrase = parts[0].NotePhrases[0].PhraseParentNote;
+        var ticks = (uint)GetTicksInPhraseForPartMethod.Invoke(
+            engine, new object[] { parts[1], masterPhrase })!;
+
+        // Each sub-phrase has one 240-tick lyric child, so both overlapping
+        // sub-phrases together contribute 480 ticks.
+        Assert.That(ticks, Is.EqualTo(480u));
+    }
+
+    [Test]
+    public void GetTicksInPhraseForPart_SumsContainedSubPhrases()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
+        AddPhrase(parts[0], 0, 960, 60); // Master phrase fully contains both HARM1 sub-phrases.
+        AddPhrase(parts[1], 120, 240, 64);
+        AddPhrase(parts[1], 600, 240, 67);
+
+        var engine = CreateCoordinator(parts, micCount: 2);
+        var masterPhrase = parts[0].NotePhrases[0].PhraseParentNote;
+        var ticks = (uint)GetTicksInPhraseForPartMethod.Invoke(
+            engine, new object[] { parts[1], masterPhrase })!;
+
+        // Each strictly contained sub-phrase has one 120-tick lyric child.
+        Assert.That(ticks, Is.EqualTo(240u));
+    }
+
+    [Test]
+    public void GetTicksInPhraseForPart_SumsContainedSubPhrasesWhenHarmonyIsMaster()
+    {
+        var parts = new List<VocalsPart> { CreateVocalsPart(true), CreateVocalsPart() };
+        AddPhrase(parts[0], 0, 960, 60); // Master phrase fully contains both VOCALS sub-phrases.
+        AddPhrase(parts[1], 120, 240, 64);
+        AddPhrase(parts[1], 600, 240, 67);
+
+        var engine = CreateCoordinator(parts, micCount: 2);
+        var masterPhrase = parts[0].NotePhrases[0].PhraseParentNote;
+        var ticks = (uint)GetTicksInPhraseForPartMethod.Invoke(
+            engine, new object[] { parts[1], masterPhrase })!;
+
+        // Each strictly contained sub-phrase has one 120-tick lyric child.
+        Assert.That(ticks, Is.EqualTo(240u));
     }
 
     [Test]
