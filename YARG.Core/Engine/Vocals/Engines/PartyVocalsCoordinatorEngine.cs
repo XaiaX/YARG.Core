@@ -1005,14 +1005,14 @@ namespace YARG.Core.Engine.Vocals.Engines
             foreach (var partPhrase in part.NotePhrases)
             {
                 var phraseNote = partPhrase.PhraseParentNote;
-                if (phraseNote.Tick >= masterEnd || phraseNote.TickEnd <= masterStart) continue;
+                if (phraseNote.Tick >= masterEnd) break;
+                if (phraseNote.TickEnd <= masterStart) continue;
 
                 foreach (var noteInPhrase in phraseNote.ChildNotes)
                 {
                     if (noteInPhrase.IsPercussion) continue;
                     totalTime += phraseNote.GetTicksForNote(noteInPhrase);
                 }
-                break;
             }
             return totalTime;
         }
