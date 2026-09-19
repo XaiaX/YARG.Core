@@ -1010,8 +1010,12 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                 foreach (var noteInPhrase in phraseNote.ChildNotes)
                 {
-                    if (noteInPhrase.IsPercussion) continue;
-                    totalTime += phraseNote.GetTicksForNote(noteInPhrase);
+                    if (noteInPhrase.IsPercussion || noteInPhrase.Tick >= masterEnd
+                        || noteInPhrase.TotalTickEnd <= masterStart) continue;
+
+                    // Clamp against the master phrase, not the source phrase. This counts
+                    // only the overlap and avoids dropping a carried note at the boundary.
+                    totalTime += masterPhrase.GetTicksForNote(noteInPhrase);
                 }
             }
             return totalTime;
