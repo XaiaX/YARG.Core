@@ -220,6 +220,7 @@ namespace MoonscraperChartEditor.Song.IO
         {
             SuppressNonStrictStompsAndSplashes,
             CreateKickFlams,
+            ReplaceDrumFillDuringCoda,
             SetCodaFlags,
         };
 

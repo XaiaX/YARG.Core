@@ -62,7 +62,8 @@ namespace YARG.Core.Chart
                 }
             }
 
-            var notes = ResolveDownchartCollisions(unresolvedChords);
+            var resolvedOrigins = new Dictionary<MoonNote, EliteDrumNote>();
+            var notes = ResolveDownchartCollisions(unresolvedChords, resolvedOrigins);
 
             if (eliteDrumsDifficulty.Notes.Count > 0 && notes.Count == 0)
             {
@@ -71,9 +72,15 @@ namespace YARG.Core.Chart
                     difficulty, eliteDrumsDifficulty.Notes.Count);
             }
 
+            var codaEndOrigins = new HashSet<EliteDrumNote>();
             for (var i = 0; i < notes.Count; i++)
             {
                 var note = notes[i];
+                if (resolvedOrigins.TryGetValue(note, out var origin) && origin.IsCodaEnd)
+                {
+                    note.flags |= MoonNote.Flags.CodaEnd;
+                    codaEndOrigins.Add(origin);
+                }
                 if (i > 0)
                 {
                     note.previous = notes[i - 1];
@@ -82,7 +89,27 @@ namespace YARG.Core.Chart
 
                 moonChart.Add(note);
             }
-            
+
+            // A CodaEnd source can be omitted (for example an unforced pedal or a
+            // capped third hand gem). Retain the marker on the final surviving output
+            // chord at or before that source endpoint, without touching the source track.
+            foreach (var sourceChord in eliteDrumsDifficulty.Notes)
+            {
+                foreach (var source in sourceChord.AllNotes)
+                {
+                    if (!source.IsCodaEnd || codaEndOrigins.Contains(source))
+                    {
+                        continue;
+                    }
+
+                    var fallback = notes.LastOrDefault(note => note.tick <= source.Tick);
+                    if (fallback is not null)
+                    {
+                        fallback.flags |= MoonNote.Flags.CodaEnd;
+                    }
+                }
+            }
+
             var (discoOnText, discoOffText) = GetDiscoFlipEventText(difficulty);
             List<MoonPhrase> phrases = new();
             List<MoonText> textEvents = new()
@@ -110,7 +137,10 @@ namespace YARG.Core.Chart
                         phrases.Add(new(phrase.Tick, phrase.TickLength, MoonPhrase.Type.ProDrums_KickLane));
                         break;
                     case PhraseType.BigRockEnding:
-                        // TODO
+                        phrases.Add(new(phrase.Tick, phrase.TickLength, MoonPhrase.Type.BigRockEnding));
+                        break;
+                    case PhraseType.Coda:
+                        phrases.Add(new(phrase.Tick, phrase.TickLength, MoonPhrase.Type.Coda));
                         break;
                     case PhraseType.Solo:
                         phrases.Add(new(phrase.Tick, phrase.TickLength, MoonPhrase.Type.Solo));
@@ -129,7 +159,11 @@ namespace YARG.Core.Chart
                 }
             }
 
-            foreach (var phrase in phrases)
+            phrases.AddRange(AddConvertedEliteLanePhrases(eliteDrumsDifficulty.Phrases, notes, resolvedOrigins));
+
+            // Both ordinary and converted phrases must be appended in chronological order.
+            // MoonChart.Add intentionally rejects an item earlier than the last item.
+            foreach (var phrase in phrases.OrderBy(phrase => phrase.tick))
             {
                 moonChart.Add(phrase);
             }
@@ -158,7 +192,7 @@ namespace YARG.Core.Chart
 
         private static DownchartChord? DownchartEliteDrumsChord(EliteDrumNote eliteDrumChord, List<Phrase> phrases)
         {
-            MoonNote? kick = null;
+            DownchartNote? kick = null;
             DownchartNote? firstHandGem = null;
             DownchartNote? secondHandGem = null;
 
@@ -186,7 +220,7 @@ namespace YARG.Core.Chart
                 {
                     if (downchartedNote.MoonNote.drumPad == MoonNote.DrumPad.Kick)
                     {
-                        kick = downchartedNote.MoonNote;
+                        kick = downchartedNote;
                     }
                     else if (firstHandGem is null)
                     {
@@ -298,7 +332,8 @@ namespace YARG.Core.Chart
 
             return notes;
         }
-        private List<MoonNote> ResolveDownchartCollisions(List<DownchartChord> unresolvedChords)
+        private List<MoonNote> ResolveDownchartCollisions(List<DownchartChord> unresolvedChords,
+            Dictionary<MoonNote, EliteDrumNote> resolvedOrigins)
         {
             List<MoonNote> notes = new();
 
@@ -306,20 +341,21 @@ namespace YARG.Core.Chart
             {
                 foreach (var note in ResolveDownchartCollision(unresolvedChord))
                 {
-                    notes.Add(note);
+                    notes.Add(note.MoonNote);
+                    resolvedOrigins[note.MoonNote] = note.Origin;
                 }
             }
 
             return notes;
         }
 
-        private List<MoonNote> ResolveDownchartCollision(DownchartChord downchartChord)
+        private List<DownchartNote> ResolveDownchartCollision(DownchartChord downchartChord)
         {
-            List<MoonNote> notes = new();
+            List<DownchartNote> notes = new();
 
             if (downchartChord.Kick is not null)
             {
-                notes.Add(downchartChord.Kick!);
+                notes.Add(downchartChord.Kick.Value);
             }
 
             if (downchartChord.SecondHandGem is null)
@@ -327,7 +363,7 @@ namespace YARG.Core.Chart
                 // Can't have collisions without a second hand gem, so return early
                 if (downchartChord.FirstHandGem is not null)
                 {
-                    notes.Add(downchartChord.FirstHandGem.Value.MoonNote);
+                    notes.Add(downchartChord.FirstHandGem.Value);
                 }
 
                 return notes;
@@ -414,10 +450,84 @@ namespace YARG.Core.Chart
                 }
             }
 
-            notes.Add(firstHandGem.MoonNote);
-            notes.Add(secondHandGem.MoonNote);
+            notes.Add(firstHandGem);
+            notes.Add(secondHandGem);
             return notes;
         }
+        private static List<MoonPhrase> AddConvertedEliteLanePhrases(List<Phrase> sourcePhrases,
+            List<MoonNote> notes, Dictionary<MoonNote, EliteDrumNote> origins)
+        {
+            List<MoonPhrase> convertedPhrases = new();
+            foreach (var phrase in sourcePhrases)
+            {
+                if (phrase.Type is not (PhraseType.EliteDrums_KickLane or
+                    PhraseType.EliteDrums_RightCrashLane or PhraseType.EliteDrums_RideLane or
+                    PhraseType.EliteDrums_Tom3Lane or PhraseType.EliteDrums_Tom2Lane or
+                    PhraseType.EliteDrums_Tom1Lane or PhraseType.EliteDrums_LeftCrashLane or
+                    PhraseType.EliteDrums_HiHatLane or PhraseType.EliteDrums_SnareLane or
+                    PhraseType.EliteDrums_HatPedalLane))
+                {
+                    continue;
+                }
+
+                var laneNotes = notes.Where(note => note.tick >= phrase.Tick &&
+                    note.tick <= phrase.TickEnd && origins.TryGetValue(note, out var origin) &&
+                    origin.Pad == GetElitePadForPhrase(phrase.Type)).ToList();
+                if (laneNotes.Count == 0)
+                {
+                    continue;
+                }
+
+                var distinctSources = laneNotes.Select(note => origins[note]).Distinct().ToList();
+                if (distinctSources.Count < 2)
+                {
+                    continue;
+                }
+
+                var firstChord = laneNotes.Where(note => note.tick == laneNotes[0].tick).ToList();
+                var firstOutput = phrase.Type == PhraseType.EliteDrums_KickLane
+                    ? notes.FirstOrDefault(note => note.tick >= phrase.Tick &&
+                        note.tick <= phrase.TickEnd && note.drumPad == MoonNote.DrumPad.Kick)
+                    : notes.FirstOrDefault(note => note.tick >= phrase.Tick &&
+                        note.tick <= phrase.TickEnd && note.drumPad != MoonNote.DrumPad.Kick);
+                var hasRepresentableTarget = phrase.Type == PhraseType.EliteDrums_KickLane
+                    ? firstChord.Any(note => note.drumPad == MoonNote.DrumPad.Kick) && firstOutput is not null
+                    : firstChord.Any(note => note.drumPad != MoonNote.DrumPad.Kick &&
+                        laneNotes.Skip(firstChord.Count).Any(later => later.drumPad == note.drumPad &&
+                            origins[later] != origins[note])) && firstOutput is not null &&
+                        firstOutput.drumPad == firstChord.First(note => note.drumPad != MoonNote.DrumPad.Kick).drumPad;
+                if (!hasRepresentableTarget)
+                {
+                    continue;
+                }
+
+                var type = phrase.Type == PhraseType.EliteDrums_KickLane
+                    ? MoonPhrase.Type.ProDrums_KickLane : MoonPhrase.Type.TremoloLane;
+                if (!convertedPhrases.Any(existing => existing.tick == phrase.Tick &&
+                    existing.length == phrase.TickLength && existing.type == type))
+                {
+                    convertedPhrases.Add(new MoonPhrase(phrase.Tick, phrase.TickLength, type));
+                }
+            }
+
+            return convertedPhrases;
+        }
+
+        private static int GetElitePadForPhrase(PhraseType type) => type switch
+        {
+            PhraseType.EliteDrums_HatPedalLane => (int) EliteDrumPad.HatPedal,
+            PhraseType.EliteDrums_KickLane => (int) EliteDrumPad.Kick,
+            PhraseType.EliteDrums_SnareLane => (int) EliteDrumPad.Snare,
+            PhraseType.EliteDrums_HiHatLane => (int) EliteDrumPad.HiHat,
+            PhraseType.EliteDrums_LeftCrashLane => (int) EliteDrumPad.LeftCrash,
+            PhraseType.EliteDrums_Tom1Lane => (int) EliteDrumPad.Tom1,
+            PhraseType.EliteDrums_Tom2Lane => (int) EliteDrumPad.Tom2,
+            PhraseType.EliteDrums_Tom3Lane => (int) EliteDrumPad.Tom3,
+            PhraseType.EliteDrums_RideLane => (int) EliteDrumPad.Ride,
+            PhraseType.EliteDrums_RightCrashLane => (int) EliteDrumPad.RightCrash,
+            _ => -1,
+        };
+
         private static MoonNote.DrumPad? GetDrumPadForChannelFlag(EliteDrumNote drum, MoonNote.DrumPad? unforced)
         {
             return drum.ChannelFlag switch
@@ -433,14 +543,14 @@ namespace YARG.Core.Chart
 
     internal readonly struct DownchartChord
     {
-        public DownchartChord(MoonNote? kick, DownchartNote? firstHandGem, DownchartNote? secondHandGem)
+        public DownchartChord(DownchartNote? kick, DownchartNote? firstHandGem, DownchartNote? secondHandGem)
         {
             Kick = kick;
             FirstHandGem = firstHandGem;
             SecondHandGem = secondHandGem;
         }
 
-        public MoonNote? Kick { get; }
+        public DownchartNote? Kick { get; }
         public DownchartNote? FirstHandGem { get; }
         public DownchartNote? SecondHandGem { get; }
 

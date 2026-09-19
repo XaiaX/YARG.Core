@@ -359,6 +359,42 @@ namespace YARG.Core.UnitTests.Parsing
                 "the native fallback path is unaffected by invalid downchart outputs");
         }
 
+        [Test]
+        public void ForcedEliteDrumsDownchart_OrdersGeneratedLanesAfterEarlierOrdinaryPhrases()
+        {
+            var song = CreateSong();
+            var chart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            chart.Add(new MoonPhrase(TICKS(0), TICKS(1), MoonPhrase.Type.Starpower));
+            chart.Add(new MoonPhrase(TICKS(2), TICKS(2), MoonPhrase.Type.EliteDrums_SnareLane));
+            chart.Add(new MoonNote(TICKS(2), (int) EliteDrumNote.EliteDrumPad.Snare));
+            chart.Add(new MoonNote(TICKS(3), (int) EliteDrumNote.EliteDrumPad.Snare));
+
+            var downchart = LoadDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(downchart.Phrases, Has.Count.EqualTo(2));
+                Assert.That(downchart.Phrases[0].Type, Is.EqualTo(PhraseType.StarPower));
+                Assert.That(downchart.Phrases[1].Type, Is.EqualTo(PhraseType.TremoloLane));
+                Assert.That(downchart.Phrases[1].Tick, Is.EqualTo(TICKS(2)));
+            }
+        }
+
+        [Test]
+        public void ForcedEliteDrumsDownchart_HandLaneIgnoresKickFirstInChord()
+        {
+            var song = CreateSong();
+            var chart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            chart.Add(new MoonPhrase(TICKS(1), TICKS(2), MoonPhrase.Type.EliteDrums_SnareLane));
+            chart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.Kick));
+            chart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.Snare));
+            chart.Add(new MoonNote(TICKS(2), (int) EliteDrumNote.EliteDrumPad.Snare));
+
+            var downchart = LoadDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
+
+            Assert.That(downchart.Phrases.Any(phrase => phrase.Type == PhraseType.TremoloLane), Is.True);
+        }
+
         private static IReadOnlyDictionary<Instrument, InstrumentTrack<DrumNote>> LoadDowncharts(MoonSong song)
         {
             var eliteTrack = new MoonSongLoader(song, ParseSettings.Default).LoadEliteDrumsTrack(Instrument.EliteDrums);

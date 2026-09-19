@@ -242,7 +242,16 @@ namespace YARG.Core.Chart
                     MoonPhrase.Type.ProDrums_Activation => PhraseType.DrumFill,
                     MoonPhrase.Type.ProDrums_KickLane   => PhraseType.KickLane,
 
-                    MoonPhrase.Type.EliteDrums_KickLane => PhraseType.EliteDrums_KickLane,
+                    MoonPhrase.Type.EliteDrums_RightCrashLane => PhraseType.EliteDrums_RightCrashLane,
+                    MoonPhrase.Type.EliteDrums_RideLane       => PhraseType.EliteDrums_RideLane,
+                    MoonPhrase.Type.EliteDrums_Tom3Lane       => PhraseType.EliteDrums_Tom3Lane,
+                    MoonPhrase.Type.EliteDrums_Tom2Lane       => PhraseType.EliteDrums_Tom2Lane,
+                    MoonPhrase.Type.EliteDrums_Tom1Lane       => PhraseType.EliteDrums_Tom1Lane,
+                    MoonPhrase.Type.EliteDrums_LeftCrashLane  => PhraseType.EliteDrums_LeftCrashLane,
+                    MoonPhrase.Type.EliteDrums_HiHatLane      => PhraseType.EliteDrums_HiHatLane,
+                    MoonPhrase.Type.EliteDrums_SnareLane      => PhraseType.EliteDrums_SnareLane,
+                    MoonPhrase.Type.EliteDrums_KickLane       => PhraseType.EliteDrums_KickLane,
+                    MoonPhrase.Type.EliteDrums_HatPedalLane   => PhraseType.EliteDrums_HatPedalLane,
 
                     MoonPhrase.Type.ProKeys_RangeShift0 => PhraseType.ProKeys_RangeShift0,
                     MoonPhrase.Type.ProKeys_RangeShift1 => PhraseType.ProKeys_RangeShift1,
