@@ -81,6 +81,7 @@ namespace YARG.Core.Chart
             InstrumentTrack<EliteDrumNote> eliteDrumsTrack)
         {
             var downcharts = new Dictionary<Instrument, InstrumentTrack<DrumNote>>();
+            YargLogger.LogInfo($"[ED-log] Core LoadEliteDrumsDownchartTracks requested={(_settings.EliteDrumsDownchartOutputs is null ? "<null>" : string.Join(",", _settings.EliteDrumsDownchartOutputs))} eliteEmpty={eliteDrumsTrack is null || eliteDrumsTrack.IsEmpty}");
 
             if (_settings.EliteDrumsDownchartOutputs is null)
             {
@@ -101,13 +102,22 @@ namespace YARG.Core.Chart
                     continue;
                 }
 
+                YargLogger.LogInfo($"[ED-log] Core generating target={instrument} eliteEmpty={eliteDrumsTrack is null || eliteDrumsTrack.IsEmpty}");
                 var track = LoadEliteDrumsDownchartTrack(instrument, eliteDrumsTrack);
+                YargLogger.LogInfo($"[ED-log] Core generated target={instrument} trackEmpty={track.IsEmpty}");
 
                 // Only expose downcharts that actually contain notes; otherwise callers
-                // fall back to the native drums tracks
+                // fall back to the native drums tracks. Log this explicitly because the
+                // fallback is otherwise indistinguishable from a native Pro chart.
                 if (!track.IsEmpty)
                 {
                     downcharts.Add(instrument, track);
+                }
+                else
+                {
+                    YargLogger.LogFormatWarning(
+                        "Elite Drums downchart target {0} generated an empty track; falling back to the native drums track.",
+                        instrument);
                 }
             }
 
@@ -153,6 +163,9 @@ namespace YARG.Core.Chart
 
             if (eliteDrumsTrack is null)
             {
+                YargLogger.LogFormatWarning(
+                    "Cannot generate Elite Drums downchart target {0}: no Elite Drums track was parsed; falling back to the native drums track.",
+                    instrument);
                 return false;
             }
 
@@ -161,6 +174,9 @@ namespace YARG.Core.Chart
 
             if (_downCharts is null)
             {
+                YargLogger.LogFormatWarning(
+                    "Cannot generate Elite Drums downchart target {0}: all Elite Drums difficulties converted to zero notes; falling back to the native drums track.",
+                    instrument);
                 return false;
             }
 

@@ -1,6 +1,8 @@
 ﻿using MoonscraperChartEditor.Song;
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using YARG.Core.Logging;
 using static YARG.Core.Chart.EliteDrumNote;
 
 namespace YARG.Core.Chart
@@ -23,6 +25,8 @@ namespace YARG.Core.Chart
             };
 
             var atLeastOneDownchartHasAtLeastOneNote = false;
+            YargLogger.LogInfo($"[ED-log] Core converted Elite difficulties: " +
+                string.Join(",", downcharts.Select(entry => $"{entry.Key}={entry.Value.notes.Count}")));
             foreach (var downchart in downcharts)
             {
                 if (downchart.Value.notes.Count == 0)
@@ -59,6 +63,13 @@ namespace YARG.Core.Chart
             }
 
             var notes = ResolveDownchartCollisions(unresolvedChords);
+
+            if (eliteDrumsDifficulty.Notes.Count > 0 && notes.Count == 0)
+            {
+                YargLogger.LogFormatWarning(
+                    "Elite Drums difficulty {0} had {1} source notes but converted to zero notes (all source notes were ineligible or discarded).",
+                    difficulty, eliteDrumsDifficulty.Notes.Count);
+            }
 
             for (var i = 0; i < notes.Count; i++)
             {
