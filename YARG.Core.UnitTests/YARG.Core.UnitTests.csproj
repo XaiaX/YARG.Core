@@ -11,6 +11,11 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.3.0" />
+    <!-- Tests directly construct and inspect DryWetMIDI types; declare the Core dependency explicitly
+         so a fresh test-project restore has its compile reference. -->
+    <PackageReference Include="Melanchall.DryWetMidi.Nativeless" Version="7.0.0" />
+    <!-- Tests implement Core logging seams that expose ZString types. -->
+    <PackageReference Include="ZString" Version="2.5.1" />
     <PackageReference Include="NUnit" Version="4.5.1" />
     <PackageReference Include="NUnit3TestAdapter" Version="6.2.0" />
     <PackageReference Include="NUnit.Analyzers" Version="4.12.0">
