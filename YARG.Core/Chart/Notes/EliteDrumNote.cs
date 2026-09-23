@@ -24,16 +24,20 @@ namespace YARG.Core.Chart
         public bool IsFlam { get; set; }
         public EliteDrumsChannelFlag ChannelFlag { get; set; }
         public float? HitVelocity;
+        /// <summary>Immutable authored source identity, retained through cloning and modifiers.</summary>
+        public EliteDrumSourceDefinition? SourceDefinition { get; }
         public bool IsStarPowerActivator => (DrumFlags & DrumNoteFlags.StarPowerActivator) != 0;
 
         public EliteDrumNote (EliteDrumPad pad, DrumNoteType dynamics, EliteDrumsHatState hatState, EliteDrumsHatPedalType hatPedalType, bool isFlam, DrumNoteFlags drumFlags,
-            NoteFlags flags, EliteDrumsChannelFlag channelFlag, double time, uint tick, bool isDoubleKick)
-            : this((int)pad, dynamics, hatState, hatPedalType, isFlam, drumFlags, flags, channelFlag, time, tick, isDoubleKick)
+            NoteFlags flags, EliteDrumsChannelFlag channelFlag, double time, uint tick, bool isDoubleKick,
+            EliteDrumSourceDefinition? sourceDefinition = null)
+            : this((int)pad, dynamics, hatState, hatPedalType, isFlam, drumFlags, flags, channelFlag, time, tick, isDoubleKick, sourceDefinition)
         {
         }
 
         public EliteDrumNote(int pad, DrumNoteType dynamics, EliteDrumsHatState hatState, EliteDrumsHatPedalType hatPedalType, bool isFlam, DrumNoteFlags drumFlags,
-            NoteFlags flags, EliteDrumsChannelFlag channelFlag, double time, uint tick, bool isDoubleKick)
+            NoteFlags flags, EliteDrumsChannelFlag channelFlag, double time, uint tick, bool isDoubleKick,
+            EliteDrumSourceDefinition? sourceDefinition = null)
             : base(flags, time, 0, tick, 0)
         {
             Pad = pad;
@@ -45,6 +49,7 @@ namespace YARG.Core.Chart
             ChannelFlag = channelFlag;
             _padMask = 1 << pad;
             IsDoubleKick = isDoubleKick;
+            SourceDefinition = sourceDefinition;
         }
 
         public EliteDrumNote(EliteDrumNote other) : base(other)
@@ -52,6 +57,11 @@ namespace YARG.Core.Chart
             Pad = other.Pad;
             Dynamics = other.Dynamics;
             IsDoubleKick = other.IsDoubleKick;
+            HatState = other.HatState;
+            HatPedalType = other.HatPedalType;
+            IsFlam = other.IsFlam;
+            ChannelFlag = other.ChannelFlag;
+            SourceDefinition = other.SourceDefinition;
 
             DrumFlags = _drumFlags = other._drumFlags;
 

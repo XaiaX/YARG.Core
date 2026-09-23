@@ -8,6 +8,8 @@ namespace YARG.Core.Chart
 {
     internal partial class MoonSongLoader : ISongLoader
     {
+        private int _eliteSourceOrdinal;
+
         public InstrumentTrack<EliteDrumNote> LoadEliteDrumsTrack(Instrument instrument)
         {
             return instrument.ToNativeGameMode() is GameMode.EliteDrums ?
@@ -17,6 +19,7 @@ namespace YARG.Core.Chart
 
         private InstrumentTrack<EliteDrumNote> LoadEliteDrumsTrack(Instrument instrument, CreateNoteDelegate<EliteDrumNote> createNote)
         {
+            _eliteSourceOrdinal = 0;
             var difficulties = new Dictionary<Difficulty, InstrumentDifficulty<EliteDrumNote>>()
             {
                 { Difficulty.Easy, LoadDifficulty(instrument, Difficulty.Easy, createNote, HandleEliteDrumsTextEvent) },
@@ -43,7 +46,15 @@ namespace YARG.Core.Chart
             var isDoubleKick = moonNote.eliteDrumPad is MoonNote.EliteDrumPad.Kick && ((moonNote.flags & MoonNote.Flags.InstrumentPlus) != 0);
 
             double time = _moonSong.TickToTime(moonNote.tick);
-            return new(pad, noteDynamics, hatState, hatPedalType, isFlam, drumFlags, generalFlags, channelFlag, time, moonNote.tick, isDoubleKick);
+            var source = new EliteDrumSourceDefinition(
+                $"elite:{_currentDifficulty}:{moonNote.tick}:{moonNote.rawNote}",
+                _eliteSourceOrdinal++,
+                (int)pad,
+                moonNote.tick,
+                moonNote.length,
+                time,
+                _moonSong.TickToTime(moonNote.tick + moonNote.length) - time);
+            return new(pad, noteDynamics, hatState, hatPedalType, isFlam, drumFlags, generalFlags, channelFlag, time, moonNote.tick, isDoubleKick, source);
         }
 
         private void HandleEliteDrumsTextEvent(MoonText text)

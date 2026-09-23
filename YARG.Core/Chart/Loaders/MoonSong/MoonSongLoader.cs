@@ -492,13 +492,6 @@ namespace YARG.Core.Chart
                 : phrase.tick <= songObj.tick && songObj.tick <  (phrase.tick + phrase.length);
         }
 
-        // REMOVED: IsNoteClosestToEndOfPhrase
-        // Removal date: 2026-04-14
-        // This method worked around the exclusive end boundary in IsEventInPhrase() using
-        // distance-based logic to find notes closest to phrase ends. It had zero callers
-        // in YARG.Core or the Unity project. The root cause is now fixed by the inclusiveEnd
-        // parameter on IsEventInPhrase(). Restore from git history if needed.
-
         private MoonChart GetMoonChart(Instrument instrument, Difficulty difficulty)
         {
             var moonInstrument = YargInstrumentToMoonInstrument(instrument);

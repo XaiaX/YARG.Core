@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using YARG.Core.Chart;
 using YARG.Core.Input;
 using YARG.Core.Logging;
@@ -37,11 +38,40 @@ namespace YARG.Core.Engine.Drums
         protected int Kick;
 
         private int _wildcardMask;
+        private readonly EliteFillRuntimeScheduler? _eliteFillRuntime;
+        private readonly EliteFillPolicyV1? _eliteFillPolicy;
+
+        protected bool IsEliteFillV1Enabled => _eliteFillRuntime is not null;
+        protected EliteFillRuntimeScheduler? EliteFillRuntime => _eliteFillRuntime;
 
         protected DrumsEngine(InstrumentDifficulty<DrumNote> chart, SyncTrack syncTrack,
             DrumsEngineParameters engineParameters, bool isBot, bool isMidiDrumsInput)
             : base(chart, syncTrack, engineParameters, true, isBot)
         {
+            // ConversionOrigin is deliberately the only chart metadata consulted here.
+            // Native and legacy charts therefore remain byte-for-byte on the old path.
+            var physicalNoteList = new List<DrumNote>();
+            foreach (var parent in Notes)
+            {
+                foreach (var physical in parent.AllNotes)
+                {
+                    physicalNoteList.Add(physical);
+                }
+            }
+            var physicalNotes = physicalNoteList.ToArray();
+            if (engineParameters.EliteFillRuleset == DrumsEngineParameters.ELITE_FILL_RULESET_V1 &&
+                engineParameters.EnableLanes && physicalNotes.Length > 0 &&
+                physicalNotes.All(note => note.ConversionOrigin is not null))
+            {
+                _eliteFillPolicy = new EliteFillPolicyV1(new EliteFillPolicyParameters(
+                    entryWindowSeconds: 0.050 * engineParameters.EntryGraceMultiplier));
+                // The scheduler expands chart parents into physical notes itself. Passing the
+                // already-flattened array would enumerate chord children twice and duplicate
+                // dictionary keys for every physical chord member.
+                _eliteFillRuntime = new EliteFillRuntimeScheduler(Notes, _eliteFillPolicy,
+                    CalculateEliteFillOrdinaryWindow);
+            }
+
             _wildcardMask = EngineParameters.Mode switch
             {
                 DrumsEngineParameters.DrumMode.NonProFourLane or
@@ -87,6 +117,59 @@ namespace YARG.Core.Engine.Drums
             KickLaneAutohitExpireTime = -1;
 
             base.Reset(keepCurrentButtons);
+            _eliteFillRuntime?.Reset();
+        }
+
+        protected override void BeforeCodaStart(double codaStartTime)
+        {
+            if (_eliteFillRuntime is not null)
+            {
+                CommitEliteFill(_eliteFillRuntime.FlushBefore(codaStartTime));
+            }
+        }
+
+        protected IReadOnlyList<EliteFillRuntimeScheduler.Commit> FlushEliteFillBefore(double timestamp)
+        {
+            return _eliteFillRuntime?.FlushBefore(timestamp) ?? Array.Empty<EliteFillRuntimeScheduler.Commit>();
+        }
+
+        protected IReadOnlyList<EliteFillRuntimeScheduler.Commit> ExpireEliteFill(double timestamp)
+        {
+            return _eliteFillRuntime?.Expire(timestamp) ?? Array.Empty<EliteFillRuntimeScheduler.Commit>();
+        }
+
+        protected (double FrontEnd, double BackEnd) CalculateEliteFillOrdinaryWindow(DrumNote note)
+        {
+            var hitWindow = EngineParameters.HitWindow.CalculateHitWindow(GetAverageNoteDistance(note));
+            return (EngineParameters.HitWindow.GetFrontEnd(hitWindow),
+                EngineParameters.HitWindow.GetBackEnd(hitWindow));
+        }
+
+        protected bool TryAdjudicateEliteFill(DrumNote note, bool wasHit, double timestamp,
+            out IReadOnlyList<EliteFillRuntimeScheduler.Commit> commits)
+        {
+            if (_eliteFillRuntime is null)
+            {
+                commits = Array.Empty<EliteFillRuntimeScheduler.Commit>();
+                return false;
+            }
+
+            return _eliteFillRuntime.TryAdjudicate(note, wasHit, timestamp, out commits);
+        }
+
+        protected void CommitEliteFill(IReadOnlyList<EliteFillRuntimeScheduler.Commit> commits)
+        {
+            foreach (var commit in commits)
+            {
+                if (commit.WasHit)
+                {
+                    HitNote(commit.Note);
+                }
+                else
+                {
+                    MissNote(commit.Note);
+                }
+            }
         }
 
         public virtual void Overhit()
@@ -223,8 +306,9 @@ namespace YARG.Core.Engine.Drums
                 return;
             }
 
-            // Detect if the last note(s) were skipped
-            bool skipped = SkipPreviousNotes(note.ParentOrSelf);
+            // V1 terminals are adjudicated by the physical-note journal and committed
+            // in chart order; the legacy skip machinery would incorrectly block siblings.
+            bool skipped = IsEliteFillV1Enabled ? false : SkipPreviousNotes(note.ParentOrSelf);
 
             if (note.IsStarPower)
             {

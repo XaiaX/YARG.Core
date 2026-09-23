@@ -22,7 +22,8 @@ namespace YARG.Core.UnitTests.Replays;
 [TestFixture]
 public sealed class ReplayDataEliteDrumsDownchartTests
 {
-    private const int REPLAY_VERSION = 17;
+    private const int REPLAY_VERSION = 20;
+    private const int OLD_REPLAY_VERSION = 17;
 
     private static readonly float[] StarMultiplierThresholds =
         { 0.05f, 0.11f, 0.19f, 0.46f, 0.77f, 1.06f };
@@ -164,7 +165,7 @@ public sealed class ReplayDataEliteDrumsDownchartTests
         var fixedArray = FixedArray<byte>.Alloc(bytes.Length);
         bytes.CopyTo(fixedArray.Span);
         var stream = new FixedArrayStream(fixedArray);
-        var frame = new ReplayFrame(ref stream, REPLAY_VERSION);
+        var frame = new ReplayFrame(ref stream, OLD_REPLAY_VERSION);
 
         Assert.Multiple(() =>
         {
@@ -189,7 +190,23 @@ public sealed class ReplayDataEliteDrumsDownchartTests
         WriteV12Profile(writer, name, instrument);
 
         // Engine parameters + stats + empty inputs, so the frame stream is complete.
-        CreateDrumsParameters().Serialize(writer);
+        // This is deliberately the pre-v20 drum payload: current serialization appends
+        // Elite fill fields that an old replay did not contain.
+        var parameters = CreateDrumsParameters();
+        parameters.HitWindow.Serialize(writer);
+        writer.Write(parameters.MaxMultiplier);
+        writer.Write(parameters.StarPowerWhammyBuffer);
+        writer.Write(parameters.SustainDropLeniency);
+        writer.Write(parameters.StarMultiplierThresholds.Length);
+        foreach (var threshold in parameters.StarMultiplierThresholds) writer.Write(threshold);
+        writer.Write(parameters.SoloBonusStarMultiplierThresholds.Length);
+        foreach (var threshold in parameters.SoloBonusStarMultiplierThresholds) writer.Write(threshold);
+        writer.Write(parameters.SongSpeed);
+        writer.Write(parameters.EnableLanes);
+        writer.Write((byte) parameters.Mode);
+        writer.Write(parameters.VelocityThreshold);
+        writer.Write(parameters.SituationalVelocityWindow);
+        writer.Write(parameters.NoStarPowerOverlap);
         new DrumsStats().Serialize(writer);
         writer.Write(0);
 

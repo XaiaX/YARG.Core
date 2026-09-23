@@ -4,6 +4,7 @@ using MoonscraperChartEditor.Song;
 using MoonscraperChartEditor.Song.IO;
 using YARG.Core.Extensions;
 using YARG.Core.Game;
+using YARG.Core.Engine.Drums;
 using YARG.Core.Logging;
 using YARG.Core.Parsing;
 using static MoonscraperChartEditor.Song.MoonNote;
@@ -13,10 +14,6 @@ namespace YARG.Core.Chart
     internal partial class MoonSongLoader : ISongLoader
     {
         private DrumsMixSetting _mixSetting = DrumsMixSetting.None;
-        private bool _discoFlip = false;
-
-        // Used to wipe lane markers from Beginner
-        private const NoteFlags NO_LANE_FLAGS = ~(NoteFlags.LaneStart | NoteFlags.LaneEnd | NoteFlags.Tremolo | NoteFlags.Trill);
 
         public InstrumentTrack<DrumNote> LoadDrumsTrack(Instrument instrument, InstrumentTrack<EliteDrumNote>? eliteDrumsFallback)
         {
@@ -31,7 +28,6 @@ namespace YARG.Core.Chart
 
         private void ResetDrumMixState()
         {
-            _discoFlip = false;
             _mixSetting = DrumsMixSetting.None;
         }
 
@@ -169,10 +165,15 @@ namespace YARG.Core.Chart
                 return false;
             }
 
-            // Generate downcharts if we haven't already
-            _downCharts ??= DownchartEliteDrumsTrack(eliteDrumsTrack);
+            // Generate and cache independently per requested target: phrase validation must
+            // use the same final target mapping that downstream note creation uses.
+            if (!_downChartsByTarget.TryGetValue(instrument, out var downCharts))
+            {
+                downCharts = DownchartEliteDrumsTrack(eliteDrumsTrack, instrument);
+                if (downCharts is not null) _downChartsByTarget[instrument] = downCharts;
+            }
 
-            if (_downCharts is null)
+            if (downCharts is null)
             {
                 YargLogger.LogFormatWarning(
                     "Cannot generate Elite Drums downchart target {0}: all Elite Drums difficulties converted to zero notes; falling back to the native drums track.",
@@ -180,16 +181,23 @@ namespace YARG.Core.Chart
                 return false;
             }
 
-            _settings.DrumsType = DrumsType.FourLane;
+            // Elite notes are serially converted through the Four Lane/Pro representation,
+            // but this mode is local to generated notes and must not alter shared settings.
+            var generatedCreateNote = instrument is Instrument.FiveLaneDrums
+                ? CreateFiveLaneDrumNoteFromFourLane
+                : createNote;
+            var generatedBeginnerNote = instrument is Instrument.FiveLaneDrums
+                ? CreateFiveLaneDrumBeginnerNoteFromFourLane
+                : beginnerNoteDelegate;
 
             var difficulties = new Dictionary<Difficulty, InstrumentDifficulty<DrumNote>>()
             {
-                { Difficulty.Beginner, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, beginnerNoteDelegate, HandleTextEvent) },
-                { Difficulty.Easy, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, createNote, HandleTextEvent)},
-                { Difficulty.Medium, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Medium, createNote, HandleTextEvent)},
-                { Difficulty.Hard, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Hard, createNote, HandleTextEvent)},
-                { Difficulty.Expert, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Expert, createNote, HandleTextEvent)},
-                { Difficulty.ExpertPlus, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.ExpertPlus, createNote, HandleTextEvent)},
+                { Difficulty.Beginner, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, generatedBeginnerNote, HandleTextEvent) },
+                { Difficulty.Easy, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Easy, generatedCreateNote, HandleTextEvent)},
+                { Difficulty.Medium, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Medium, generatedCreateNote, HandleTextEvent)},
+                { Difficulty.Hard, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Hard, generatedCreateNote, HandleTextEvent)},
+                { Difficulty.Expert, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.Expert, generatedCreateNote, HandleTextEvent)},
+                { Difficulty.ExpertPlus, LoadFromEliteDrumsDownchartDifficulty(instrument, Difficulty.ExpertPlus, generatedCreateNote, HandleTextEvent)},
             };
 
             track = new(instrument, difficulties, GetAnimationTrack(instrument));
@@ -233,6 +241,10 @@ namespace YARG.Core.Chart
             return true;
         }
 
+        private EliteDrumConversionOrigin? GetConversionOrigin(MoonNote moonNote)
+            => _emittedOriginsByTargetAndDifficulty.TryGetValue((_currentInstrument, _currentDifficulty), out var emittedOrigins) &&
+                emittedOrigins.TryGetValue(moonNote, out var origin) ? origin : null;
+
         private DrumNote CreateFourLaneDrumNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
         {
             var pad = GetFourLaneDrumPad(moonNote);
@@ -246,12 +258,23 @@ namespace YARG.Core.Chart
 
             bool isDoubleKick = pad is FourLaneDrumPad.Kick && ((moonNote.flags & Flags.InstrumentPlus) != 0);
 
-            return new DrumNote(pad, noteType, drumFlags, generalFlags, time, moonNote.tick, isDoubleKick, GetStem(pad));
+            var note = new DrumNote(pad, noteType, drumFlags, generalFlags, time, moonNote.tick, isDoubleKick, GetStem(pad));
+            return GetConversionOrigin(moonNote) is { } origin ? note.WithConversionOrigin(origin) : note;
         }
 
         private DrumNote CreateFiveLaneDrumNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
         {
-            var pad = GetFiveLaneDrumPad(moonNote);
+            return CreateFiveLaneDrumNote(moonNote, currentPhrases, notes, null);
+        }
+
+        private DrumNote CreateFiveLaneDrumNoteFromFourLane(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
+        {
+            return CreateFiveLaneDrumNote(moonNote, currentPhrases, notes, DrumsType.FourLane);
+        }
+
+        private DrumNote CreateFiveLaneDrumNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes, DrumsType? conversionType)
+        {
+            var pad = GetFiveLaneDrumPad(moonNote, conversionType);
             var noteType = GetDrumNoteType(moonNote);
 
             var generalFlags = GetGeneralFlags(moonNote, currentPhrases, IsEligibleForDrumTrill);
@@ -262,7 +285,8 @@ namespace YARG.Core.Chart
 
             bool isDoubleKick = pad is FiveLaneDrumPad.Kick && ((moonNote.flags & Flags.InstrumentPlus) != 0);
 
-            return new DrumNote(pad, noteType, drumFlags, generalFlags, time, moonNote.tick, isDoubleKick, GetStem(pad));
+            var note = new DrumNote(pad, noteType, drumFlags, generalFlags, time, moonNote.tick, isDoubleKick, GetStem(pad));
+            return GetConversionOrigin(moonNote) is { } origin ? note.WithConversionOrigin(origin) : note;
         }
 
         private DrumNote CreateFourLaneDrumBeginnerNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
@@ -283,6 +307,11 @@ namespace YARG.Core.Chart
 
             double time = _moonSong.TickToTime(moonNote.tick);
             return new DrumNote(pad, noteType, drumFlags, generalFlags, time, moonNote.tick, false, GetStem(pad));
+        }
+
+        private DrumNote CreateFiveLaneDrumBeginnerNoteFromFourLane(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
+        {
+            return CreateFiveLaneDrumBeginnerNote(moonNote, currentPhrases, notes);
         }
 
         private DrumNote CreateFiveLaneDrumBeginnerNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases, List<DrumNote> notes)
@@ -360,25 +389,6 @@ namespace YARG.Core.Chart
                 return;
 
             _mixSetting = setting;
-            _discoFlip = setting == DrumsMixSetting.DiscoFlip;
-        }
-
-        // Left as an example of how to use phrase validation/replacement despite being no longer required
-        private Phrase? ValidateDrumsPhrase(Phrase phrase, List<Phrase> phrases)
-        {
-            if (phrase.Type != PhraseType.DrumFill)
-            {
-                // We only care about drum fills
-                return phrase;
-            }
-
-            if (phrase.Time < _codaTime)
-            {
-                return phrase;
-            }
-
-            // If we're here, we were presented a drum fill after a coda and that needs to be a BRE
-            return new Phrase(PhraseType.BigRockEnding, phrase.Time, phrase.TimeLength, phrase.Tick, phrase.TickLength);
         }
 
         private FourLaneDrumPad GetFourLaneDrumPad(MoonNote moonNote)
@@ -450,17 +460,17 @@ namespace YARG.Core.Chart
             return pad;
         }
 
-        private FiveLaneDrumPad GetFiveLaneDrumPad(MoonNote moonNote)
+        private FiveLaneDrumPad GetFiveLaneDrumPad(MoonNote moonNote, DrumsType? conversionType = null)
         {
-            return _settings.DrumsType switch
+            return (conversionType ?? _settings.DrumsType) switch
             {
                 DrumsType.FiveLane => MoonNoteToFiveLane(moonNote),
-                DrumsType.FourLane => GetFiveLaneFromFourLane(moonNote),
+                DrumsType.FourLane => GetFiveLaneFromFourLane(moonNote, conversionType),
                 _ => throw new InvalidOperationException($"Unexpected drums type {_settings.DrumsType}! (Drums type should have been calculated by now)")
             };
         }
 
-        private FiveLaneDrumPad GetFiveLaneFromFourLane(MoonNote moonNote)
+        private FiveLaneDrumPad GetFiveLaneFromFourLane(MoonNote moonNote, DrumsType? conversionType = null)
         {
             // Conversion table:
             // | 4-lane Pro    | 5-lane |
@@ -475,7 +485,7 @@ namespace YARG.Core.Chart
             // | Y tom + B tom | R + B  |
             // | B cym + G cym | Y + O  |
 
-            var fourLanePad = MoonNoteToFourLane(moonNote);
+            var fourLanePad = MoonNoteToFourLane(moonNote, conversionType);
             var pad = fourLanePad switch
             {
                 FourLaneDrumPad.Kick         => FiveLaneDrumPad.Kick,
@@ -497,7 +507,7 @@ namespace YARG.Core.Chart
                     if (note == moonNote)
                         continue;
 
-                    var otherPad = MoonNoteToFourLane(note);
+                    var otherPad = MoonNoteToFourLane(note, conversionType);
                     pad = (pad, otherPad) switch
                     {
                         // (Calculated pad, other note in chord) => corrected pad to prevent same-color overlapping
@@ -511,7 +521,17 @@ namespace YARG.Core.Chart
             return pad;
         }
 
-        private FourLaneDrumPad MoonNoteToFourLane(MoonNote moonNote)
+        private static (MoonNote.DrumPad pad, bool cymbal) ApplyDiscoFlipIdentity(
+            MoonNote.DrumPad pad, bool cymbal, bool active)
+        {
+            if (active && pad == MoonNote.DrumPad.Red)
+                return (MoonNote.DrumPad.Yellow, true);
+            if (active && pad == MoonNote.DrumPad.Yellow)
+                return (MoonNote.DrumPad.Red, false);
+            return (pad, cymbal);
+        }
+
+        private FourLaneDrumPad MoonNoteToFourLane(MoonNote moonNote, DrumsType? conversionType = null)
         {
             var pad = moonNote.drumPad switch
             {
@@ -524,25 +544,23 @@ namespace YARG.Core.Chart
                 _ => throw new ArgumentException($"Invalid Moonscraper drum pad {moonNote.drumPad}!", nameof(moonNote))
             };
 
-            if (_currentInstrument is not Instrument.FourLaneDrums)
+            if (conversionType is not null || _currentInstrument is not Instrument.FourLaneDrums)
             {
                 var flags = moonNote.flags;
 
-                // Disco flip
+                // Disco flip uses the same transformed identity for Pro and Five Lane.
                 if (_mixSetting == DrumsMixSetting.DiscoFlip)
                 {
-                    if (pad == FourLaneDrumPad.RedDrum)
+                    var identity = ApplyDiscoFlipIdentity(moonNote.drumPad,
+                        (flags & MoonNote.Flags.ProDrums_Cymbal) != 0, true);
+                    pad = identity.pad switch
                     {
-                        // Red drums in disco flip are turned into yellow cymbals
-                        pad = FourLaneDrumPad.YellowDrum;
-                        flags |= MoonNote.Flags.ProDrums_Cymbal;
-                    }
-                    else if (pad == FourLaneDrumPad.YellowDrum)
-                    {
-                        // Both yellow cymbals and yellow drums are turned into red drums in disco flip
-                        pad = FourLaneDrumPad.RedDrum;
-                        flags &= ~MoonNote.Flags.ProDrums_Cymbal;
-                    }
+                        MoonNote.DrumPad.Red => FourLaneDrumPad.RedDrum,
+                        MoonNote.DrumPad.Yellow => FourLaneDrumPad.YellowDrum,
+                        _ => pad
+                    };
+                    if (identity.cymbal) flags |= MoonNote.Flags.ProDrums_Cymbal;
+                    else flags &= ~MoonNote.Flags.ProDrums_Cymbal;
                 }
 
                 // Cymbal marking
@@ -609,17 +627,36 @@ namespace YARG.Core.Chart
             _currentMoonDifficulty = YargDifficultyToMoonDifficulty(_currentDifficulty);
 
             ResetDrumMixState();
-            var downchart = _downCharts![difficulty];
+            var downchart = _downChartsByTarget[instrument][difficulty];
 
             var notes = GetNotes(downchart, difficulty, createNote, processText);
             var phrases = GetPhrases(downchart);
             var textEvents = GetTextEvents(downchart);
             var chart = new InstrumentDifficulty<DrumNote>(instrument, difficulty, notes, phrases, textEvents);
-            DrumsFinalPass(chart);
+            EliteDrumConversionLedger? ledger = _conversionLedgers.TryGetValue((instrument, difficulty), out var storedLedger)
+                ? storedLedger
+                : null;
+            DrumsFinalPass(chart, ledger?.AuthoredLanePhrases);
+            if (difficulty != Difficulty.Beginner && ledger is not null)
+            {
+                // Stage 2 resolves authored phrase records from the actual final DrumNote
+                // children of this target: phrases whose survivors agree on one final
+                // output pad publish descriptors carrying that true final identity,
+                // while malformed phrases stay explicitly unresolved and unpublished.
+                chart.SetEliteDrumAuthoredLanePhraseRecords(
+                    EliteDrumVisualDescriptorV1Builder.BuildAuthoredLanePhraseRecords(chart, ledger));
+                chart.SetEliteDrumVisualDescriptors(EliteDrumVisualDescriptorV1Builder.Build(chart, ledger));
+            }
             return chart;
         }
 
         private static void DrumsFinalPass(InstrumentDifficulty<DrumNote> chart)
+        {
+            DrumsFinalPass(chart, null);
+        }
+
+        private static void DrumsFinalPass(InstrumentDifficulty<DrumNote> chart,
+            IReadOnlyList<EliteDrumAuthoredLanePhrase>? authoredLanePhrases)
         {
             var noteIndex = 0;
             var beginner = chart.Difficulty is Difficulty.Beginner;
@@ -634,6 +671,12 @@ namespace YARG.Core.Chart
             for (var phraseIndex = 0; phraseIndex < chart.Phrases.Count; phraseIndex++)
             {
                 var phrase = chart.Phrases[phraseIndex];
+
+                if (EliteDrumAuthoredLanePhraseTypes.IsAuthoredHandLane(phrase.Type))
+                {
+                    ValidateAuthoredEliteHandLane(chart, phrase, phraseIndex, authoredLanePhrases, ref noteIndex);
+                    continue;
+                }
 
                 if (phrase.Type is not (PhraseType.TremoloLane or PhraseType.TrillLane or PhraseType.KickLane))
                 {
@@ -733,6 +776,80 @@ namespace YARG.Core.Chart
                     }
                 }
             }
+        }
+
+        // Authored Elite hand-lane phrases are validated by explicit authored phrase
+        // membership, never by native pad-reoccurrence inference:
+        //   - Survivors are FINAL physical DrumNotes whose conversion origin is an
+        //     authored member gem of this exact phrase instance. Flam expansions are
+        //     separate physical children and each one counts.
+        //   - Fewer than three survivors is malformed: no runtime lane flags are
+        //     stamped; the authored provenance is retained for diagnostics only.
+        //   - Three or more survivors form one phrase-spanning lane (LaneStart through
+        //     LaneEnd, Tremolo members) for one visual/runtime lane.
+        // Final pad identity is deliberately not consulted anywhere in this validation.
+        private static void ValidateAuthoredEliteHandLane(InstrumentDifficulty<DrumNote> chart, Phrase phrase,
+            int phraseIndex, IReadOnlyList<EliteDrumAuthoredLanePhrase>? authoredLanePhrases, ref int noteIndex)
+        {
+            EliteDrumAuthoredLanePhrase? membership = null;
+            if (authoredLanePhrases is not null)
+            {
+                foreach (var candidate in authoredLanePhrases)
+                {
+                    if (candidate.LaneType != phrase.Type || candidate.StartTick != phrase.Tick) continue;
+                    if (candidate.EndTick == phrase.TickEnd)
+                    {
+                        // Exact instance match; prefer it over a same-tick partial match.
+                        membership = candidate;
+                        break;
+                    }
+
+                    membership ??= candidate;
+                }
+            }
+
+            if (membership is null)
+            {
+                YargLogger.LogWarning(
+                    $"Authored Elite hand-lane phrase {phrase.Type} at tick {phrase.Tick} has no authored membership record; no runtime lane is stamped.");
+                return;
+            }
+
+            var notesInPhrase = GetNotesInLanePhrase(chart.Phrases, phraseIndex, chart.Notes, noteIndex, out noteIndex, true);
+
+            // Match only surviving final physical children of authored member gems.
+            // Ordinary same-pad notes without authored membership are never included.
+            var matched = new List<DrumNote>();
+            foreach (var chord in notesInPhrase)
+            {
+                foreach (var physical in chord.AllNotes)
+                {
+                    if (membership.ContainsOrigin(physical.ConversionOrigin))
+                    {
+                        matched.Add(physical);
+                    }
+                }
+            }
+
+            if (matched.Count < EliteDrumAuthoredLanePhraseTypes.MinimumSurvivingMembers)
+            {
+                var survivingIds = new List<string>();
+                foreach (var physical in matched)
+                {
+                    if (physical.ConversionOrigin is { } origin) survivingIds.Add(origin.Source.SourceId);
+                }
+
+                YargLogger.LogWarning(
+                    $"Authored Elite {phrase.Type} phrase at ticks [{membership.StartTick},{membership.EndTick}) kept only {matched.Count} surviving hand gems ({string.Join(",", survivingIds)}); malformed lane is dropped without runtime flags.");
+                return;
+            }
+
+            foreach (var physical in matched)
+            {
+                physical.ActivateFlag(NoteFlags.Tremolo);
+            }
+            matched[0].ActivateFlag(NoteFlags.LaneStart);
+            matched[^1].ActivateFlag(NoteFlags.LaneEnd);
         }
 
         // Takes all notes that are supposedly inside a drum tremolo phrase and validates them.

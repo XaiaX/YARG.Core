@@ -379,6 +379,7 @@ namespace YARG.Core.Engine
                 if (time >= Codas[CurrentCodaIndex].StartTime && !CodaHasStarted && !InhibitCoda)
                 {
                     YargLogger.LogFormatTrace("Coda {0} activated at time {1}", CurrentCodaIndex, time);
+                    BeforeCodaStart(Codas[CurrentCodaIndex].StartTime);
                     StartCoda();
                 }
                 else if (time > Codas[CurrentCodaIndex].EndTime && IsCodaActive)
@@ -1207,6 +1208,10 @@ namespace YARG.Core.Engine
 
             OnSoloEnd?.Invoke(Solos[CurrentSoloIndex]);
             CurrentSoloIndex++;
+        }
+
+        protected virtual void BeforeCodaStart(double codaStartTime)
+        {
         }
 
         protected void StartCoda()

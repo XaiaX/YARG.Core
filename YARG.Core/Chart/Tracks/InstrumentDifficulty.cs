@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using YARG.Core.Extensions;
+using YARG.Core.Engine.Drums;
 
 namespace YARG.Core.Chart
 {
@@ -17,6 +18,40 @@ namespace YARG.Core.Chart
         public List<Phrase>     Phrases          { get; } = new();
         public List<TextEvent>  TextEvents       { get; } = new();
         public List<RangeShift> RangeShiftEvents { get; } = new();
+
+        /// <summary>
+        /// Immutable final generated Elite Drums visual descriptors. Every published
+        /// descriptor carries an explicitly resolved final output identity
+        /// (<see cref="EliteDrumVisualDescriptorV1.IsFinalIdentityResolved"/>). Native,
+        /// legacy, disabled, and Beginner difficulties expose an empty collection.
+        /// </summary>
+        public IReadOnlyList<EliteDrumVisualDescriptorV1> EliteDrumVisualDescriptors { get; private set; }
+            = Array.Empty<EliteDrumVisualDescriptorV1>();
+
+        public void SetEliteDrumVisualDescriptors(IEnumerable<EliteDrumVisualDescriptorV1> descriptors)
+        {
+            EliteDrumVisualDescriptors = new List<EliteDrumVisualDescriptorV1>(
+                descriptors ?? throw new ArgumentNullException(nameof(descriptors))).AsReadOnly();
+        }
+
+        /// <summary>
+        /// Authored Elite hand-lane phrase provenance records, preserved separately from
+        /// the published descriptor collection. Stage 2 resolves each valid record's
+        /// final output identity from its surviving final DrumNote children, so resolved
+        /// records carry true final identities; malformed records (mixed final pads
+        /// without lane-supporting membership) keep the explicit unresolved state
+        /// (<see cref="EliteDrumVisualDescriptorV1.IsFinalIdentityResolved"/> is false)
+        /// and are never eligible for descriptor publish/spawn gating. Native, legacy,
+        /// disabled, and Beginner difficulties expose an empty collection.
+        /// </summary>
+        public IReadOnlyList<EliteDrumVisualDescriptorV1> EliteDrumAuthoredLanePhraseRecords { get; private set; }
+            = Array.Empty<EliteDrumVisualDescriptorV1>();
+
+        public void SetEliteDrumAuthoredLanePhraseRecords(IEnumerable<EliteDrumVisualDescriptorV1> records)
+        {
+            EliteDrumAuthoredLanePhraseRecords = new List<EliteDrumVisualDescriptorV1>(
+                records ?? throw new ArgumentNullException(nameof(records))).AsReadOnly();
+        }
 
         /// <summary>
         /// Whether or not this difficulty contains any data.
@@ -57,6 +92,9 @@ namespace YARG.Core.Chart
             : this(other.Instrument, other.Difficulty, other.Notes.DuplicateNotes(), other.Phrases.Duplicate(),
                 other.TextEvents.Duplicate(), other.RangeShiftEvents.Duplicate())
         {
+            EliteDrumVisualDescriptors = new List<EliteDrumVisualDescriptorV1>(other.EliteDrumVisualDescriptors).AsReadOnly();
+            EliteDrumAuthoredLanePhraseRecords = new List<EliteDrumVisualDescriptorV1>(
+                other.EliteDrumAuthoredLanePhraseRecords).AsReadOnly();
         }
 
         /// <summary>

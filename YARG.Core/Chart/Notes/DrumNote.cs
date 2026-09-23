@@ -28,24 +28,35 @@ namespace YARG.Core.Chart
         public bool IsGhost   => Type == DrumNoteType.Ghost;
 
         public float? HitVelocity;
+        public EliteDrumConversionOrigin? ConversionOrigin { get; private set; }
 
         public bool IsStarPowerActivator => (DrumFlags & DrumNoteFlags.StarPowerActivator) != 0;
+
+        internal DrumNote WithConversionOrigin(EliteDrumConversionOrigin origin)
+        {
+            var clone = Clone();
+            clone.ConversionOrigin = origin;
+            return clone;
+        }
 
         public override int LaneNote => Pad;
 
         public DrumNote(FourLaneDrumPad pad, DrumNoteType noteType, DrumNoteFlags drumFlags,
-            NoteFlags flags, double time, uint tick, bool isDoubleKick = false, DrumStem drumStem = DrumStem.Else)
-            : this((int)pad, noteType, drumFlags, flags, time, tick, isDoubleKick, drumStem)
+            NoteFlags flags, double time, uint tick, bool isDoubleKick = false, DrumStem drumStem = DrumStem.Else,
+            EliteDrumConversionOrigin? conversionOrigin = null)
+            : this((int)pad, noteType, drumFlags, flags, time, tick, isDoubleKick, drumStem, conversionOrigin)
         {
         }
 
         public DrumNote(FiveLaneDrumPad pad, DrumNoteType noteType, DrumNoteFlags drumFlags,
-            NoteFlags flags, double time, uint tick, bool isDoubleKick = false, DrumStem drumStem = DrumStem.Else)
-            : this((int)pad, noteType, drumFlags, flags, time, tick, isDoubleKick, drumStem)
+            NoteFlags flags, double time, uint tick, bool isDoubleKick = false, DrumStem drumStem = DrumStem.Else,
+            EliteDrumConversionOrigin? conversionOrigin = null)
+            : this((int)pad, noteType, drumFlags, flags, time, tick, isDoubleKick, drumStem, conversionOrigin)
         {
         }
 
-        public DrumNote(int pad, DrumNoteType noteType, DrumNoteFlags drumFlags, NoteFlags flags, double time, uint tick, bool isDoubleKick = false, DrumStem drumStem = DrumStem.Else)
+        public DrumNote(int pad, DrumNoteType noteType, DrumNoteFlags drumFlags, NoteFlags flags, double time, uint tick, bool isDoubleKick = false, DrumStem drumStem = DrumStem.Else,
+            EliteDrumConversionOrigin? conversionOrigin = null)
             : base(flags, time, 0, tick, 0)
         {
             Pad = pad;
@@ -56,6 +67,7 @@ namespace YARG.Core.Chart
             DrumFlags = _drumFlags = drumFlags;
 
             _padMask = 1 << pad;
+            ConversionOrigin = conversionOrigin;
         }
 
         public DrumNote(DrumNote other) : base(other)
@@ -64,6 +76,7 @@ namespace YARG.Core.Chart
             Type = other.Type;
             IsDoubleKick = other.IsDoubleKick;
             Stem = other.Stem;
+            ConversionOrigin = other.ConversionOrigin;
 
             DrumFlags = _drumFlags = other._drumFlags;
 

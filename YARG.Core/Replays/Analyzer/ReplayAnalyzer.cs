@@ -251,7 +251,7 @@ namespace YARG.Core.Replays.Analyzer
                 case GameMode.FiveLaneDrums:
                 case GameMode.EliteDrums:
                 {
-                    var notes = _chart.GetDrumsTrack(profile.CurrentInstrument)
+                    var notes = DrumDifficultySelector.SelectTrack(_chart, profile)
                         .GetDifficulty(profile.CurrentDifficulty).Clone();
                     profile.ApplyModifiers(notes, _chart.SyncTrack);
                     // TODO: Implement support for custom RockMeterPresets in replays
@@ -344,13 +344,11 @@ namespace YARG.Core.Replays.Analyzer
                     // target played the downchart variant for that instrument, not the native
                     // track, so the analyzer must select the same one (the caller is expected
                     // to have loaded the chart with those downchart variants built). The
-                    // centralized profile-consistency guard requires the recorded target to
-                    // be well-formed AND still match the frame's instrument and drum game
-                    // mode, so a corrupted or stale value falls back to the native track
-                    // instead of selecting a mismatched variant. Replays recorded before
-                    // the feature existed carry no target and always analyze natively.
-                    var notes = _chart.GetDrumsTrack(profile.CurrentInstrument,
-                        EliteDrumsDownchartRules.IsDownchartTargetActive(profile))
+                    // The shared selector requires an explicit target to be well-formed,
+                    // consistent with the frame's instrument and drum game mode, and present
+                    // in the generated chart dictionary. Replays recorded before the feature
+                    // existed carry no target and always analyze natively.
+                    var notes = DrumDifficultySelector.SelectTrack(_chart, profile)
                         .GetDifficulty(profile.CurrentDifficulty).Clone();
                     notes.SetDrumActivationFlags(profile.StarPowerActivationType);
                     profile.ApplyModifiers(notes, _chart.SyncTrack);

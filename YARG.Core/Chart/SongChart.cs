@@ -155,8 +155,8 @@ namespace YARG.Core.Chart
             ProDrums = loader.LoadDrumsTrack(Instrument.ProDrums, EliteDrums);
             FiveLaneDrums = loader.LoadDrumsTrack(Instrument.FiveLaneDrums, EliteDrums);
 
-            // Experimental forced downcharts are built last, because downchart generation
-            // flips the loader's drums type to four-lane for subsequent note conversion
+            // Experimental forced downcharts are built last. Generated FiveLane downcharts
+            // use an explicit local FourLane conversion context without mutating shared settings.
             EliteDrumsDowncharts = loader.LoadEliteDrumsDownchartTracks(EliteDrums);
 
             ProGuitar_17Fret = loader.LoadProGuitarTrack(Instrument.ProGuitar_17Fret);

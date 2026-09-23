@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Linq;
 using YARG.Core.Chart;
+using YARG.Core.Utility;
 using YARG.Core.Input;
 using YARG.Core.Logging;
 
@@ -77,6 +79,12 @@ namespace YARG.Core.Engine.Drums.Engines
 
         protected override void UpdateHitLogic(double time)
         {
+            if (IsEliteFillV1Enabled)
+            {
+                UpdateEliteFillV1(time);
+                return;
+            }
+
             // Update bot (will return if not enabled)
             UpdateBot(time);
 
@@ -192,6 +200,69 @@ namespace YARG.Core.Engine.Drums.Engines
                 Overhit();
                 ResetPadState();
             }
+        }
+
+        protected override void GenerateQueuedUpdates(double nextTime)
+        {
+            base.GenerateQueuedUpdates(nextTime);
+            if (!IsEliteFillV1Enabled || EliteFillRuntime is null || double.IsNegativeInfinity(CurrentTime))
+            {
+                return;
+            }
+
+            foreach (var expiry in EliteFillRuntime.ExpiryTimes())
+            {
+                var exactExpiry = MathUtil.BitIncrement(expiry);
+                if (IsTimeBetween(exactExpiry, CurrentTime, nextTime))
+                {
+                    QueueUpdateTime(exactExpiry, "Elite Fill V1 Deadline");
+                }
+            }
+        }
+
+        private void UpdateEliteFillV1(double time)
+        {
+            var runtime = EliteFillRuntime!;
+            CommitEliteFill(runtime.ResolveCadence(time));
+            CommitEliteFill(ExpireEliteFill(time));
+
+            if (IsBot && runtime.AutomaticContinuationAllowed(time))
+            {
+                foreach (var note in runtime.PhysicalNotes.Where(note => !runtime.IsTerminal(note) && note.Time <= time))
+                {
+                    if (TryAdjudicateEliteFill(note, true, time, out var commits))
+                    {
+                        CommitEliteFill(commits);
+                    }
+                }
+                return;
+            }
+
+            if (PadHit is not { } pad)
+            {
+                return;
+            }
+
+            var candidate = runtime.FindCandidate(pad, time, CalculateEliteFillOrdinaryWindow);
+            if (candidate is not null && TryAdjudicateEliteFill(candidate, true, time, out var hitCommits))
+            {
+                CommitEliteFill(hitCommits);
+                ResetPadState();
+                return;
+            }
+
+            // A hand-lane input refreshes only an entered matching lane. It cannot
+            // manufacture a hit for an unrelated lane or for an independent kick.
+            // Unrelated inputs retain native overhit behavior even while the V1 barrier
+            // is latched; the barrier is policy state, not a second input gate.
+            OnPadHit?.Invoke(Action!.Value, false, false, ActiveLaneIncludesNote(pad), DrumNoteType.Neutral,
+                HitVelocity.GetValueOrDefault(0));
+            if (pad != (int) FourLaneDrumPad.Kick)
+            {
+                runtime.LatchBarrier(time);
+            }
+            Overhit();
+            ResetPadState();
         }
 
         protected override bool CanNoteBeHit(DrumNote note)
