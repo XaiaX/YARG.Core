@@ -275,6 +275,41 @@ namespace YARG.Core.UnitTests.Parsing
         }
 
         [Test]
+        public void EliteDrumsDownchart_OverlappingHandPhrasesOwnOnlyTheirAuthoredPad()
+        {
+            var song = CreateSong();
+            var source = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            var lanes = new[]
+            {
+                (MoonPhrase.Type.EliteDrums_HiHatLane, EliteDrumNote.EliteDrumPad.HiHat),
+                (MoonPhrase.Type.EliteDrums_LeftCrashLane, EliteDrumNote.EliteDrumPad.LeftCrash),
+                (MoonPhrase.Type.EliteDrums_RightCrashLane, EliteDrumNote.EliteDrumPad.RightCrash),
+            };
+            foreach (var (type, _) in lanes)
+                source.Add(new MoonPhrase(TICKS(0), TICKS(9), type));
+            for (var i = 0; i < 9; i++)
+                source.Add(new MoonNote(TICKS(i), (int) lanes[i % lanes.Length].Item2));
+
+            var difficulty = LoadDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
+            var physical = ExpandNotes(difficulty.Notes).ToArray();
+            var records = difficulty.EliteDrumAuthoredLanePhraseRecords;
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(records, Has.Count.EqualTo(3));
+                Assert.That(records.All(record => record.IsFinalIdentityResolved), Is.True);
+                Assert.That(records.Select(record => record.FinalPad.Pad).Distinct().Count(), Is.EqualTo(3));
+                foreach (var (type, pad) in lanes)
+                {
+                    var record = records.Single(record => record.GameplayId.Contains(type.ToString()));
+                    var members = physical.Where(note => record.Origins.Contains(note.ConversionOrigin!)).ToArray();
+                    Assert.That(members, Has.Length.EqualTo(3), type.ToString());
+                    Assert.That(members.All(note => note.ConversionOrigin!.Source.Pad == (int) pad), Is.True,
+                        $"{type} must not claim the other simultaneous authored phrases' gems");
+                }
+            }
+        }
+
+        [Test]
         public void EliteDrumsDownchart_SerialFiveLaneChordExceptionResolvesCymbalChordToYellowAndOrange()
         {
             var song = CreateSong();
@@ -295,17 +330,16 @@ namespace YARG.Core.UnitTests.Parsing
 
             using (Assert.EnterMultipleScope())
             {
-                // Both final groups have exactly three survivors, so the phrase membership
-                // supports separate final groups and the record splits deterministically.
+                // The Ride phrase owns Ride gems only; the interleaved RightCrash gems
+                // remain physical notes but do not become members of the Ride lane.
                 Assert.That(physical, Has.Length.EqualTo(6));
                 Assert.That(physical.Count(note => note.Pad == (int) FiveLaneDrumPad.Yellow), Is.EqualTo(3));
                 Assert.That(physical.Count(note => note.Pad == (int) FiveLaneDrumPad.Orange), Is.EqualTo(3));
 
-                Assert.That(descriptors, Has.Count.EqualTo(2));
-                Assert.That(descriptors.Select(descriptor => descriptor.FinalPad.Pad),
-                    Is.EqualTo(new[] { (int) FiveLaneDrumPad.Yellow, (int) FiveLaneDrumPad.Orange }));
-                Assert.That(descriptors.All(descriptor => descriptor.IsFinalIdentityResolved), Is.True);
-                Assert.That(descriptors.All(descriptor => descriptor.Origins.Count == 3), Is.True);
+                Assert.That(descriptors, Has.Count.EqualTo(1));
+                Assert.That(descriptors[0].FinalPad.Pad, Is.EqualTo((int) FiveLaneDrumPad.Yellow));
+                Assert.That(descriptors[0].IsFinalIdentityResolved, Is.True);
+                Assert.That(descriptors[0].Origins, Has.Count.EqualTo(3));
                 // Every descriptor's FinalPad equals its actual final children pads.
                 foreach (var descriptor in descriptors)
                 {
@@ -507,22 +541,25 @@ namespace YARG.Core.UnitTests.Parsing
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(physical, Has.Length.EqualTo(4));
-                // All four authored members survived, including the shunted tom.
+                // Three Tom1 members survived, including the shunted tom; the
+                // interleaved HiHat is not a member of this Tom1 phrase.
                 Assert.That(physical.All(note => note.ConversionOrigin is not null), Is.True);
-                Assert.That(physical.All(note => note.IsTremolo), Is.True);
+                Assert.That(physical.Count(note => note.IsTremolo), Is.EqualTo(3));
+                Assert.That(physical.Single(note => note.ConversionOrigin!.Source.Pad ==
+                    (int) EliteDrumNote.EliteDrumPad.HiHat).IsTremolo, Is.False);
                 Assert.That(physical.Count(note => note.IsLaneStart), Is.EqualTo(1));
                 Assert.That(physical.Count(note => note.IsLaneEnd), Is.EqualTo(1));
 
-                // Stage 2: the shunt spreads survivors across YellowCymbal x1, RedDrum x1
-                // and YellowDrum x2 — every group is below the minimum, so the phrase is
-                // malformed: explicitly unresolved, nothing published, no pad chosen.
+                // Stage 2: the shunt spreads the three Tom1 survivors across RedDrum x1
+                // and YellowDrum x2 — neither group reaches the minimum, so the phrase
+                // is unresolved and nothing is published.
                 var descriptors = difficulty.EliteDrumVisualDescriptors;
                 Assert.That(descriptors, Is.Empty);
                 var phraseRecords = difficulty.EliteDrumAuthoredLanePhraseRecords;
                 Assert.That(phraseRecords, Has.Count.EqualTo(1));
                 Assert.That(phraseRecords[0].FinalPad.IsUnresolved, Is.True);
                 Assert.That(phraseRecords[0].IsFinalIdentityResolved, Is.False);
-                Assert.That(phraseRecords[0].Origins, Has.Count.EqualTo(4));
+                Assert.That(phraseRecords[0].Origins, Has.Count.EqualTo(3));
             }
         }
 

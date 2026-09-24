@@ -37,11 +37,23 @@ namespace YARG.Core.Engine.Drums
         // Stores the integer representation of a FourLaneKickPad or FiveLaneKickPad, depending on drum mode
         protected int Kick;
 
+        /// <summary>Set true in source to capture live Elite authored-lane diagnostics in Unity.</summary>
+        public static bool ELITE_LANE_TRACE_ENABLED = false;
+
+        public static void TraceEliteLane(string message)
+        {
+            if (ELITE_LANE_TRACE_ENABLED)
+            {
+                YargLogger.LogInfo($"[EliteLaneTrace] {message}");
+            }
+        }
+
         private int _wildcardMask;
         private readonly EliteFillRuntimeScheduler? _eliteFillRuntime;
         private readonly EliteFillPolicyV1? _eliteFillPolicy;
 
         protected bool IsEliteFillV1Enabled => _eliteFillRuntime is not null;
+        public bool EliteFillV1Active => IsEliteFillV1Enabled;
         protected EliteFillRuntimeScheduler? EliteFillRuntime => _eliteFillRuntime;
 
         protected DrumsEngine(InstrumentDifficulty<DrumNote> chart, SyncTrack syncTrack,
@@ -67,9 +79,23 @@ namespace YARG.Core.Engine.Drums
                     entryWindowSeconds: 0.050 * engineParameters.EntryGraceMultiplier));
                 // The scheduler expands chart parents into physical notes itself. Passing the
                 // already-flattened array would enumerate chord children twice and duplicate
-                // dictionary keys for every physical chord member.
+                // dictionary keys for every physical chord member. The authored lane map
+                // preserves per-phrase lane identity for overlapping Elite hand lanes.
+                var authoredLaneMap = EliteFillAuthoredLaneMap.Build(physicalNotes, chart.EliteDrumAuthoredLanePhraseRecords);
                 _eliteFillRuntime = new EliteFillRuntimeScheduler(Notes, _eliteFillPolicy,
-                    CalculateEliteFillOrdinaryWindow);
+                    CalculateEliteFillOrdinaryWindow, authoredLaneMap);
+                _eliteFillRuntime.SetLaneAutohitWindow(engineParameters.HitWindow.LaneAutohitWindow);
+                TraceEliteLane($"engine-gate v1=on instrument={chart.Instrument} difficulty={chart.Difficulty} " +
+                    $"enableLanes={engineParameters.EnableLanes} midi={isMidiDrumsInput} bot={isBot} " +
+                    $"physicalNotes={physicalNotes.Length} authoredRecords={chart.EliteDrumAuthoredLanePhraseRecords?.Count ?? 0} " +
+                    $"runtimeLanes={_eliteFillRuntime.AuthoredLanes.Count} membership={_eliteFillRuntime.AuthoredMembershipCount}");
+            }
+            else if (ELITE_LANE_TRACE_ENABLED)
+            {
+                TraceEliteLane($"engine-gate v1=off instrument={chart.Instrument} difficulty={chart.Difficulty} " +
+                    $"ruleset={engineParameters.EliteFillRuleset} enableLanes={engineParameters.EnableLanes} " +
+                    $"physicalNotes={physicalNotes.Length} withoutOrigin={physicalNotes.Count(note => note.ConversionOrigin is null)} " +
+                    $"midi={isMidiDrumsInput} bot={isBot}");
             }
 
             _wildcardMask = EngineParameters.Mode switch
@@ -157,10 +183,12 @@ namespace YARG.Core.Engine.Drums
             return _eliteFillRuntime.TryAdjudicate(note, wasHit, timestamp, out commits);
         }
 
-        protected void CommitEliteFill(IReadOnlyList<EliteFillRuntimeScheduler.Commit> commits)
+        protected void CommitEliteFill(IReadOnlyList<EliteFillRuntimeScheduler.Commit> commits, string reason = "unspecified")
         {
             foreach (var commit in commits)
             {
+                TraceEliteLane($"commit reason={reason} outcome={(commit.WasHit ? "hit" : "miss")} " +
+                    $"tick={commit.Note.Tick} pad={commit.Note.Pad} comboBefore={BaseStats.Combo} time={CurrentTime:F6}");
                 if (commit.WasHit)
                 {
                     HitNote(commit.Note);
@@ -174,16 +202,37 @@ namespace YARG.Core.Engine.Drums
 
         public virtual void Overhit()
         {
+            Overhit(ignoreNativeLaneProtection: false);
+        }
+
+        /// <summary>Applies normal overhit handling and reports whether it was accepted.</summary>
+        protected bool OverhitWasApplied()
+        {
+            return Overhit(ignoreNativeLaneProtection: false);
+        }
+
+        /// <summary>
+        /// Applies normal overhit consequences while bypassing only the flattened native
+        /// lane suppressions. Elite V1 uses this after its authored-lane policy has already
+        /// decided that an unmatched input is a fault; other modes retain Overhit().
+        /// </summary>
+        protected bool OverhitIgnoringNativeLaneProtection()
+        {
+            return Overhit(ignoreNativeLaneProtection: true);
+        }
+
+        private bool Overhit(bool ignoreNativeLaneProtection)
+        {
             // Can't overhit before first note is hit/missed
             if (NoteIndex == 0)
             {
-                return;
+                return false;
             }
 
             // Cancel overhit if past last note
             if (NoteIndex > Chart.Notes.Count - 1)
             {
-                return;
+                return false;
             }
 
             // Cancel overhit if WaitCountdown is active
@@ -191,26 +240,26 @@ namespace YARG.Core.Engine.Drums
             {
                 YargLogger.LogFormatTrace("Overhit prevented during WaitCountdown at time: {0}, tick: {1}",
                     CurrentTime, CurrentTick);
-                return;
+                return false;
             }
 
             // Cancel overhit during coda
             if (IsCodaActive)
             {
-                return;
+                return false;
             }
 
-            if (PadHit != null && ActiveLaneIncludesNote((int) PadHit))
+            if (!ignoreNativeLaneProtection && PadHit != null && ActiveLaneIncludesNote((int) PadHit))
             {
                 // Do not count this as an overhit if the last pad hit was part of an active lane
-                return;
+                return false;
             }            
 
             // Prevent overhit too close to a lane that accepts the overhit
-            if (PadHit.HasValue && IsInLaneLeniencyWindow((int)PadHit))
+            if (!ignoreNativeLaneProtection && PadHit.HasValue && IsInLaneLeniencyWindow((int)PadHit))
             {
                 YargLogger.LogFormatTrace("Overhit prevented by lane end leniency at {0}", CurrentTime);
-                return;
+                return false;
             }
 
             // Fail coda in post-BRE coda section
@@ -228,12 +277,16 @@ namespace YARG.Core.Engine.Drums
                 }
             }
 
+            var comboBeforeOverhit = BaseStats.Combo;
             ResetCombo();
+            TraceEliteLane($"OnOverhit action={Action?.ToString() ?? "none"} pad={PadHit?.ToString() ?? "none"} " +
+                $"combo={comboBeforeOverhit}->{BaseStats.Combo} currentTick={CurrentTick}");
             EngineStats.RecordOverhit((int?) Action);
 
             UpdateMultiplier();
 
             OnOverhit?.Invoke();
+            return true;
         }
 
         protected override bool ActiveLaneIncludesNote(int inputNote)
@@ -289,6 +342,11 @@ namespace YARG.Core.Engine.Drums
             }
 
             note.SetHitState(true, false);
+            if (!activationAutoHit && PadHit is null && note.IsLane)
+            {
+                TraceEliteLane($"lane-hit-without-current-pad tick={note.Tick} pad={note.Pad} time={CurrentTime:F6} " +
+                    $"v1={IsEliteFillV1Enabled} (see commit reason for V1 hits)");
+            }
 
             // Cancel the rest of hit logic during BRE phrase (no scoring/combo/star power),
             // but still resolve any previous notes that were skipped. BRE gems can be hit
@@ -347,7 +405,10 @@ namespace YARG.Core.Engine.Drums
             }
 
 
+            var comboBeforeHit = BaseStats.Combo;
             IncrementCombo();
+            TraceEliteLane($"OnNoteHit tick={note.Tick} pad={note.Pad} origin={note.ConversionOrigin?.ToString() ?? "none"} " +
+                $"auto={activationAutoHit} combo={comboBeforeHit}->{BaseStats.Combo} currentTick={CurrentTick}");
 
             EngineStats.IncrementNotesHit(note, CurrentTime);
 
@@ -528,7 +589,10 @@ namespace YARG.Core.Engine.Drums
                 YargLogger.LogFormatTrace("Kick lane note missed at {0}", CurrentTime);
             }
 
+            var comboBeforeMiss = BaseStats.Combo;
             ResetCombo();
+            TraceEliteLane($"OnNoteMissed tick={note.Tick} pad={note.Pad} origin={note.ConversionOrigin?.ToString() ?? "none"} " +
+                $"combo={comboBeforeMiss}->{BaseStats.Combo} currentTick={CurrentTick}");
 
             UpdateMultiplier();
 

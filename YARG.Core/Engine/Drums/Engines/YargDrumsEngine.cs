@@ -34,6 +34,9 @@ namespace YARG.Core.Engine.Drums.Engines
                     PadHit = ConvertInputToPad(EngineParameters.Mode, gameInput.GetAction<DrumsAction>());
                 }
                 HitVelocity = gameInput.Axis;
+                TraceEliteLane($"input time={gameInput.Time:F6} engineTime={CurrentTime:F6} action={Action?.ToString() ?? "unmapped"} " +
+                    $"eliteAction={(IsMidiDrumsInput ? gameInput.GetAction<EliteDrumsAction>().ToString() : "n/a")} " +
+                    $"pad={PadHit?.ToString() ?? "unmapped"} axis={gameInput.Axis:F3} midi={IsMidiDrumsInput}");
 
                 if (PadHit != null)
                 {
@@ -223,8 +226,11 @@ namespace YARG.Core.Engine.Drums.Engines
         private void UpdateEliteFillV1(double time)
         {
             var runtime = EliteFillRuntime!;
-            CommitEliteFill(runtime.ResolveCadence(time));
-            CommitEliteFill(ExpireEliteFill(time));
+            TraceEliteLane($"update time={time:F6} tick={CurrentTick} input={(PadHit.HasValue ? "yes" : "no")} " +
+                $"action={Action?.ToString() ?? "none"} pad={PadHit?.ToString() ?? "none"} bot={IsBot} " +
+                $"barrier={runtime.BarrierPhase(time)} pending={runtime.PendingCount} terminal={runtime.TerminalCount}");
+            CommitEliteFill(runtime.ResolveCadence(time), "cadence");
+            CommitEliteFill(ExpireEliteFill(time), "expiry");
 
             if (IsBot && runtime.AutomaticContinuationAllowed(time))
             {
@@ -232,7 +238,7 @@ namespace YARG.Core.Engine.Drums.Engines
                 {
                     if (TryAdjudicateEliteFill(note, true, time, out var commits))
                     {
-                        CommitEliteFill(commits);
+                        CommitEliteFill(commits, "bot");
                     }
                 }
                 return;
@@ -246,7 +252,30 @@ namespace YARG.Core.Engine.Drums.Engines
             var candidate = runtime.FindCandidate(pad, time, CalculateEliteFillOrdinaryWindow);
             if (candidate is not null && TryAdjudicateEliteFill(candidate, true, time, out var hitCommits))
             {
-                CommitEliteFill(hitCommits);
+                // A real physical hit refreshes only the authored lanes that actually
+                // contain it, exactly like the native lane input refresh. Exact
+                // candidates are always tried and judged before any protection.
+                TraceEliteLane($"input-candidate tick={candidate.Tick} pad={candidate.Pad} time={time:F6}");
+                runtime.RecordAuthoredLaneInput(candidate, time);
+                CommitEliteFill(hitCommits, "input-candidate");
+                ResetPadState();
+                return;
+            }
+
+            // Elite V1 authored-lane input protection: a real strike on a pad of an
+            // entered, temporally active authored lane whose cadence was refreshed by a
+            // recent qualifying input is forgiven here. The bounded window reuses the
+            // native lane policy (HitWindow.LaneAutohitWindow), so entering a lane alone
+            // grants no indefinite protection. A protected strike is a complete no-op:
+            // no score, no adjudication, no barrier latch, no overhit. It still refreshes
+            // its matching lanes, like native accepted lane input. An off-lane pad (or a
+            // lapsed cadence) keeps the normal barrier/overhit behavior below.
+            if (runtime.IsAuthoredLaneStrikeProtected(pad, time, EngineParameters.HitWindow.LaneAutohitWindow,
+                EngineParameters.HitWindow.LaneProximityProtectionWindow))
+            {
+                runtime.RecordAuthoredLanePadInput(pad, time);
+                OnPadHit?.Invoke(Action!.Value, false, false, true, DrumNoteType.Neutral,
+                    HitVelocity.GetValueOrDefault(0));
                 ResetPadState();
                 return;
             }
@@ -257,11 +286,13 @@ namespace YARG.Core.Engine.Drums.Engines
             // is latched; the barrier is policy state, not a second input gate.
             OnPadHit?.Invoke(Action!.Value, false, false, ActiveLaneIncludesNote(pad), DrumNoteType.Neutral,
                 HitVelocity.GetValueOrDefault(0));
-            if (pad != (int) FourLaneDrumPad.Kick)
+            var overhitApplied = runtime.HasAuthoredMembership && pad != (int) FourLaneDrumPad.Kick
+                ? OverhitIgnoringNativeLaneProtection()
+                : OverhitWasApplied();
+            if (overhitApplied && pad != (int) FourLaneDrumPad.Kick)
             {
                 runtime.LatchBarrier(time);
             }
-            Overhit();
             ResetPadState();
         }
 

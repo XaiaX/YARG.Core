@@ -32,10 +32,45 @@ namespace YARG.Core.Engine.Drums
         private readonly bool[] _outcomes;
         private readonly EliteFillPolicyV1 _policy;
 
+        // Authored lane identity (nullable: present only for converted Elite charts).
+        // _noteLanes[i] lists every authored lane that owns _physicalNotes[i]; coverage
+        // is tracked per lane through the lane's entry note, so overlapping lanes never
+        // borrow or break each other's continuation state. _authoredMembership[i] marks
+        // notes claimed by ANY authored lane record, resolved or not: claimed notes never
+        // use the generic flag fallback, so unresolved or dropped lanes fail closed.
+        private readonly int[][] _noteLanes;
+        private readonly EliteFillAuthoredLane[] _authoredLanes;
+        private readonly bool[] _authoredMembership;
+
+        // Per-authored-lane input-driven protection state. _laneLastInput[lane] is the
+        // timestamp of the most recent qualifying real input for that lane (an exact
+        // physical hit on one of its members, or a protected in-lane strike on one of
+        // its pads). Lane entry alone grants no protection: like the native lane input
+        // policy (BaseEngine.SubmitLaneNote + UpdateLaneAutohitExpireTime), the refresh
+        // is bounded by a window the caller supplies — the engine uses
+        // HitWindow.LaneAutohitWindow, the same bounded window native lanes use.
+        private readonly double[] _laneLastInput;
+        private readonly bool[] _laneHasInput;
+        private readonly double[] _laneEntryTime;
+        private readonly bool[] _laneHasEntryTime;
+        private readonly int[][] _lanePads;
+        private readonly double[] _laneActiveUntil;
+        private double _laneAutohitWindowSeconds;
+
         private EliteFillBarrierWindow? _barrier;
         private int _nextCommit;
 
         public IReadOnlyList<DrumNote> PhysicalNotes => _physicalNotes;
+        /// <summary>Authored runtime lanes in construction order; empty when the chart carries none.</summary>
+        public IReadOnlyList<EliteFillAuthoredLane> AuthoredLanes => _authoredLanes;
+        public bool HasAuthoredMembership => _authoredMembership.Any(member => member);
+        public int AuthoredMembershipCount => _authoredMembership.Count(member => member);
+
+        public void SetLaneAutohitWindow(double seconds)
+        {
+            RequireFinite(seconds, nameof(seconds));
+            _laneAutohitWindowSeconds = Math.Max(0, seconds);
+        }
         public int TerminalCount { get; private set; }
         public int CommittedCount { get; private set; }
         public int PendingCount => TerminalCount - CommittedCount;
@@ -54,8 +89,29 @@ namespace YARG.Core.Engine.Drums
         public bool AutomaticContinuationAllowed(double timestamp)
             => BarrierPhase(timestamp) == EliteFillBarrierPhase.Clear;
 
+        private bool AutomaticContinuationAllowed(DrumNote note, double timestamp)
+        {
+            if (AutomaticContinuationAllowed(timestamp)) return true;
+            if (note is null || !_ordinals.TryGetValue(note, out var ordinal) || !_authoredMembership[ordinal])
+                return false;
+
+            // A real entry into this authored phrase starts its own bounded continuation
+            // window even while an older participation barrier is recovering. It does not
+            // clear the barrier or authorize any other lane / metadata-free note.
+            var barrier = _barrier;
+            if (barrier is null) return false;
+            foreach (var laneId in _noteLanes[ordinal])
+            {
+                if (_laneHasEntryTime[laneId] && _laneEntryTime[laneId] >= barrier.TriggerTimestamp)
+                    return true;
+            }
+
+            return false;
+        }
+
         public EliteFillRuntimeScheduler(IEnumerable<DrumNote> chartNotes, EliteFillPolicyV1 policy,
-            Func<DrumNote, (double FrontEnd, double BackEnd)>? ordinaryWindow = null)
+            Func<DrumNote, (double FrontEnd, double BackEnd)>? ordinaryWindow = null,
+            EliteFillAuthoredLaneMap? authoredLaneMap = null)
         {
             if (chartNotes is null) throw new ArgumentNullException(nameof(chartNotes));
             _policy = policy ?? throw new ArgumentNullException(nameof(policy));
@@ -102,6 +158,90 @@ namespace YARG.Core.Engine.Drums
             _terminal = new bool[physical.Count];
             _committed = new bool[physical.Count];
             _outcomes = new bool[physical.Count];
+
+            BuildAuthoredLanes(authoredLaneMap, out _noteLanes, out _authoredLanes, out _authoredMembership);
+
+            // Precompute per-lane protection metadata: the distinct member pads and the
+            // frozen grace deadline of the lane's final member (the lane's temporal
+            // active bound). Both derive from the already-frozen deadline table.
+            _laneLastInput = new double[_authoredLanes.Length];
+            _laneHasInput = new bool[_authoredLanes.Length];
+            _laneEntryTime = new double[_authoredLanes.Length];
+            _laneHasEntryTime = new bool[_authoredLanes.Length];
+            _lanePads = new int[_authoredLanes.Length][];
+            _laneActiveUntil = new double[_authoredLanes.Length];
+            for (var laneId = 0; laneId < _authoredLanes.Length; laneId++)
+            {
+                var lane = _authoredLanes[laneId];
+                var pads = new HashSet<int>();
+                foreach (var member in lane.Members)
+                {
+                    pads.Add(member.Pad);
+                }
+
+                _lanePads[laneId] = pads.ToArray();
+                // Physical grace bounds activity only while the final authored member
+                // remains unresolved. Earlier members cannot extend a lane past its end.
+                _laneActiveUntil[laneId] = _deadlines[_ordinals[lane.Members[^1]]].GraceUntil;
+            }
+        }
+
+        /// <summary>
+        /// Indexes authored lane membership onto physical notes. Membership claimed by
+        /// any authored record — including one whose lane is dropped here because a
+        /// member is not part of this journal — suppresses the generic flag fallback for
+        /// those notes (fail closed); charts without authored lanes keep the flag-based
+        /// fallback for their genuinely metadata-absent notes.
+        /// </summary>
+        private void BuildAuthoredLanes(EliteFillAuthoredLaneMap? authoredLaneMap,
+            out int[][] noteLanes, out EliteFillAuthoredLane[] authoredLaneIndex, out bool[] authoredMembership)
+        {
+            var noteLaneIds = new List<int>[_physicalNotes.Count];
+            for (var i = 0; i < noteLaneIds.Length; i++) noteLaneIds[i] = new List<int>();
+
+            var membership = new bool[_physicalNotes.Count];
+            var lanes = new List<EliteFillAuthoredLane>();
+            if (authoredLaneMap is not null)
+            {
+                foreach (var claimed in authoredLaneMap.AuthoredMembershipNotes)
+                {
+                    if (_ordinals.TryGetValue(claimed, out var claimedOrdinal))
+                    {
+                        membership[claimedOrdinal] = true;
+                    }
+                }
+
+                foreach (var lane in authoredLaneMap.Lanes)
+                {
+                    var valid = true;
+                    foreach (var member in lane.Members)
+                    {
+                        if (_ordinals.ContainsKey(member)) continue;
+                        valid = false;
+                        break;
+                    }
+
+                    if (!valid)
+                    {
+                        continue;
+                    }
+
+                    var laneId = lanes.Count;
+                    foreach (var member in lane.Members)
+                    {
+                        noteLaneIds[_ordinals[member]].Add(laneId);
+                    }
+                    lanes.Add(lane);
+                }
+            }
+
+            authoredLaneIndex = lanes.ToArray();
+            authoredMembership = membership;
+            noteLanes = new int[_physicalNotes.Count][];
+            for (var i = 0; i < noteLanes.Length; i++)
+            {
+                noteLanes[i] = noteLaneIds[i].ToArray();
+            }
         }
 
         public bool Contains(DrumNote note) => note is not null && _ordinals.ContainsKey(note);
@@ -132,8 +272,7 @@ namespace YARG.Core.Engine.Drums
             return _physicalNotes
                 .Where(note => !IsTerminal(note) && note.Pad == pad)
                 .Where(note => IsEligible(note, timestamp, ordinaryWindow))
-                .OrderBy(note => Math.Abs(note.Time - timestamp))
-                .ThenBy(note => _ordinals[note])
+                .OrderBy(note => _ordinals[note])
                 .FirstOrDefault();
         }
 
@@ -164,12 +303,33 @@ namespace YARG.Core.Engine.Drums
 
         public bool IsCadenceCovered(DrumNote note)
         {
-            if (note is null || !note.IsLane || note.IsLaneStart) return false;
-            if (!_ordinals.TryGetValue(note, out var ordinal)) return false;
+            if (note is null || !_ordinals.TryGetValue(note, out var ordinal)) return false;
 
-            // Coverage is authored-lane state, not chart-order commit state. Find the
-            // nearest preceding lane start and require that entry to have been hit;
-            // a lane end closes the interval, while a different lane cannot refresh it.
+            // Authored notes use the native input-refreshed lane window, scoped to
+            // their own phrase identity. A real hit or protected in-lane strike refreshes
+            // the timer; automatic note resolution never does. Unresolved/dropped records
+            // stay claimed but have no valid lane and therefore fail closed.
+            if (_authoredMembership[ordinal])
+            {
+                if (_terminal[ordinal] || _laneAutohitWindowSeconds <= 0) return false;
+                foreach (var laneId in _noteLanes[ordinal])
+                {
+                    if (!_laneHasInput[laneId] || !IsEnteredLane(laneId)
+                        || !AutomaticContinuationAllowed(note, _laneLastInput[laneId])) continue;
+                    var expiry = _laneLastInput[laneId] + _laneAutohitWindowSeconds;
+                    if (note != _authoredLanes[laneId].StartNote && note.Time <= expiry)
+                        return true;
+                }
+                return false;
+            }
+
+            // Fallback for physical notes with no authored metadata at all (legacy,
+            // native, and flag-only charts): the generic lane flags are a single-lane
+            // approximation. Coverage is authored-lane state, not chart-order commit
+            // state. Find the nearest preceding lane start and require that entry to
+            // have been hit; a lane end closes the interval, while a different lane
+            // cannot refresh it.
+            if (!note.IsLane || note.IsLaneStart) return false;
             for (var i = ordinal - 1; i >= 0; i--)
             {
                 var prior = _physicalNotes[i];
@@ -189,11 +349,11 @@ namespace YARG.Core.Engine.Drums
         public IReadOnlyList<Commit> ResolveCadence(double timestamp)
         {
             EliteFillParameterValidation.RequireTimestamp(timestamp);
-            if (!AutomaticContinuationAllowed(timestamp)) return Array.Empty<Commit>();
             var commits = new List<Commit>();
             foreach (var note in _physicalNotes)
             {
-                if (!IsCadenceCovered(note) || timestamp < note.Time + _policy.Parameters.CadenceStepSeconds)
+                if (!AutomaticContinuationAllowed(note, timestamp) || !IsCadenceCovered(note)
+                    || timestamp < note.Time + _policy.Parameters.CadenceStepSeconds)
                     continue;
 
                 if (TryAdjudicate(note, true, timestamp, out var noteCommits))
@@ -201,6 +361,111 @@ namespace YARG.Core.Engine.Drums
             }
 
             return commits;
+        }
+
+        /// <summary>
+        /// Elite V1 authored-lane input protection. Recent input is aggregated across
+        /// all valid, entered lanes whose final member is unresolved and temporally
+        /// active. Pad eligibility remains lane-local: the struck
+        /// pad must belong to at least one such lane. This permits a fast roll across
+        /// simultaneous lanes without allowing inactive, ended, unresolved, or
+        /// unentered lanes to extend protection. A zero duration safely disables it.
+        /// </summary>
+        public bool IsAuthoredLaneStrikeProtected(int pad, double timestamp, double protectionWindowSeconds,
+            double proximityProtectionWindowSeconds = 0)
+        {
+            EliteFillParameterValidation.RequireTimestamp(timestamp);
+            RequireFinite(protectionWindowSeconds, nameof(protectionWindowSeconds));
+            RequireFinite(proximityProtectionWindowSeconds, nameof(proximityProtectionWindowSeconds));
+
+            var padBelongsToActiveLane = false;
+            var padWithinPostLaneLeniency = false;
+            for (var laneId = 0; laneId < _authoredLanes.Length; laneId++)
+            {
+                if (!IsEnteredLane(laneId)) continue;
+                var lane = _authoredLanes[laneId];
+                var activeFinalMember = lane.Members[^1];
+                var activeFinalOrdinal = _ordinals[activeFinalMember];
+                var active = timestamp <= _laneActiveUntil[laneId] && !_terminal[activeFinalOrdinal];
+
+                if (active)
+                {
+                    padBelongsToActiveLane |= _lanePads[laneId].Contains(pad);
+                    // Like native ActiveLaneIncludesNote, accepting an active lane
+                    // pad is independent of whether the hit-forgiveness timer lapsed.
+                }
+                else if (proximityProtectionWindowSeconds > 0 && _lanePads[laneId].Contains(pad))
+                {
+                    var finalMember = lane.Members[^1];
+                    var finalOrdinal = _ordinals[finalMember];
+                    padWithinPostLaneLeniency |= _terminal[finalOrdinal] && _outcomes[finalOrdinal]
+                        && timestamp - finalMember.Time < proximityProtectionWindowSeconds;
+                }
+            }
+
+            return padBelongsToActiveLane || padWithinPostLaneLeniency;
+        }
+
+        private bool IsEnteredLane(int laneId)
+        {
+            var lane = _authoredLanes[laneId];
+            return _ordinals.TryGetValue(lane.StartNote, out var startOrdinal)
+                && _terminal[startOrdinal] && _outcomes[startOrdinal];
+        }
+
+        private bool IsEnteredLaneActive(int laneId, double timestamp)
+        {
+            if (timestamp > _laneActiveUntil[laneId] || !IsEnteredLane(laneId)) return false;
+            var finalMember = _authoredLanes[laneId].Members[^1];
+            return !_terminal[_ordinals[finalMember]];
+        }
+
+        /// <summary>
+        /// Records a qualifying real input for every authored lane containing the hit
+        /// physical note. This is the authored-lane analog of the native
+        /// SubmitLaneNote/UpdateLaneAutohitExpireTime refresh: only the matching lanes
+        /// are refreshed, so one input can never manufacture cadence for an unrelated
+        /// or merely overlapping lane.
+        /// </summary>
+        public void RecordAuthoredLaneInput(DrumNote hitNote, double timestamp)
+        {
+            EliteFillParameterValidation.RequireTimestamp(timestamp);
+            if (hitNote is null || !_ordinals.TryGetValue(hitNote, out var ordinal)) return;
+
+            foreach (var laneId in _noteLanes[ordinal])
+            {
+                if (hitNote == _authoredLanes[laneId].StartNote && !_laneHasEntryTime[laneId])
+                {
+                    _laneEntryTime[laneId] = timestamp;
+                    _laneHasEntryTime[laneId] = true;
+                }
+
+                if (!_laneHasInput[laneId] || timestamp > _laneLastInput[laneId])
+                {
+                    _laneLastInput[laneId] = timestamp;
+                    _laneHasInput[laneId] = true;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Refreshes every entered authored lane whose membership includes the struck
+        /// pad, mirroring native lane input acceptance: only the lane the input
+        /// actually satisfies is extended.
+        /// </summary>
+        public void RecordAuthoredLanePadInput(int pad, double timestamp)
+        {
+            EliteFillParameterValidation.RequireTimestamp(timestamp);
+            for (var laneId = 0; laneId < _authoredLanes.Length; laneId++)
+            {
+                if (!_lanePads[laneId].Contains(pad) || !IsEnteredLaneActive(laneId, timestamp)) continue;
+
+                if (!_laneHasInput[laneId] || timestamp > _laneLastInput[laneId])
+                {
+                    _laneLastInput[laneId] = timestamp;
+                    _laneHasInput[laneId] = true;
+                }
+            }
         }
 
         /// <summary>Marks an off-note barrier in the live V1 state machine.</summary>
@@ -224,6 +489,10 @@ namespace YARG.Core.Engine.Drums
             _terminal[ordinal] = true;
             _outcomes[ordinal] = wasHit;
             TerminalCount++;
+            var laneIds = _noteLanes[ordinal].Length == 0 ? "none" : string.Join(",", _noteLanes[ordinal]);
+            DrumsEngine.TraceEliteLane($"adjudicate outcome={(wasHit ? "hit" : "miss")} tick={note.Tick} pad={note.Pad} " +
+                $"time={timestamp:F6} origin={note.ConversionOrigin?.ToString() ?? "none"} " +
+                $"flags={note.Flags} drumFlags={note.DrumFlags} authored={_authoredMembership[ordinal]} lanes={laneIds}");
 
             commits = ReleaseCommits();
             return true;
@@ -238,17 +507,20 @@ namespace YARG.Core.Engine.Drums
         public IReadOnlyList<Commit> Expire(double timestamp)
         {
             EliteFillParameterValidation.RequireTimestamp(timestamp);
-            var automaticContinuationAllowed = AutomaticContinuationAllowed(timestamp);
             for (var i = _nextCommit; i < _physicalNotes.Count; i++)
             {
                 if (_terminal[i]) continue;
                 var note = _physicalNotes[i];
                 if (timestamp <= _deadlines[i].GraceUntil) continue;
+                // Evaluate coverage while this note is still unresolved: authored
+                // coverage deliberately rejects terminal notes. Marking it terminal
+                // first would turn every covered note into an expiry miss.
+                var covered = AutomaticContinuationAllowed(note, timestamp) && IsCadenceCovered(note);
                 _terminal[i] = true;
                 // A barrier suppresses the automatic cadence/autohit outcome, but it
                 // must not suppress ordinary expiry/miss progression or strand later
                 // real inputs behind an unresolved earlier physical note.
-                _outcomes[i] = automaticContinuationAllowed && IsCadenceCovered(note);
+                _outcomes[i] = covered;
                 TerminalCount++;
             }
 
@@ -280,6 +552,10 @@ namespace YARG.Core.Engine.Drums
             TerminalCount = 0;
             CommittedCount = 0;
             _nextCommit = 0;
+            Array.Clear(_laneLastInput, 0, _laneLastInput.Length);
+            Array.Clear(_laneHasInput, 0, _laneHasInput.Length);
+            Array.Clear(_laneEntryTime, 0, _laneEntryTime.Length);
+            Array.Clear(_laneHasEntryTime, 0, _laneHasEntryTime.Length);
         }
 
         private static void RequireFinite(double value, string name)

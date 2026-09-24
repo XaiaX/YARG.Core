@@ -273,13 +273,14 @@ namespace YARG.Core.Chart
                 if (!EliteDrumAuthoredLanePhraseTypes.IsAuthoredHandLane(phrase.Type)) continue;
 
                 var members = new List<EliteDrumSourceDefinition>();
+                var authoredPad = (int) EliteDrumAuthoredLanePhraseTypes.ToAuthoredPad(phrase.Type);
                 foreach (var chord in eliteDrumsDifficulty.Notes)
                 {
                     foreach (var gem in chord.AllNotes)
                     {
                         var source = gem.SourceDefinition;
                         if (source is null) continue;
-                        if (!EliteDrumAuthoredLanePhraseTypes.IsHandPad(source.Pad)) continue;
+                        if (source.Pad != authoredPad) continue;
 
                         // Half-open authored interval: start included, end excluded, so a
                         // gem on the boundary tick belongs to a touching subsequent phrase.

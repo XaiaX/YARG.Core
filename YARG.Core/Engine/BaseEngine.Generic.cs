@@ -539,17 +539,25 @@ namespace YARG.Core.Engine
                     RequiredLaneNote = note.LaneNote;
                 }
 
+                TraceNativeDrumLane($"start time={CurrentTime:F6} tick={note.Tick} lane={note.LaneNote} required={RequiredLaneNote} next={NextTrillNote} index={NoteIndex}");
                 // Future updates during this lane will be handled on SubmitLaneNote inputs
                 UpdateLaneAutohitExpireTime();
             }
             else if (note.IsLaneEnd)
             {
                 YargLogger.LogFormatTrace("Lane ending at {0}", CurrentTime);
+                TraceNativeDrumLane($"end time={CurrentTime:F6} tick={note.Tick} expiry={LaneAutohitExpireTime:F6} index={NoteIndex}");
                 RequiredLaneNote = -1;
                 NextTrillNote = -1;
             }
 
             YargLogger.LogFormatTrace("Lane note hit at {0}", CurrentTime);
+        }
+
+        private void TraceNativeDrumLane(string message)
+        {
+            if (this is Drums.DrumsEngine drums && !drums.EliteFillV1Active && Drums.DrumsEngine.ELITE_LANE_TRACE_ENABLED)
+                Drums.DrumsEngine.TraceEliteLane($"native-lane {message}");
         }
 
         // Intercept a missed note while a lane phrase is active
@@ -563,6 +571,8 @@ namespace YARG.Core.Engine
 
             if (note.Time > LaneAutohitExpireTime)
             {
+                if (note.IsLane)
+                    TraceNativeDrumLane($"late-miss time={CurrentTime:F6} tick={note.Tick} noteTime={note.Time:F6} expiry={LaneAutohitExpireTime:F6} index={NoteIndex}");
                 return false;
             }
 
@@ -576,6 +586,7 @@ namespace YARG.Core.Engine
                 }
 
                 YargLogger.LogFormatTrace("Missed note with time of {0} was forgiven by lane", note.Time);
+                TraceNativeDrumLane($"forgive time={CurrentTime:F6} tick={note.Tick} noteTime={note.Time:F6} expiry={LaneAutohitExpireTime:F6} index={NoteIndex}");
                 HitNote(note);
 
                 return true;
@@ -629,6 +640,7 @@ namespace YARG.Core.Engine
                 return;
             }
 
+            TraceNativeDrumLane($"input time={CurrentTime:F6} pad={newNote} required={RequiredLaneNote} next={NextTrillNote} expiry={LaneAutohitExpireTime:F6} index={NoteIndex}");
             if (newNote == RequiredLaneNote || RequiredLaneNote == WildcardMask)
             {
                 // Required input received, extend the lane expiration time
@@ -649,17 +661,24 @@ namespace YARG.Core.Engine
                     // This is either a non-lane note in the middle of the phrase
                     // Or we are in overstrum forgiveness window after lane has ended
                     YargLogger.LogFormatTrace("Lane input did not extend LaneExpireTime at {0}", CurrentTime);
+                    TraceNativeDrumLane($"input-no-refresh time={CurrentTime:F6} pad={newNote} reason=no-lane-at-index index={NoteIndex}");
                     return;
                 }
 
 
                 UpdateLaneAutohitExpireTime();
+                TraceNativeDrumLane($"input-refresh time={CurrentTime:F6} pad={newNote} expiry={LaneAutohitExpireTime:F6} index={NoteIndex}");
 
                 // Update next required note for trills to ensure alternating inputs
                 if (NextTrillNote != -1)
                 {
                     (RequiredLaneNote, NextTrillNote) = (NextTrillNote, RequiredLaneNote);
+                    TraceNativeDrumLane($"alternate time={CurrentTime:F6} required={RequiredLaneNote} next={NextTrillNote}");
                 }
+            }
+            else
+            {
+                TraceNativeDrumLane($"input-no-refresh time={CurrentTime:F6} pad={newNote} reason=wrong-pad required={RequiredLaneNote}");
             }
         }
 
