@@ -594,6 +594,10 @@ namespace YARG.Core.Song
                     entry._parts.FourLaneDrums.Intensity = entry._parts.ProDrums.Intensity;
                 }
             }
+            if (entry._rbIntensities.EliteDrums > -1)
+            {
+                entry._parts.EliteDrums.Intensity = (sbyte)GetIntensity(entry._rbIntensities.EliteDrums, DrumDiffMap);
+            }
             if (entry._rbIntensities.HarmonyVocals > -1)
             {
                 entry._parts.HarmonyVocals.Intensity = (sbyte)GetIntensity(entry._rbIntensities.HarmonyVocals, DrumDiffMap);
@@ -988,6 +992,7 @@ namespace YARG.Core.Song
                 entry._metadata.CharterProGuitar = YARGDTAReader.DecodeString(dta.CharterProStrings.Value, dta.MetadataEncoding);
                 entry._metadata.CharterProBass   = YARGDTAReader.DecodeString(dta.CharterProStrings.Value, dta.MetadataEncoding);
             }
+            if (dta.CharterEliteDrums != null)    { entry._metadata.CharterEliteDrums = YARGDTAReader.DecodeString(dta.CharterEliteDrums.Value, dta.MetadataEncoding); }
             if (dta.LoadingPhrase != null)        { entry._metadata.LoadingPhrase = YARGDTAReader.DecodeString(dta.LoadingPhrase.Value, dta.MetadataEncoding); }
             if (dta.Playlist != null)             { entry._metadata.Playlist      = YARGDTAReader.DecodeString(dta.Playlist.Value, dta.MetadataEncoding); }
             if (dta.Genre != null)
@@ -1079,6 +1084,7 @@ namespace YARG.Core.Song
             if (dta.Intensities.Keys >= 0)           { entry._rbIntensities.Keys           = dta.Intensities.Keys; }
             if (dta.Intensities.FourLaneDrums >= 0)  { entry._rbIntensities.FourLaneDrums  = dta.Intensities.FourLaneDrums; }
             if (dta.Intensities.ProDrums >= 0)       { entry._rbIntensities.ProDrums       = dta.Intensities.ProDrums; }
+            if (dta.Intensities.EliteDrums >= 0)     { entry._rbIntensities.EliteDrums     = dta.Intensities.EliteDrums; }
             if (dta.Intensities.ProGuitar >= 0)      { entry._rbIntensities.ProGuitar      = dta.Intensities.ProGuitar; }
             if (dta.Intensities.ProBass >= 0)        { entry._rbIntensities.ProBass        = dta.Intensities.ProBass; }
             if (dta.Intensities.ProKeys >= 0)        { entry._rbIntensities.ProKeys        = dta.Intensities.ProKeys; }

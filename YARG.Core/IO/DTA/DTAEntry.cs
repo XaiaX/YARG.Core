@@ -21,6 +21,7 @@ namespace YARG.Core.IO
         public TextSpan? Charter;
         public TextSpan? CharterKeys;
         public TextSpan? CharterProStrings;
+        public TextSpan? CharterEliteDrums;
         public string? Source;
         public TextSpan? Playlist;
         public TextSpan? LoadingPhrase;
@@ -163,6 +164,8 @@ namespace YARG.Core.IO
                                 case "realDrums":
                                 case "real_drums": Intensities.ProDrums = (short) diff; break;
 
+                                case "elite_drums": Intensities.EliteDrums = (short) diff; break;
+
                                 case "harmVocals":
                                 case "vocal_harm": Intensities.HarmonyVocals = (short) diff; break;
 
@@ -225,6 +228,7 @@ namespace YARG.Core.IO
                     case "author": Charter = YARGDTAReader.ExtractTextBytes(ref container); break;
                     case "keys_author": CharterKeys = YARGDTAReader.ExtractTextBytes(ref container); break;
                     case "strings_author": CharterProStrings = YARGDTAReader.ExtractTextBytes(ref container); break;
+                    case "elite_drums_author": CharterEliteDrums = YARGDTAReader.ExtractTextBytes(ref container); break;
                     case "guide_pitch_volume": /*GuidePitchVolume = YARGDTAReader.Extract<float>(ref container);*/ break;
                     case "encoding":
                         MetadataEncoding = YARGDTAReader.ExtractText(ref container).ToLower() switch

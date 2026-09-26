@@ -15,6 +15,7 @@ namespace YARG.Core.Song
             Keys = -1,
             FourLaneDrums = -1,
             ProDrums = -1,
+            EliteDrums = -1,
             ProGuitar = -1,
             ProBass = -1,
             ProKeys = -1,
@@ -30,6 +31,7 @@ namespace YARG.Core.Song
         public short Keys;
         public short FourLaneDrums;
         public short ProDrums;
+        public short EliteDrums;
         public short ProGuitar;
         public short ProBass;
         public short ProKeys;
