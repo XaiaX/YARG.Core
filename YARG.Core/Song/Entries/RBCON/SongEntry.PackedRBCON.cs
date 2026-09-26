@@ -204,12 +204,19 @@ namespace YARG.Core.Song
                     _updateMidiLastWrite = parameters.UpdateMidi,
                     _upgrade = parameters.Upgrade
                 };
+                entry.SetUpdateLayers(parameters.UpdateLayers);
                 entry._metadata.Playlist = parameters.DefaultPlaylist;
 
-                var location = ProcessDTAs(entry, parameters.BaseDta, parameters.UpdateDta, parameters.UpgradeDta);
+                var location = ProcessDTAs(entry, parameters.BaseDta, parameters.UpdateDta, parameters.UpgradeDta, parameters.UpdateLayers);
                 if (!location)
                 {
                     return new ScanUnexpected(location.Error);
+                }
+                entry._subName = location.Value[6..location.Value.IndexOf('/', 6)];
+                var updateMoggResult = entry.ValidateUpdateMogg();
+                if (updateMoggResult != ScanResult.Success)
+                {
+                    return new ScanUnexpected(updateMoggResult);
                 }
 
                 if (!listings.FindListing(location.Value + ".mid", out entry._midiListing))
@@ -217,7 +224,9 @@ namespace YARG.Core.Song
                     return new ScanUnexpected(ScanResult.MissingCONMidi);
                 }
 
-                if (!listings.FindListing(location.Value + ".mogg", out entry._moggListing))
+                using var selectedUpdateMogg = entry.LoadUpdateMoggStream();
+                bool hasUpdateMogg = selectedUpdateMogg != null;
+                if (!listings.FindListing(location.Value + ".mogg", out entry._moggListing) && !hasUpdateMogg)
                 {
                     return new ScanUnexpected(ScanResult.MoggError);
                 }
@@ -227,9 +236,10 @@ namespace YARG.Core.Song
                 long moggLocation = CONFileStream.CalculateBlockLocation(entry._moggListing.BlockOffset, entry._moggListing.Shift);
                 lock (stream)
                 {
-                    var moggResult = stream.Seek(moggLocation, SeekOrigin.Begin) == moggLocation
-                        ? ValidateMoggHeader(stream)
-                        : ScanResult.MoggError;
+                    var moggResult = hasUpdateMogg ? ScanResult.Success :
+                        stream.Seek(moggLocation, SeekOrigin.Begin) == moggLocation
+                            ? ValidateMoggHeader(stream)
+                            : ScanResult.MoggError;
                     if (moggResult != ScanResult.Success)
                     {
                         return new ScanUnexpected(moggResult);

@@ -24,15 +24,21 @@ namespace YARG.Core.Song
                     _updateMidiLastWrite = parameters.UpdateMidi,
                     _upgrade = parameters.Upgrade
                 };
+                entry.SetUpdateLayers(parameters.UpdateLayers);
                 entry._metadata.Playlist = parameters.DefaultPlaylist;
 
-                var location = ProcessDTAs(entry, parameters.BaseDta, parameters.UpdateDta, parameters.UpgradeDta);
+                var location = ProcessDTAs(entry, parameters.BaseDta, parameters.UpdateDta, parameters.UpgradeDta, parameters.UpdateLayers);
                 if (!location)
                 {
                     return new ScanUnexpected(location.Error);
                 }
 
                 entry._subName = location.Value[6..location.Value.IndexOf('/', 6)];
+                var updateMoggResult = entry.ValidateUpdateMogg();
+                if (updateMoggResult != ScanResult.Success)
+                {
+                    return new ScanUnexpected(updateMoggResult);
+                }
 
                 string songDirectory = Path.Combine(parameters.Root.FullName, entry._subName);
 
@@ -49,7 +55,8 @@ namespace YARG.Core.Song
                 }
 
                 string moggPath = Path.Combine(songDirectory, entry._subName + ".mogg");
-                if (File.Exists(moggPath))
+                using var selectedUpdateMogg = entry.LoadUpdateMoggStream();
+                if (selectedUpdateMogg == null && File.Exists(moggPath))
                 {
                     using var moggStream = new FileStream(moggPath, FileMode.Open, FileAccess.Read, FileShare.Read, 1);
                     var moggResult = ValidateMoggHeader(moggStream);
@@ -58,7 +65,7 @@ namespace YARG.Core.Song
                         return new ScanUnexpected(moggResult);
                     }
                 }
-                else
+                else if (selectedUpdateMogg == null)
                 {
                     return new ScanUnexpected(ScanResult.MoggError);
                 }

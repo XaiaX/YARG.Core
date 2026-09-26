@@ -21,9 +21,12 @@ namespace YARG.Core.Song
         public string NodeName;
         public AbridgedFileInfo? UpdateDirectory;
         public DateTime? UpdateMidi;
+        // Default struct values leave this null; entry setup treats that as an empty layer list.
+        public CONUpdateLayer[]? UpdateLayers;
         public RBProUpgrade? Upgrade;
         public string DefaultPlaylist;
         public DTAEntry BaseDta;
+
     }
 
     public abstract class RBCONEntry : SongEntry
@@ -39,6 +42,8 @@ namespace YARG.Core.Song
         protected string _subName = string.Empty;
         protected AbridgedFileInfo? _updateDirectoryAndDtaLastWrite;
         protected DateTime? _updateMidiLastWrite;
+        // Oldest to newest; empty preserves the legacy single-update path.
+        private protected (AbridgedFileInfo Root, DateTime? Midi)[] _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?)>();
         private protected RBProUpgrade? _upgrade;
 
         protected RBMetadata _rbMetadata = RBMetadata.Default;
@@ -60,6 +65,14 @@ namespace YARG.Core.Song
             if (_updateMidiLastWrite.HasValue && _updateMidiLastWrite > last_write)
             {
                 last_write = _updateMidiLastWrite.Value;
+            }
+
+            foreach (var layer in _updateLayers)
+            {
+                if (layer.Midi.HasValue && layer.Midi.Value > last_write)
+                {
+                    last_write = layer.Midi.Value;
+                }
             }
 
             if (_upgrade != null && _upgrade.LastWriteTime > last_write)
@@ -102,6 +115,17 @@ namespace YARG.Core.Song
 
             WriteAudio(in _indices, stream);
             WriteAudio(in _panning, stream);
+
+            stream.Write(_updateLayers.Length, Endianness.Little);
+            foreach (var layer in _updateLayers)
+            {
+                layer.Root.Serialize(stream);
+                stream.Write(layer.Midi.HasValue);
+                if (layer.Midi.HasValue)
+                {
+                    stream.Write(layer.Midi.Value.ToBinary(), Endianness.Little);
+                }
+            }
         }
 
         public override SongChart? LoadChart(IReadOnlyCollection<Instrument>? eliteDrumsDownchartOutputs = null)
@@ -118,8 +142,29 @@ namespace YARG.Core.Song
                 midi = MidiFile.Read(mainMidi.ToReferenceStream(), readingSettings);
             }
 
-            // Merge update MIDI
-            if (_updateMidiLastWrite.HasValue)
+            // Merge update MIDI layers in precedence order, after the base MIDI.
+            foreach (var layer in _updateLayers)
+            {
+                if (!AbridgedFileInfo.Validate(Path.Combine(layer.Root.FullName, SONGUPDATES_DTA), layer.Root.LastWriteTime))
+                {
+                    return null;
+                }
+                if (!layer.Midi.HasValue)
+                {
+                    continue;
+                }
+
+                string filename = Path.Combine(layer.Root.FullName, _nodeName, _nodeName + "_update.mid");
+                if (!AbridgedFileInfo.Validate(filename, layer.Midi.Value))
+                {
+                    return null;
+                }
+                using var layerMidi = FixedArray.LoadFile(filename);
+                midi.Merge(MidiFile.Read(layerMidi.ToReferenceStream(), readingSettings), false);
+            }
+
+            // Legacy single update MIDI
+            if (_updateLayers.Length == 0 && _updateMidiLastWrite.HasValue)
             {
                 if (!AbridgedFileInfo.Validate(Path.Combine(_updateDirectoryAndDtaLastWrite!.Value.FullName, SONGUPDATES_DTA), _updateDirectoryAndDtaLastWrite.Value.LastWriteTime))
                 {
@@ -292,6 +337,27 @@ namespace YARG.Core.Song
             _updateDirectoryAndDtaLastWrite = updateDirectory;
             _updateMidiLastWrite = updateMidi;
             _upgrade = upgrade;
+            _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?)>();
+        }
+
+        internal void UpdateInfo(in AbridgedFileInfo? updateDirectory, in DateTime? updateMidi, RBProUpgrade? upgrade, CONUpdateLayer[]? layers)
+        {
+            UpdateInfo(in updateDirectory, in updateMidi, upgrade);
+            SetUpdateLayers(layers);
+        }
+
+        private protected void SetUpdateLayers(CONUpdateLayer[]? layers)
+        {
+            if (layers == null || layers.Length == 0)
+            {
+                _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?)>();
+                return;
+            }
+            _updateLayers = new (AbridgedFileInfo Root, DateTime? Midi)[layers.Length];
+            for (int i = 0; i < layers.Length; i++)
+            {
+                _updateLayers[i] = (layers[i].Root, layers[i].Midi);
+            }
         }
 
         private protected new void Deserialize(ref FixedArrayStream stream, CacheReadStrings strings)
@@ -329,6 +395,15 @@ namespace YARG.Core.Song
 
             ReadAudio(ref _indices, ref stream);
             ReadAudio(ref _panning, ref stream);
+
+            int count = stream.Read<int>(Endianness.Little);
+            _updateLayers = new (AbridgedFileInfo Root, DateTime? Midi)[count];
+            for (int i = 0; i < count; i++)
+            {
+                var root = new AbridgedFileInfo(ref stream);
+                DateTime? midi = stream.ReadBoolean() ? DateTime.FromBinary(stream.Read<long>(Endianness.Little)) : null;
+                _updateLayers[i] = (root, midi);
+            }
         }
 
         protected RBCONEntry(in AbridgedFileInfo root, string nodeName)
@@ -349,7 +424,7 @@ namespace YARG.Core.Song
         private static readonly int[] RealDrumsDiffMap = { 124, 151, 178, 242, 345, 448 };
         private static readonly int[] RealKeysDiffMap = { 153, 211, 269, 327, 385, 443 };
         private static readonly int[] HarmonyDiffMap = { 132, 175, 218, 279, 353, 427 };
-        private protected static ScanExpected<string> ProcessDTAs(RBCONEntry entry, in DTAEntry baseDTA, in DTAEntry updateDTA, in DTAEntry upgradeDTA)
+        private protected static ScanExpected<string> ProcessDTAs(RBCONEntry entry, in DTAEntry baseDTA, in DTAEntry updateDTA, in DTAEntry upgradeDTA, CONUpdateLayer[]? layers = null)
         {
             string? location = null;
             float[]? volumes = null;
@@ -358,7 +433,17 @@ namespace YARG.Core.Song
 
             ParseDTA(entry, in baseDTA, ref location, ref volumes, ref pans, ref cores);
             ParseDTA(entry, in upgradeDTA, ref location, ref volumes, ref pans, ref cores);
-            ParseDTA(entry, in updateDTA, ref location, ref volumes, ref pans, ref cores);
+            if (entry._updateLayers.Length == 0)
+            {
+                ParseDTA(entry, in updateDTA, ref location, ref volumes, ref pans, ref cores);
+            }
+            else
+            {
+                foreach (var layer in layers ?? Array.Empty<CONUpdateLayer>())
+                {
+                    ParseDTA(entry, layer.Dta, ref location, ref volumes, ref pans, ref cores);
+                }
+            }
 
             if (entry._metadata.Name.Length == 0)
             {
@@ -528,6 +613,7 @@ namespace YARG.Core.Song
         private protected static ScanResult ScanMidis(RBCONEntry entry, FixedArray<byte> mainMidi)
         {
             var updateMidi = default(FixedArray<byte>);
+            var layeredMidis = new List<FixedArray<byte>>();
             var upgradeMidi = default(FixedArray<byte>);
             try
             {
@@ -540,18 +626,39 @@ namespace YARG.Core.Song
                     }
                 }
 
-                if (entry._updateMidiLastWrite.HasValue)
+                if (entry._updateLayers.Length > 0)
+                {
+                    foreach (var layer in entry._updateLayers)
+                    {
+                        if (!AbridgedFileInfo.Validate(Path.Combine(layer.Root.FullName, SONGUPDATES_DTA), layer.Root.LastWriteTime))
+                        {
+                            return ScanResult.PossibleCorruption;
+                        }
+                        if (layer.Midi.HasValue)
+                        {
+                            string filename = Path.Combine(layer.Root.FullName, entry._nodeName, entry._nodeName + "_update.mid");
+                            if (!AbridgedFileInfo.Validate(filename, layer.Midi.Value))
+                            {
+                                return ScanResult.PossibleCorruption;
+                            }
+                            layeredMidis.Add(FixedArray.LoadFile(filename));
+                        }
+                    }
+                }
+                else if (entry._updateMidiLastWrite.HasValue)
                 {
                     string updateFile = Path.Combine(entry._updateDirectoryAndDtaLastWrite!.Value.FullName, entry._nodeName, entry._nodeName + "_update.mid");
                     updateMidi = FixedArray.LoadFile(updateFile);
                 }
 
-                var drumsType = DrumsType.ProDrums;
-
+                // Validate each source separately to keep its specific scan error even when a
+                // later MIDI replaces its tracks in the effective chart.
+                var sourceParts = AvailableParts.Default;
+                var sourceDrumsType = DrumsType.ProDrums;
                 int bufLength = mainMidi.Length;
                 if (updateMidi != null)
                 {
-                    var updateResult = ParseMidi(updateMidi, ref entry._parts, ref drumsType);
+                    var updateResult = ParseMidi(updateMidi, ref sourceParts, ref sourceDrumsType);
                     switch (updateResult.Error)
                     {
                         case ScanResult.InvalidResolution:      return ScanResult.InvalidResolution_Update;
@@ -559,10 +666,20 @@ namespace YARG.Core.Song
                     }
                     bufLength += updateMidi.Length;
                 }
+                foreach (var layerMidi in layeredMidis)
+                {
+                    var result = ParseMidi(layerMidi, ref sourceParts, ref sourceDrumsType);
+                    switch (result.Error)
+                    {
+                        case ScanResult.InvalidResolution:      return ScanResult.InvalidResolution_Update;
+                        case ScanResult.MultipleMidiTrackNames: return ScanResult.MultipleMidiTrackNames_Update;
+                    }
+                    bufLength += layerMidi.Length;
+                }
 
                 if (upgradeMidi != null)
                 {
-                    var upgradeResult = ParseMidi(upgradeMidi, ref entry._parts, ref drumsType);
+                    var upgradeResult = ParseMidi(upgradeMidi, ref sourceParts, ref sourceDrumsType);
                     switch (upgradeResult.Error)
                     {
                         case ScanResult.InvalidResolution:      return ScanResult.InvalidResolution_Upgrade;
@@ -571,10 +688,37 @@ namespace YARG.Core.Song
                     bufLength += upgradeMidi.Length;
                 }
 
-                var resolution = ParseMidi(mainMidi, ref entry._parts, ref drumsType);
+                var resolution = ParseMidi(mainMidi, ref sourceParts, ref sourceDrumsType);
                 if (!resolution)
                 {
                     return resolution.Error;
+                }
+
+                // LoadChart merges named tracks by replacement (base, updates, upgrade).
+                // Parse the same effective track set rather than retaining the first active
+                // part encountered in the separate source files.
+                var effectiveMidi = MidiFile.Read(mainMidi.ToReferenceStream(), MidiSettingsLatin1.Instance);
+                if (updateMidi != null)
+                {
+                    effectiveMidi.Merge(MidiFile.Read(updateMidi.ToReferenceStream(), MidiSettingsLatin1.Instance), false);
+                }
+                foreach (var layerMidi in layeredMidis)
+                {
+                    effectiveMidi.Merge(MidiFile.Read(layerMidi.ToReferenceStream(), MidiSettingsLatin1.Instance), false);
+                }
+                if (upgradeMidi != null)
+                {
+                    effectiveMidi.Merge(MidiFile.Read(upgradeMidi.ToReferenceStream(), MidiSettingsLatin1.Instance), false);
+                }
+                using var effectiveStream = new MemoryStream();
+                effectiveMidi.Write(effectiveStream);
+                using var effectiveBytes = FixedArray<byte>.Alloc((int) effectiveStream.Length);
+                effectiveStream.GetBuffer().AsSpan(0, (int) effectiveStream.Length).CopyTo(effectiveBytes.Span);
+                var drumsType = DrumsType.ProDrums;
+                var effectiveResult = ParseMidi(effectiveBytes, ref entry._parts, ref drumsType);
+                if (!effectiveResult)
+                {
+                    return effectiveResult.Error;
                 }
 
                 if (!IsValid(in entry._parts))
@@ -599,13 +743,16 @@ namespace YARG.Core.Song
                     {
                         System.Runtime.CompilerServices.Unsafe.CopyBlock(buffer.Ptr + offset, updateMidi.Ptr, (uint) updateMidi.Length);
                         offset += updateMidi.Length;
-                        updateMidi.Dispose();
+                    }
+                    foreach (var layerMidi in layeredMidis)
+                    {
+                        System.Runtime.CompilerServices.Unsafe.CopyBlock(buffer.Ptr + offset, layerMidi.Ptr, (uint) layerMidi.Length);
+                        offset += layerMidi.Length;
                     }
 
                     if (upgradeMidi != null)
                     {
                         System.Runtime.CompilerServices.Unsafe.CopyBlock(buffer.Ptr + offset, upgradeMidi.Ptr, (uint) upgradeMidi.Length);
-                        upgradeMidi.Dispose();
                     }
                 }
                 entry._hash = HashWrapper.Hash(buffer.ReadOnlySpan);
@@ -613,22 +760,56 @@ namespace YARG.Core.Song
             }
             catch (Exception ex)
             {
-                if (updateMidi != null)
-                {
-                    updateMidi.Dispose();
-                }
-
-                if (upgradeMidi != null)
-                {
-                    upgradeMidi.Dispose();
-                }
                 YargLogger.LogException(ex);
                 return ScanResult.PossibleCorruption;
             }
+            finally
+            {
+                updateMidi?.Dispose();
+                foreach (var layerMidi in layeredMidis)
+                {
+                    layerMidi.Dispose();
+                }
+                upgradeMidi?.Dispose();
+            }
+        }
+
+        private string? FindUpdateAsset(params string[] relativePath)
+        {
+            for (int i = _updateLayers.Length - 1; i >= 0; i--)
+            {
+                var layer = _updateLayers[i];
+                if (!AbridgedFileInfo.Validate(Path.Combine(layer.Root.FullName, SONGUPDATES_DTA), layer.Root.LastWriteTime))
+                {
+                    return null;
+                }
+                string filename = Path.Combine(layer.Root.FullName, Path.Combine(relativePath));
+                if (File.Exists(filename))
+                {
+                    return filename;
+                }
+            }
+            return null;
+        }
+
+        private protected ScanResult ValidateUpdateMogg()
+        {
+            using var stream = LoadUpdateMoggStream();
+            if (stream == null)
+            {
+                return ScanResult.Success;
+            }
+            var result = ValidateMoggHeader(stream);
+            return result == ScanResult.MoggError ? ScanResult.MoggError_Update : result;
         }
 
         protected Stream? LoadUpdateMoggStream()
         {
+            if (_updateLayers.Length > 0)
+            {
+                string? filename = FindUpdateAsset(_subName, _subName + "_update.mogg");
+                return filename == null ? null : File.OpenRead(filename);
+            }
             Stream? stream = null;
             if (_updateDirectoryAndDtaLastWrite.HasValue)
             {
@@ -643,6 +824,11 @@ namespace YARG.Core.Song
 
         protected YARGImage? LoadUpdateAlbumData()
         {
+            if (_updateLayers.Length > 0)
+            {
+                string? filename = FindUpdateAsset(_subName, "gen", _subName + "_keep.png_xbox");
+                return filename == null ? null : YARGImage.LoadDXT(filename);
+            }
             var image = default(YARGImage);
             if (_updateDirectoryAndDtaLastWrite.HasValue)
             {
@@ -657,6 +843,11 @@ namespace YARG.Core.Song
 
         protected FixedArray<byte>? LoadUpdateMiloData()
         {
+            if (_updateLayers.Length > 0)
+            {
+                string? filename = FindUpdateAsset(_subName, "gen", _subName + ".milo_xbox");
+                return filename == null ? null : FixedArray.LoadFile(filename);
+            }
             var data = default(FixedArray<byte>);
             if (_updateDirectoryAndDtaLastWrite.HasValue)
             {
@@ -671,6 +862,11 @@ namespace YARG.Core.Song
 
         protected FixedArray<byte>? LoadUpdateVocData()
         {
+            if (_updateLayers.Length > 0)
+            {
+                string? filename = FindUpdateAsset(_subName, _subName + ".voc");
+                return filename == null ? null : FixedArray.LoadFile(filename);
+            }
             var data = default(FixedArray<byte>);
             if (_updateDirectoryAndDtaLastWrite.HasValue)
             {

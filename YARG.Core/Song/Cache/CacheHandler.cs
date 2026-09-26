@@ -35,14 +35,14 @@ namespace YARG.Core.Song.Cache
         /// if multiple cache version changes happen in a single day).
         /// </summary>
         /// <remarks>Change whenever the song cache needs to be cleared and regenerated, e.g. when the new data is added to the cache.</remarks>
-        private const int CACHE_VERSION = 26_09_04_00;
+        private const int CACHE_VERSION = 26_09_25_00;
 
         public static ScanProgressTracker Progress => _progress;
         private static ScanProgressTracker _progress;
 
-        public static SongCache RunScan(bool tryQuickScan, string cacheLocation, string badSongsLocation, bool fullDirectoryPlaylists, List<string> baseDirectories)
+        public static SongCache RunScan(bool tryQuickScan, string cacheLocation, string badSongsLocation, bool fullDirectoryPlaylists, List<string> baseDirectories, bool cumulativeUpdates = false)
         {
-            using var handler = new CacheHandler(baseDirectories);
+            using var handler = new CacheHandler(baseDirectories, cumulativeUpdates);
 
             // Some ini entry items won't come with the song length defined in the .ini file.
             // In those instances, we'll need to attempt to load the audio files that accompany the chart
@@ -63,8 +63,12 @@ namespace YARG.Core.Song.Cache
             catch (Exception ex)
             {
                 YargLogger.LogException(ex, "Unknown error while running song scan!");
+                throw;
             }
-            GlobalAudioHandler.LogMixerStatus = true;
+            finally
+            {
+                GlobalAudioHandler.LogMixerStatus = true;
+            }
             return handler.cache;
         }
 
@@ -79,7 +83,7 @@ namespace YARG.Core.Song.Cache
         {
             try
             {
-                using var cacheFile = LoadCacheToMemory(cacheLocation, fullDirectoryPlaylists);
+                using var cacheFile = LoadCacheToMemory(cacheLocation, fullDirectoryPlaylists, handler.cumulativeUpdates);
                 if (cacheFile != null)
                 {
                     _progress.Stage = ScanStage.LoadingCache;
@@ -119,7 +123,7 @@ namespace YARG.Core.Song.Cache
             {
                 try
                 {
-                    using var cacheFile = LoadCacheToMemory(cacheLocation, fullDirectoryPlaylists);
+                    using var cacheFile = LoadCacheToMemory(cacheLocation, fullDirectoryPlaylists, handler.cumulativeUpdates);
                     if (cacheFile != null)
                     {
                         _progress.Stage = ScanStage.LoadingCache;
@@ -136,8 +140,7 @@ namespace YARG.Core.Song.Cache
             _progress.Stage = ScanStage.LoadingSongs;
             handler.FindNewEntries(fullDirectoryPlaylists);
             // CON, Upgrade, and Update groups hold onto the DTA data in memory.
-            // Once all entries are processed, they are no longer useful to us, so we dispose of them here.
-            handler.Dispose();
+            // Keep group metadata through serialization; the handler's using scope disposes it afterward.
 
             YargLogger.LogFormatDebug("Total Entries: {0}", _progress.Count);
 
@@ -174,6 +177,7 @@ namespace YARG.Core.Song.Cache
         #region Data
 
         private readonly SongCache cache = new();
+        private readonly bool cumulativeUpdates;
 
         private readonly List<IniEntryGroup> iniGroups;
         private readonly List<CONEntryGroup> conEntryGroups = new();
@@ -189,8 +193,9 @@ namespace YARG.Core.Song.Cache
 
         #region Common
 
-        private CacheHandler(List<string> baseDirectories)
+        private CacheHandler(List<string> baseDirectories, bool cumulativeUpdates)
         {
+            this.cumulativeUpdates = cumulativeUpdates;
             _progress = default;
 
             iniGroups = new(baseDirectories.Count);
@@ -241,31 +246,44 @@ namespace YARG.Core.Song.Cache
             {
                 if (!mods.Processed)
                 {
+                    var matchingGroups = new List<CONUpdateGroup>();
                     foreach (var group in updateGroups)
                     {
-                        if (!group.Updates.TryGetValue(name, out var node))
+                        if (group.Updates.ContainsKey(name))
                         {
-                            continue;
+                            matchingGroups.Add(group);
                         }
-
-                        if (mods.UpdateDirectoryAndDtaLastWrite.HasValue &&
+                    }
+                    if (cumulativeUpdates)
+                    {
+                        matchingGroups.Sort((a, b) => CONUpdateGroup.CompareLayers(a.Root, b.Root));
+                    }
+                    foreach (var group in matchingGroups)
+                    {
+                        var node = group.Updates[name];
+                        if (!cumulativeUpdates && mods.UpdateDirectoryAndDtaLastWrite.HasValue &&
                             group.Root.LastWriteTime <= mods.UpdateDirectoryAndDtaLastWrite.Value.LastWriteTime)
                         {
                             continue;
                         }
 
-                        mods.UpdateDirectoryAndDtaLastWrite = group.Root;
-                        mods.UpdateDTA = DTAEntry.Empty;
+                        var dta = DTAEntry.Empty;
                         for (int i = 0; i < node.Containers.Count; ++i)
                         {
-                            mods.UpdateDTA.LoadData(name, node.Containers[i]);
+                            dta.LoadData(name, node.Containers[i]);
                         }
-
-                        mods.UpdateMidiLastWrite = node.Update;
-                        if (!mods.UpdateMidiLastWrite.HasValue && mods.UpdateDTA.DiscUpdate)
+                        if (!node.Update.HasValue && dta.DiscUpdate)
                         {
                             YargLogger.LogFormatWarning("Update midi expected in directory {0}", Path.Combine(group.Root.FullName, name));
                         }
+                        if (!cumulativeUpdates)
+                        {
+                            mods.UpdateLayers.Clear();
+                        }
+                        mods.UpdateLayers.Add(new CONUpdateLayer(group.Root, dta, node.Update));
+                        mods.UpdateDirectoryAndDtaLastWrite = group.Root;
+                        mods.UpdateDTA = dta;
+                        mods.UpdateMidiLastWrite = node.Update;
                     }
 
                     foreach (var group in packedUpgradeGroups)
@@ -323,33 +341,6 @@ namespace YARG.Core.Song.Cache
                 Parallel.ForEach(group, node =>
                 {
                     var mods = GetCONMod(node.Key);
-                    if (mods.UpdateDirectoryAndDtaLastWrite != null)
-                    {
-                        string moggPath = Path.Combine(mods.UpdateDirectoryAndDtaLastWrite.Value.FullName, node.Key, node.Key + ".mogg");
-                        if (File.Exists(moggPath))
-                        {
-                            try
-                            {
-                                using var stream = new FileStream(moggPath, FileMode.Open, FileAccess.Read, FileShare.Read, 1);
-                                var moggResult = RBCONEntry.ValidateMoggHeader(stream);
-                                if (moggResult != ScanResult.Success)
-                                {
-                                    AddToBadSongs(group.Root.FullName + " - " + node.Key,
-                                        moggResult == ScanResult.UnsupportedEncryption
-                                            ? moggResult
-                                            : ScanResult.MoggError_Update);
-                                    return;
-                                }
-                            }
-                            catch (Exception e)
-                            {
-                                YargLogger.LogException(e);
-                                AddToBadSongs(group.Root.FullName + " - " + node.Key, ScanResult.MoggError_Update);
-                                return;
-                            }
-                        }
-                    }
-
                     var parameters = new RBScanParameters()
                     {
                         UpdateDta = mods.UpdateDTA,
@@ -358,6 +349,7 @@ namespace YARG.Core.Song.Cache
                         NodeName = node.Key,
                         UpdateDirectory = mods.UpdateDirectoryAndDtaLastWrite,
                         UpdateMidi = mods.UpdateMidiLastWrite,
+                        UpdateLayers = mods.UpdateLayers.ToArray(),
                         Upgrade = mods.Upgrade,
                         DefaultPlaylist = group.DefaultPlaylist,
                     };
@@ -385,7 +377,7 @@ namespace YARG.Core.Song.Cache
                         }
                         else
                         {
-                            entry.UpdateInfo(in parameters.UpdateDirectory, in parameters.UpdateMidi, parameters.Upgrade);
+                            entry.UpdateInfo(in parameters.UpdateDirectory, in parameters.UpdateMidi, parameters.Upgrade, parameters.UpdateLayers);
                             AddEntry(entry);
                         }
                     }
@@ -553,6 +545,9 @@ namespace YARG.Core.Song.Cache
                         break;
                     case ScanResult.UnsupportedEncryption:
                         writer.WriteLine("Mogg file uses unsupported encryption");
+                        break;
+                    case ScanResult.MoggError_Update:
+                        writer.WriteLine("Update mogg audio file not present or used invalid encryption");
                         break;
                     case ScanResult.MissingCONMidi:
                         writer.WriteLine("Midi file queried for found missing");
@@ -921,7 +916,7 @@ namespace YARG.Core.Song.Cache
         /// 24 - (# groups(4 bytes) * # group types(6))
         ///
         /// </summary>
-        private const int MIN_CACHEFILESIZE = 93;
+        private const int MIN_CACHEFILESIZE = 94;
 
         /// <summary>
         /// Attempts to laod the cache file's data into a FixedArray. This will fail if an error is thrown,
@@ -930,7 +925,7 @@ namespace YARG.Core.Song.Cache
         /// <param name="cacheLocation">File location for the cache</param>
         /// <param name="fullDirectoryPlaylists">Toggle for the display style of directory-based playlists</param>
         /// <returns>A FixedArray instance pointing to a buffer of the cache file's data, or <see cref="FixedArray&lt;&gt;"/>.Null if invalid</returns>
-        private static FixedArray<byte>? LoadCacheToMemory(string cacheLocation, bool fullDirectoryPlaylists)
+        private static FixedArray<byte>? LoadCacheToMemory(string cacheLocation, bool fullDirectoryPlaylists, bool cumulativeUpdates)
         {
             FileInfo info = new(cacheLocation);
             if (!info.Exists || info.Length < MIN_CACHEFILESIZE)
@@ -951,6 +946,11 @@ namespace YARG.Core.Song.Cache
                 YargLogger.LogDebug($"FullDirectoryFlag flipped");
                 return null;
             }
+            if (stream.ReadBoolean() != cumulativeUpdates)
+            {
+                YargLogger.LogDebug("Update layering mode flipped; rebuilding cache");
+                return null;
+            }
             return FixedArray.ReadRemainder(stream);
         }
 
@@ -964,6 +964,7 @@ namespace YARG.Core.Song.Cache
 
             filestream.Write(CACHE_VERSION, Endianness.Little);
             filestream.Write(fullDirectoryPlaylists);
+            filestream.Write(cumulativeUpdates);
 
             Dictionary<SongEntry, CacheWriteIndices> nodes = new();
             SongEntrySorting.WriteCategoriesToCache(filestream, cache, nodes);
@@ -1076,11 +1077,11 @@ namespace YARG.Core.Song.Cache
                     updateGroups.Add(group);
                 }
                 // We need to compare what we have on the filesystem against what's written one by one
-                var songsToInvalidate = new Dictionary<string, DateTime?>();
+                var songsToInvalidate = new Dictionary<string, (DateTime? Midi, string Assets)>();
                 songsToInvalidate.EnsureCapacity(group.Updates.Count);
                 foreach (var update in group.Updates)
                 {
-                    songsToInvalidate.Add(update.Key, update.Value.Update);
+                    songsToInvalidate.Add(update.Key, (update.Value.Update, group.AssetSignature(update.Key)));
                 }
 
                 for (int i = 0; i < count; i++)
@@ -1092,15 +1093,11 @@ namespace YARG.Core.Song.Cache
                         lastWrite = DateTime.FromBinary(stream.Read<long>(Endianness.Little));
                     }
 
-                    if (songsToInvalidate.TryGetValue(name, out var currLastWrite))
+                    string assetSignature = stream.ReadString();
+                    if (songsToInvalidate.TryGetValue(name, out var current) &&
+                        lastWrite == current.Midi && assetSignature == current.Assets)
                     {
-                        if (lastWrite.HasValue == currLastWrite.HasValue)
-                        {
-                            if (!lastWrite.HasValue || lastWrite.Value == currLastWrite!.Value)
-                            {
-                                songsToInvalidate.Remove(name);
-                            }
-                        }
+                        songsToInvalidate.Remove(name);
                     }
                     else
                     {
@@ -1124,6 +1121,7 @@ namespace YARG.Core.Song.Cache
                 {
                     stream.Position += SIZEOF_DATETIME;
                 }
+                stream.ReadString(); // asset signature
             }
         }
 
@@ -1144,9 +1142,14 @@ namespace YARG.Core.Song.Cache
                     midiLastWrite = DateTime.FromBinary(stream.Read<long>(Endianness.Little));
                 }
 
+                stream.ReadString(); // asset signature; quick scans deliberately skip filesystem checks
                 var mods = GetQuickCONMods(name);
                 lock (mods)
                 {
+                    if (cumulativeUpdates)
+                    {
+                        mods.UpdateLayers.Add(new CONUpdateLayer(root, DTAEntry.Empty, midiLastWrite));
+                    }
                     if (!mods.UpdateDirectoryAndDtaLastWrite.HasValue || mods.UpdateDirectoryAndDtaLastWrite.Value.LastWriteTime < root.LastWriteTime)
                     {
                         mods.UpdateDirectoryAndDtaLastWrite = root;
@@ -1497,7 +1500,12 @@ namespace YARG.Core.Song.Cache
 
                     if (cacheCONModifications.TryGetValue(name, out var mods))
                     {
-                        entry.UpdateInfo(mods.UpdateDirectoryAndDtaLastWrite, mods.UpdateMidi, mods.Upgrade);
+                        var layers = mods.UpdateLayers.ToArray();
+                        if (cumulativeUpdates)
+                        {
+                            Array.Sort(layers, (a, b) => CONUpdateGroup.CompareLayers(a.Root, b.Root));
+                        }
+                        entry.UpdateInfo(mods.UpdateDirectoryAndDtaLastWrite, mods.UpdateMidi, mods.Upgrade, layers);
                     }
                     AddEntry(entry);
                 });

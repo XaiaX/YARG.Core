@@ -1,4 +1,5 @@
 using NUnit.Framework;
+using Melanchall.DryWetMidi.Core;
 using YARG.Core.Extensions;
 using YARG.Core.IO;
 using YARG.Core.Song;
@@ -188,6 +189,39 @@ public class RBCONEntryTests
         entry.UpdateInfo(null, updateMidi, new TestRBProUpgrade(upgradeMidi));
 
         Assert.That(entry.GetLastWriteTime(), Is.EqualTo(baseMidi));
+    }
+
+    [Test]
+    public void LoadChart_UpdateMidiMissingAfterScanReturnsNull()
+    {
+        string root = CreateTempDirectory();
+        try
+        {
+            var entry = CreateUnpackedEntry(root, TEST_NODE_NAME, CreateBasicDta(TEST_NODE_NAME));
+            string updates = Path.Combine(root, "updates", "songs_updates");
+            string updateSong = Path.Combine(updates, TEST_NODE_NAME);
+            Directory.CreateDirectory(updateSong);
+            string dtaPath = Path.Combine(updates, RBCONEntry.SONGUPDATES_DTA);
+            File.WriteAllText(dtaPath, CreateBasicDta(TEST_NODE_NAME));
+            string midiPath = Path.Combine(updateSong, $"{TEST_NODE_NAME}_update.mid");
+            File.Copy(GetTestMidiPath(), midiPath);
+
+            var updateDirectory = new AbridgedFileInfo(updates,
+                AbridgedFileInfo.NormalizedLastWrite(new FileInfo(dtaPath)));
+            var midiLastWrite = AbridgedFileInfo.NormalizedLastWrite(new FileInfo(midiPath));
+            entry.UpdateInfo(updateDirectory, midiLastWrite, null);
+            Assert.That(entry.LoadChart(), Is.Not.Null, "The intact update should load before invalidation.");
+
+            File.Delete(midiPath);
+            Assert.That(entry.LoadChart(), Is.Null, "A missing recorded update MIDI must not silently load the base chart.");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }
 
     [Test]
@@ -414,6 +448,139 @@ public class RBCONEntryTests
                 Directory.Delete(root, true);
             }
         }
+    }
+
+    [Test]
+    public void Create_UpdateReplacementRemovesBaseGuitarAndRetainsUnreplacedBass()
+    {
+        string root = CreateTempDirectory();
+        try
+        {
+            CreateLayeredBase(root);
+            string updateRoot = CreateUpdateLayer(root, "replacement", "PART GUITAR", false);
+            var parameters = CreateLayeredScanParameters(root, updateRoot);
+            Assert.That(AbridgedFileInfo.Validate(Path.Combine(updateRoot, RBCONEntry.SONGUPDATES_DTA),
+                parameters.UpdateLayers![0].Root.LastWriteTime), Is.True, "Update DTA timestamp must validate.");
+            var result = UnpackedRBCONEntry.Create(in parameters);
+            Assert.That(result.HasValue, Is.True, $"Scan failed: {result.Error}");
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(result.Value[Instrument.FiveFretGuitar].IsActive(), Is.False,
+                    "The empty update guitar track replaces the base guitar notes.");
+                Assert.That(result.Value[Instrument.FiveFretBass].IsActive(), Is.True,
+                    "An unrelated base track survives the update.");
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Test]
+    public void Create_MetadataOnlyLayerDoesNotRestoreReplacedGuitar()
+    {
+        string root = CreateTempDirectory();
+        try
+        {
+            CreateLayeredBase(root);
+            string replacement = CreateUpdateLayer(root, "replacement", "PART GUITAR", false);
+            string metadataOnly = CreateUpdateLayer(root, "metadata-only", null, false);
+            var parameters = CreateLayeredScanParameters(root, replacement, metadataOnly);
+            var result = UnpackedRBCONEntry.Create(in parameters);
+            Assert.That(result.HasValue, Is.True, $"Scan failed: {result.Error}");
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(result.Value[Instrument.FiveFretGuitar].IsActive(), Is.False);
+                Assert.That(result.Value[Instrument.FiveFretBass].IsActive(), Is.True);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Test]
+    public void Create_LaterUpdateRestoresReplacedTrack()
+    {
+        string root = CreateTempDirectory();
+        try
+        {
+            CreateLayeredBase(root);
+            string replacement = CreateUpdateLayer(root, "replacement", "PART GUITAR", false);
+            string restoring = CreateUpdateLayer(root, "restoring", "PART GUITAR", true);
+            var parameters = CreateLayeredScanParameters(root, replacement, restoring);
+            var result = UnpackedRBCONEntry.Create(in parameters);
+            Assert.That(result.HasValue, Is.True, $"Scan failed: {result.Error}");
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(result.Value[Instrument.FiveFretGuitar].IsActive(), Is.True);
+                Assert.That(result.Value[Instrument.FiveFretBass].IsActive(), Is.True);
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    private static void CreateLayeredBase(string root)
+    {
+        string songDirectory = Path.Combine(root, TEST_NODE_NAME);
+        Directory.CreateDirectory(songDirectory);
+        WriteTrackMidi(Path.Combine(songDirectory, TEST_NODE_NAME + ".mid"),
+            ("PART GUITAR", 96), ("PART BASS", 96));
+        using var mogg = File.Create(Path.Combine(songDirectory, TEST_NODE_NAME + ".mogg"));
+        mogg.Write(RBCONEntry.UNENCRYPTED_MOGG, Endianness.Little);
+    }
+
+    private static string CreateUpdateLayer(string root, string name, string? trackName, bool notes)
+    {
+        string directory = Path.Combine(root, name);
+        string songDirectory = Path.Combine(directory, TEST_NODE_NAME);
+        Directory.CreateDirectory(songDirectory);
+        File.WriteAllText(Path.Combine(directory, RBCONEntry.SONGUPDATES_DTA), CreateBasicDta(TEST_NODE_NAME));
+        if (trackName != null)
+        {
+            WriteTrackMidi(Path.Combine(songDirectory, TEST_NODE_NAME + "_update.mid"),
+                (trackName, notes ? 96 : null));
+        }
+        return directory;
+    }
+
+    private static RBScanParameters CreateLayeredScanParameters(string root, params string[] layerRoots)
+    {
+        var parameters = CreateScanParameters(root, TEST_NODE_NAME, CreateDta(CreateBasicDta(TEST_NODE_NAME)));
+        parameters.UpdateLayers = layerRoots.Select(path =>
+        {
+            var dta = new AbridgedFileInfo(Path.Combine(path, RBCONEntry.SONGUPDATES_DTA));
+            string midiPath = Path.Combine(path, TEST_NODE_NAME, TEST_NODE_NAME + "_update.mid");
+            DateTime? midi = File.Exists(midiPath) ? AbridgedFileInfo.NormalizedLastWrite(new FileInfo(midiPath)) : null;
+            return new CONUpdateLayer(new AbridgedFileInfo(path, dta.LastWriteTime), DTAEntry.Empty, midi);
+        }).ToArray();
+        return parameters;
+    }
+
+    private static void WriteTrackMidi(string path, params (string Name, int? Note)[] tracks)
+    {
+        var midi = new MidiFile(new TrackChunk())
+        {
+            TimeDivision = new TicksPerQuarterNoteTimeDivision(480)
+        };
+        foreach (var (name, note) in tracks)
+        {
+            var chunk = new TrackChunk(new SequenceTrackNameEvent(name));
+            if (note.HasValue)
+            {
+                chunk.Events.Add(new NoteOnEvent((Melanchall.DryWetMidi.Common.SevenBitNumber) note.Value,
+                    (Melanchall.DryWetMidi.Common.SevenBitNumber) 100) { DeltaTime = 1 });
+                chunk.Events.Add(new NoteOffEvent((Melanchall.DryWetMidi.Common.SevenBitNumber) note.Value,
+                    (Melanchall.DryWetMidi.Common.SevenBitNumber) 0) { DeltaTime = 120 });
+            }
+            midi.Chunks.Add(chunk);
+        }
+        midi.Write(path);
     }
 
     private static RBCONEntry CreateUnpackedEntry(string root, string nodeName, string dtaText,
