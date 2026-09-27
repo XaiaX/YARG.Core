@@ -50,7 +50,7 @@ public class InstrumentEnumExtensionsTests
     }
 
     [Test]
-    public void PossibleInstrumentsForSong_EliteDrumsReturnsFiveLaneOnlyWhenSongHasFiveLaneDrums()
+    public void PossibleInstrumentsForSong_EliteDrumsOffersNativeAndFallbackFormatsWhenSongHasFiveLaneDrums()
     {
         var parts = AvailableParts.Default;
         parts.FiveLaneDrums.ActivateSubtrack(0);
@@ -61,12 +61,15 @@ public class InstrumentEnumExtensionsTests
         var instruments = GameMode.EliteDrums.PossibleInstrumentsForSong(entry);
 
         Assert.That(instruments, Is.EqualTo([
+            Instrument.EliteDrums,
+            Instrument.ProDrums,
+            Instrument.FourLaneDrums,
             Instrument.FiveLaneDrums,
         ]));
     }
 
     [Test]
-    public void PossibleInstrumentsForSong_EliteDrumsReturnsFourLaneAndProDrumsWhenSongDoesNotHaveFiveLaneDrums()
+    public void PossibleInstrumentsForSong_EliteDrumsOffersNativeAndFallbackFormatsWithoutFiveLaneDrums()
     {
         var parts = AvailableParts.Default;
         parts.FourLaneDrums.ActivateSubtrack(0);
@@ -78,8 +81,10 @@ public class InstrumentEnumExtensionsTests
         var instruments = GameMode.EliteDrums.PossibleInstrumentsForSong(entry);
 
         Assert.That(instruments, Is.EqualTo([
-            Instrument.FourLaneDrums,
+            Instrument.EliteDrums,
             Instrument.ProDrums,
+            Instrument.FourLaneDrums,
+            Instrument.FiveLaneDrums,
         ]));
     }
 

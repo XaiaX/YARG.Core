@@ -1,6 +1,7 @@
 ﻿using YARG.Core.Chart;
 using System;
 using YARG.Core.Engine.Drums;
+using YARG.Core.Engine.Drums.Engines;
 using YARG.Core.Engine.Guitar;
 using YARG.Core.Engine.Keys;
 using YARG.Core.Engine.Vocals;
@@ -402,6 +403,9 @@ namespace YARG.Core.Engine
                     case DrumsEngine drumsEngine:
                         drumsEngine.OnOverhit += OnOverstrum;
                         break;
+                    case EliteDrumsEngine eliteDrumsEngine:
+                        eliteDrumsEngine.OnOverhit += OnOverstrum;
+                        break;
                     case ProKeysEngine proKeysEngine:
                         proKeysEngine.OnOverhit += OnKeysOverhit;
                         break;
@@ -438,6 +442,9 @@ namespace YARG.Core.Engine
                         break;
                     case DrumsEngine drumsEngine:
                         drumsEngine.OnOverhit -= OnOverstrum;
+                        break;
+                    case EliteDrumsEngine eliteDrumsEngine:
+                        eliteDrumsEngine.OnOverhit -= OnOverstrum;
                         break;
                     case ProKeysEngine proKeysEngine:
                         proKeysEngine.OnOverhit -= OnKeysOverhit;

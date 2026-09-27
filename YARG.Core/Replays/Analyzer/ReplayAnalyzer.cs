@@ -251,6 +251,16 @@ namespace YARG.Core.Replays.Analyzer
                 case GameMode.FiveLaneDrums:
                 case GameMode.EliteDrums:
                 {
+                    if (DrumDifficultySelector.UsesNativeEliteTrack(profile))
+                    {
+                        var eliteNotes = DrumDifficultySelector.SelectNativeEliteTrack(_chart, profile)
+                            .GetDifficulty(profile.CurrentDifficulty).Clone();
+                        eliteNotes.SetDrumActivationFlags(profile.StarPowerActivationType);
+                        profile.ApplyModifiers(eliteNotes, _chart.SyncTrack);
+                        manager.Register((EliteDrumsEngine)engine, eliteNotes, _chart, rockMeterPreset);
+                        break;
+                    }
+
                     var notes = DrumDifficultySelector.SelectTrack(_chart, profile)
                         .GetDifficulty(profile.CurrentDifficulty).Clone();
                     profile.ApplyModifiers(notes, _chart.SyncTrack);
@@ -340,14 +350,26 @@ namespace YARG.Core.Replays.Analyzer
                 case GameMode.FiveLaneDrums:
                 case GameMode.EliteDrums:
                 {
-                    // Reset the notes. A player who recorded with an explicit "Elite (To …)"
-                    // target played the downchart variant for that instrument, not the native
-                    // track, so the analyzer must select the same one (the caller is expected
-                    // to have loaded the chart with those downchart variants built). The
-                    // The shared selector requires an explicit target to be well-formed,
-                    // consistent with the frame's instrument and drum game mode, and present
-                    // in the generated chart dictionary. Replays recorded before the feature
-                    // existed carry no target and always analyze natively.
+                    if (DrumDifficultySelector.UsesNativeEliteTrack(profile))
+                    {
+                        var eliteNotes = DrumDifficultySelector.SelectNativeEliteTrack(_chart, profile)
+                            .GetDifficulty(profile.CurrentDifficulty).Clone();
+                        eliteNotes.SetDrumActivationFlags(profile.StarPowerActivationType);
+                        profile.ApplyModifiers(eliteNotes, _chart.SyncTrack);
+                        foreach (var note in eliteNotes.Notes)
+                        {
+                            foreach (var subNote in note.AllNotes)
+                            {
+                                subNote.ResetNoteState();
+                            }
+                        }
+
+                        return new EliteDrumsEngine(eliteNotes, _chart.SyncTrack,
+                            (DrumsEngineParameters) parameters, profile.IsBot, true);
+                    }
+
+                    // Explicit generated targets must resolve to their requested variant;
+                    // missing or malformed targets never fall back to a native track.
                     var notes = DrumDifficultySelector.SelectTrack(_chart, profile)
                         .GetDifficulty(profile.CurrentDifficulty).Clone();
                     notes.SetDrumActivationFlags(profile.StarPowerActivationType);

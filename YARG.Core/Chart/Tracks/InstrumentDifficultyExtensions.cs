@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using YARG.Core.Engine.Guitar;
 using YARG.Core.Extensions;
 
@@ -768,6 +769,70 @@ namespace YARG.Core.Chart
             }
         }
 
+        /// <summary>Removes native Elite kick notes, preserving any non-kick members of a chord.</summary>
+        public static void RemoveEliteKickDrumNotes(this InstrumentDifficulty<EliteDrumNote> difficulty)
+        {
+            for (int i = difficulty.Notes.Count - 1; i >= 0; i--)
+            {
+                var note = difficulty.Notes[i];
+                if ((int) note.Pad == (int) EliteDrumNote.EliteDrumPad.Kick)
+                {
+                    if (note.ChildNotes.Count == 0)
+                    {
+                        difficulty.Notes.RemoveAt(i);
+                        continue;
+                    }
+
+                    // A kick parent with surviving chord members is replaced by its first survivor.
+                    var surviving = note.ChildNotes.Where(child =>
+                        (int) child.Pad != (int) EliteDrumNote.EliteDrumPad.Kick).ToList();
+                    if (surviving.Count == 0)
+                    {
+                        difficulty.Notes.RemoveAt(i);
+                        continue;
+                    }
+
+                    var replacement = surviving[0].CloneWithoutChildNotes();
+                    foreach (var child in surviving.Skip(1))
+                    {
+                        replacement.AddChildNote(child);
+                    }
+                    difficulty.Notes[i] = replacement;
+                    continue;
+                }
+
+                var nonKickChildren = note.ChildNotes.Where(child =>
+                    (int) child.Pad != (int) EliteDrumNote.EliteDrumPad.Kick).ToList();
+                if (nonKickChildren.Count != note.ChildNotes.Count)
+                {
+                    var replacement = note.CloneWithoutChildNotes();
+                    foreach (var child in nonKickChildren)
+                    {
+                        replacement.AddChildNote(child);
+                    }
+                    difficulty.Notes[i] = replacement;
+                }
+            }
+
+            for (int i = 0; i < difficulty.Notes.Count; i++)
+            {
+                difficulty.Notes[i].PreviousNote = i > 0 ? difficulty.Notes[i - 1] : null;
+                difficulty.Notes[i].NextNote = i + 1 < difficulty.Notes.Count ? difficulty.Notes[i + 1] : null;
+            }
+        }
+
+        /// <summary>Removes accent/ghost dynamics from every Elite drum note and chord member.</summary>
+        public static void RemoveEliteDynamics(this InstrumentDifficulty<EliteDrumNote> difficulty)
+        {
+            foreach (var note in difficulty.Notes)
+            {
+                foreach (var member in note.AllNotes)
+                {
+                    member.Dynamics = DrumNoteType.Neutral;
+                }
+            }
+        }
+
         public static void SetDrumActivationFlags(this InstrumentDifficulty<DrumNote> difficulty, StarPowerActivationType activationType)
         {
             var notes = difficulty.Notes;
@@ -820,6 +885,53 @@ namespace YARG.Core.Chart
             // return difficulty;
         }
 
+
+        /// <summary>
+        /// Sets drum-fill activation flags on an Elite drum difficulty. Invisible terminators
+        /// are ignored when selecting the boundary note because they are not playable notes.
+        /// If no playable note exists at the boundary, the fill has no activation gesture.
+        /// </summary>
+        public static void SetDrumActivationFlags(this InstrumentDifficulty<EliteDrumNote> difficulty,
+            StarPowerActivationType activationType)
+        {
+            var notes = difficulty.Notes;
+            int checkpoint = 0;
+
+            foreach (var phrase in difficulty.Phrases)
+            {
+                if (phrase.Type != PhraseType.DrumFill)
+                {
+                    continue;
+                }
+
+                for (int i = checkpoint; i < notes.Count; i++)
+                {
+                    checkpoint = i;
+                    if (notes[i].Time < phrase.TimeEnd)
+                    {
+                        continue;
+                    }
+
+                    // Never walk backward across the fill boundary to mark a previous hit.
+                    // An invisible parent may still have a playable chord member.
+                    var activationNote = notes[i];
+                    if (activationNote.Time < phrase.TimeEnd) break;
+                    EliteDrumNote? rightmostNote = null;
+                    foreach (var member in activationNote.AllNotes)
+                    {
+                        if (member.IsInvisibleTerminator) continue;
+                        if (rightmostNote == null || member.Pad > rightmostNote.Pad)
+                            rightmostNote = member;
+                        if (activationType == StarPowerActivationType.AllNotes)
+                            member.ActivateFlag(DrumNoteFlags.StarPowerActivator);
+                    }
+
+                    if (activationType == StarPowerActivationType.RightmostNote)
+                        rightmostNote?.ActivateFlag(DrumNoteFlags.StarPowerActivator);
+                    break;
+                }
+            }
+        }
 
         public static void RemoveDynamics(this InstrumentDifficulty<DrumNote> difficulty)
         {

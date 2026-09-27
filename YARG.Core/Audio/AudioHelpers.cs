@@ -103,7 +103,8 @@ namespace YARG.Core.Audio
 
                 Instrument.ProDrums or
                 Instrument.FourLaneDrums or
-                Instrument.FiveLaneDrums => DrumsStems,
+                Instrument.FiveLaneDrums or
+                Instrument.EliteDrums => DrumsStems,
 
                 Instrument.Vocals or
                 Instrument.Harmony => VocalsStems,

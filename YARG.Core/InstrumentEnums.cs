@@ -318,17 +318,16 @@ namespace YARG.Core
         {
             return gameMode switch
             {
-                GameMode.EliteDrums     => entry.HasInstrument(Instrument.FiveLaneDrums) ?
-                    new[]
-                    {
-                        Instrument.FiveLaneDrums,
-                        //Instrument.EliteDrums,
-                    } :
-                    new[] {
-                        Instrument.FourLaneDrums,
-                        Instrument.ProDrums,
-                        //Instrument.EliteDrums,
-                    },
+                // Advertise native Elite and all concrete fallback formats; the selection
+                // policy resolves playable charts at the selected difficulty, not merely a
+                // song-level Five-Lane flag.
+                GameMode.EliteDrums => new[]
+                {
+                    Instrument.EliteDrums,
+                    Instrument.ProDrums,
+                    Instrument.FourLaneDrums,
+                    Instrument.FiveLaneDrums,
+                },
                 GameMode.SixFretGuitar => new[]
                 {
                     Instrument.SixFretGuitar,

@@ -574,9 +574,27 @@ namespace YARG.Core.Game
                     }
 
                     break;
+                case GameMode.EliteDrums:
+                    if (track is InstrumentDifficulty<EliteDrumNote> eliteDrumsTrack &&
+                        CurrentInstrument == Instrument.EliteDrums && EliteDrumsDownchartTarget is null)
+                    {
+                        if (IsModifierActive(Modifier.NoKicks)) eliteDrumsTrack.RemoveEliteKickDrumNotes();
+                        if (IsModifierActive(Modifier.NoDynamics)) eliteDrumsTrack.RemoveEliteDynamics();
+                        break;
+                    }
+                    // Generated targets and resolved native Pro/Four/Five fallbacks use
+                    // the existing DrumNote modifier path unchanged.
+                    if (track is InstrumentDifficulty<DrumNote> fallbackDrumsTrack &&
+                        CurrentInstrument is Instrument.ProDrums or Instrument.FourLaneDrums or Instrument.FiveLaneDrums)
+                    {
+                        if (IsModifierActive(Modifier.NoKicks)) fallbackDrumsTrack.RemoveKickDrumNotes();
+                        if (IsModifierActive(Modifier.NoDynamics)) fallbackDrumsTrack.RemoveDynamics();
+                        break;
+                    }
+                    throw new InvalidOperationException("Cannot apply Elite drum modifiers to track " +
+                        $"with notes of {typeof(TNote)} for {CurrentInstrument}!");
                 case GameMode.FourLaneDrums:
                 case GameMode.FiveLaneDrums:
-                case GameMode.EliteDrums:
                     if (track is not InstrumentDifficulty<DrumNote> drumsTrack)
                     {
                         throw new InvalidOperationException("Cannot apply drum modifiers to non-drums track " +
