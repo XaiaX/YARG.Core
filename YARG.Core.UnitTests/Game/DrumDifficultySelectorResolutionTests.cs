@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using NUnit.Framework;
 using YARG.Core.Chart;
 using YARG.Core.Game;
+using YARG.Core.Song;
+using YARG.Core.UnitTests.Song;
 using static YARG.Core.Chart.EliteDrumNote;
 
 namespace YARG.Core.UnitTests.Game;
@@ -42,6 +45,61 @@ public sealed class DrumDifficultySelectorResolutionTests
         chart.EliteDrums.AddDifficulty(difficulty,
             new InstrumentDifficulty<EliteDrumNote>(Instrument.EliteDrums, difficulty,
                 new List<EliteDrumNote> { note }, new(), new()));
+    }
+
+    [TestCase(Instrument.EliteDrums)]
+    [TestCase(Instrument.ProDrums)]
+    [TestCase(Instrument.FourLaneDrums)]
+    [TestCase(Instrument.FiveLaneDrums)]
+    public void ScannedNativeCandidateIsSpecificToEachSongsDifficulty(Instrument instrument)
+    {
+        var parts = AvailableParts.Default;
+        switch (instrument)
+        {
+            case Instrument.EliteDrums: parts.EliteDrums.ActivateSubtrack((int) Difficulty.Hard); break;
+            case Instrument.ProDrums: parts.ProDrums.ActivateSubtrack((int) Difficulty.Hard); break;
+            case Instrument.FourLaneDrums: parts.FourLaneDrums.ActivateSubtrack((int) Difficulty.Hard); break;
+            case Instrument.FiveLaneDrums: parts.FiveLaneDrums.ActivateSubtrack((int) Difficulty.Hard); break;
+        }
+        var song = new TestSongEntry();
+        song.SetParts(parts);
+
+        Assert.That(DrumDifficultySelector.HasNativeEliteCandidate(song), Is.True);
+        Assert.That(DrumDifficultySelector.HasNativeEliteCandidate(song, Difficulty.Hard), Is.True);
+        Assert.That(DrumDifficultySelector.HasNativeEliteCandidate(song, Difficulty.Expert), Is.False);
+    }
+
+    [Test]
+    public void MixedShowUsesPerSongNativeCandidatesWithoutSharedFormat()
+    {
+        var eliteParts = AvailableParts.Default;
+        eliteParts.EliteDrums.ActivateSubtrack((int) Requested);
+        var eliteSong = new TestSongEntry();
+        eliteSong.SetParts(eliteParts);
+
+        var proParts = AvailableParts.Default;
+        proParts.ProDrums.ActivateSubtrack((int) Requested);
+        var proSong = new TestSongEntry();
+        proSong.SetParts(proParts);
+
+        var songs = new[] { eliteSong, proSong };
+        Assert.That(songs.All(song => DrumDifficultySelector.HasNativeEliteCandidate(song, Requested)), Is.True);
+        Assert.That(songs.Any(song => song.HasInstrument(Instrument.EliteDrums)) &&
+            songs.Any(song => song.HasInstrument(Instrument.ProDrums)), Is.True);
+        Assert.That(songs.All(song => song.HasInstrument(Instrument.EliteDrums)), Is.False);
+        Assert.That(songs.All(song => song.HasInstrument(Instrument.ProDrums)), Is.False);
+    }
+
+    [Test]
+    public void ScannedCandidateRejectsEmptySongAndNull()
+    {
+        var song = new TestSongEntry();
+        Assert.That(DrumDifficultySelector.HasNativeEliteCandidate(song), Is.False);
+        Assert.That(DrumDifficultySelector.HasNativeEliteCandidate(song, Requested), Is.False);
+        Assert.That(() => DrumDifficultySelector.HasNativeEliteCandidate(null!),
+            Throws.TypeOf<ArgumentNullException>());
+        Assert.That(() => DrumDifficultySelector.HasNativeEliteCandidate(null!, Requested),
+            Throws.TypeOf<ArgumentNullException>());
     }
 
     [TestCase(false, false, false, false, null)]

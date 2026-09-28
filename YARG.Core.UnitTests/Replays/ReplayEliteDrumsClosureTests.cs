@@ -38,7 +38,7 @@ public sealed class ReplayEliteDrumsClosureTests
     public void OldReplayParametersUseLegacyDefaultsAndNewParametersAlign()
     {
         var current = Parameters(1, 2.75f);
-        var old = ReadParameters(current, ReplayIO.REPLAY_VERSIONS.CURRENT - 1);
+        var old = ReadParameters(current, ReplayIO.ELITE_FILL_MIN - 1);
         var newer = ReadParameters(current, ReplayIO.REPLAY_VERSIONS.CURRENT);
 
         Assert.Multiple(() =>

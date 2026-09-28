@@ -210,8 +210,22 @@ namespace YARG.Core.Engine
 
             YargLogger.LogFormatTrace("Running frame update at {0}", time);
             RunQueuedUpdates(time);
+            BeforeFrameUpdate(time);
             RunEngineLoop(time);
+            AfterFrameUpdate(time);
         }
+
+        /// <summary>Instrument-specific processing after bot and frame hit logic.</summary>
+        protected virtual void AfterFrameUpdate(double time) { }
+
+        /// <summary>Instrument-specific deadline processing after all queued inputs through this frame.</summary>
+        protected virtual void BeforeFrameUpdate(double time) { }
+
+        /// <summary>Instrument-specific finalization of a complete input timestamp.</summary>
+        protected virtual void AfterInputTimestamp(double time) { }
+
+        /// <summary>Native instruments may opt into draining every input at the frame timestamp.</summary>
+        protected virtual bool DrainSameTimestampInputs => false;
 
         private void ProcessInputs(double time)
         {
@@ -246,9 +260,14 @@ namespace YARG.Core.Engine
 
                 // Run the engine.
                 RunEngineLoop(input.Time);
+                if (!InputQueue.TryPeek(out var nextInput) || nextInput.Time != input.Time)
+                {
+                    AfterInputTimestamp(input.Time);
+                }
 
                 // Skip non-input update if possible
-                if (input.Time == time)
+                if (input.Time == time &&
+                    (!DrainSameTimestampInputs || !InputQueue.TryPeek(out var pendingInput) || pendingInput.Time > time))
                 {
                     if (InputQueue.Count > 0)
                     {

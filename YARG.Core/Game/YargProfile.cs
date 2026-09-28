@@ -24,7 +24,7 @@ namespace YARG.Core.Game
         /// serialized starting at 14. This is the *replay* profile version — it only
         /// ever appears inside ReplayFrame serialization, never in JSON persistence.
         /// </remarks>
-        private const int PROFILE_VERSION = 14;
+        private const int PROFILE_VERSION = 15;
 
         public int Version;
 
@@ -113,6 +113,21 @@ namespace YARG.Core.Game
         /// </summary>
         [JsonIgnore]
         public Instrument? EliteDrumsDownchartTarget { get; set; }
+
+        /// <summary>Whether this session is playing an unconverted native Elite Drums chart.</summary>
+        [JsonIgnore]
+        public bool IsNativeEliteDrums => GameMode == GameMode.EliteDrums &&
+            CurrentInstrument == Instrument.EliteDrums && EliteDrumsDownchartTarget is null;
+
+        /// <summary>Automatically handle the hi-hat pedal in native Elite gameplay; defaults to enabled.</summary>
+        public bool AutoHiHatPedal = true;
+
+        /// <summary>Remove playable hi-hat pedal notes from native Elite gameplay.</summary>
+        public bool NoHiHatPedal;
+
+        /// <summary>Effective auto-pedal setting, excluding non-native tracks and removed pedals.</summary>
+        [JsonIgnore]
+        public bool EffectiveAutoHiHatPedal => IsNativeEliteDrums && AutoHiHatPedal && !NoHiHatPedal;
 
         /// <summary>
         /// The selected difficulty.
@@ -459,6 +474,10 @@ namespace YARG.Core.Game
                     ? ReadValidDownchartTarget(ref stream)
                     : null;
             }
+
+            // Version 15 adds native Elite hi-hat controls. Older replays use their defaults.
+            AutoHiHatPedal = Version >= 15 ? stream.ReadBoolean() : true;
+            NoHiHatPedal = Version >= 15 && stream.ReadBoolean();
         }
 
         /// <summary>
@@ -575,10 +594,11 @@ namespace YARG.Core.Game
 
                     break;
                 case GameMode.EliteDrums:
-                    if (track is InstrumentDifficulty<EliteDrumNote> eliteDrumsTrack &&
-                        CurrentInstrument == Instrument.EliteDrums && EliteDrumsDownchartTarget is null)
+                    if (track is InstrumentDifficulty<EliteDrumNote> eliteDrumsTrack && IsNativeEliteDrums)
                     {
                         if (IsModifierActive(Modifier.NoKicks)) eliteDrumsTrack.RemoveEliteKickDrumNotes();
+                        if (IsModifierActive(Modifier.NoHiHat) || NoHiHatPedal)
+                            eliteDrumsTrack.RemoveEliteHiHatNotes(IsModifierActive(Modifier.NoHiHat), NoHiHatPedal);
                         if (IsModifierActive(Modifier.NoDynamics)) eliteDrumsTrack.RemoveEliteDynamics();
                         break;
                     }
@@ -776,6 +796,10 @@ namespace YARG.Core.Game
             {
                 writer.Write(false);
             }
+
+            // Version 15+: native Elite pedal settings affect the played chart and inputs.
+            writer.Write(AutoHiHatPedal);
+            writer.Write(NoHiHatPedal);
         }
 
         private static DrumsHighwayItem[] DEFAULT_FOUR_LANE_ORDERING = new DrumsHighwayItem[] {

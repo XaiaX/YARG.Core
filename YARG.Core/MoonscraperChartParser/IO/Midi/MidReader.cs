@@ -914,6 +914,38 @@ namespace MoonscraperChartEditor.Song.IO
             });
         }
 
+        private static void ProcessNoteOnEventAsFlagSet(ref EventProcessParams eventProcessParams, MoonSong.Difficulty difficulty, MoonNote.Flags flags, int individualNoteSpecifier)
+        {
+            var timedEvent = eventProcessParams.timedEvent;
+            uint startTick = (uint) timedEvent.startTick;
+            uint endTick = (uint) timedEvent.endTick;
+            // The closure interval is [pedal-down, pedal-up). An instantaneous
+            // control event has no covered onset, including its own tick.
+            if (endTick <= startTick) return;
+            --endTick;
+
+            eventProcessParams.forcingProcessList.Add((ref EventProcessParams processParams) =>
+            {
+                ProcessNoteOnEventAsFlagSetPostDelay(ref processParams, difficulty, startTick, endTick, flags, individualNoteSpecifier);
+            });
+        }
+
+        private static void ProcessNoteOnEventAsFlagSetPostDelay(ref EventProcessParams eventProcessParams, MoonSong.Difficulty difficulty, uint startTick, uint endTick, MoonNote.Flags flags, int individualNoteSpecifier)
+        {
+            var song = eventProcessParams.song;
+            var chart = song.GetChart(eventProcessParams.instrument, difficulty);
+            MoonObjectHelper.GetRange(chart.notes, startTick, endTick, out int index, out int length);
+            for (int i = index; i < index + length; ++i)
+            {
+                var note = chart.notes[i];
+                if ((individualNoteSpecifier < 0 || note.rawNote == individualNoteSpecifier) &&
+                    note.eliteDrumPad is MoonNote.EliteDrumPad.HiHat)
+                {
+                    note.flags |= flags;
+                }
+            }
+        }
+
         private static void ProcessNoteOnEventAsFlagTogglePostDelay(ref EventProcessParams eventProcessParams, uint startTick, uint endTick, MoonNote.Flags flags, int individualNoteSpecifier)   // individualNoteSpecifier as -1 to apply to the whole chord
         {
             var song = eventProcessParams.song;

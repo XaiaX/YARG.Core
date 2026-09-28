@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using YARG.Core.Chart;
+using YARG.Core.Song;
 
 namespace YARG.Core.Game
 {
@@ -11,6 +12,34 @@ namespace YARG.Core.Game
     /// </summary>
     public static class DrumDifficultySelector
     {
+        /// <summary>
+        /// Scan-time availability for an implicit native Elite request. Each show song may
+        /// provide a different native drum format; the loaded chart resolves the actual
+        /// playable instrument at the chosen difficulty before playback. Generated Elite
+        /// downcharts never satisfy this predicate.
+        /// </summary>
+        public static bool HasNativeEliteCandidate(SongEntry song)
+        {
+            if (song is null) throw new ArgumentNullException(nameof(song));
+            return song.HasInstrument(Instrument.EliteDrums) ||
+                song.HasInstrument(Instrument.ProDrums) ||
+                song.HasInstrument(Instrument.FourLaneDrums) ||
+                song.HasInstrument(Instrument.FiveLaneDrums);
+        }
+
+        /// <summary>
+        /// Scan-time availability at a given difficulty, not a substitute for resolving
+        /// playable notes in the loaded chart. Never includes generated downchart outputs.
+        /// </summary>
+        public static bool HasNativeEliteCandidate(SongEntry song, Difficulty difficulty)
+        {
+            if (song is null) throw new ArgumentNullException(nameof(song));
+            return song[Instrument.EliteDrums][difficulty] ||
+                song[Instrument.ProDrums][difficulty] ||
+                song[Instrument.FourLaneDrums][difficulty] ||
+                song[Instrument.FiveLaneDrums][difficulty];
+        }
+
         /// <summary>
         /// Resolves a native Elite request at the requested difficulty. Native Elite wins when
         /// it contains playable notes; otherwise Pro, Four-Lane, then Five-Lane are checked in

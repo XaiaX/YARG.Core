@@ -43,6 +43,22 @@ namespace YARG.Core.Engine.Drums
         /// </summary>
         public int DynamicsBonus;
 
+        /// <summary>Total optional hi-hat pedal notes on a native Elite chart.</summary>
+        public int OptionalPedalNotes;
+
+        /// <summary>Optional hi-hat pedal notes hit by the player.</summary>
+        public int OptionalPedalHits;
+
+        /// <summary>Optional hi-hat pedal notes automatically satisfied by assistance.</summary>
+        public int AssistedPedalNotes;
+
+        /// <summary>Whether native Elite optional pedal misses are excluded from full combo.</summary>
+        public bool OptionalPedalAccuracyEnabled;
+
+        public override bool IsFullCombo => OptionalPedalAccuracyEnabled
+            ? NotesMissed == 0
+            : base.IsFullCombo;
+
         public DrumsStats()
         {
         }
@@ -60,6 +76,10 @@ namespace YARG.Core.Engine.Drums
             AccentsHit = stats.AccentsHit;
             TotalAccents = stats.TotalAccents;
             DynamicsBonus = stats.DynamicsBonus;
+            OptionalPedalNotes = stats.OptionalPedalNotes;
+            OptionalPedalHits = stats.OptionalPedalHits;
+            AssistedPedalNotes = stats.AssistedPedalNotes;
+            OptionalPedalAccuracyEnabled = stats.OptionalPedalAccuracyEnabled;
         }
 
         public DrumsStats(ref FixedArrayStream stream, int version)
@@ -71,6 +91,13 @@ namespace YARG.Core.Engine.Drums
             AccentsHit = stream.Read<int>(Endianness.Little);
             TotalAccents = stream.Read<int>(Endianness.Little);
             DynamicsBonus = stream.Read<int>(Endianness.Little);
+            if (version >= ReplayIO.OPTIONAL_PEDAL_STATS_MIN)
+            {
+                OptionalPedalNotes = stream.Read<int>(Endianness.Little);
+                OptionalPedalHits = stream.Read<int>(Endianness.Little);
+                AssistedPedalNotes = stream.Read<int>(Endianness.Little);
+                OptionalPedalAccuracyEnabled = stream.ReadBoolean();
+            }
         }
 
         public override void Reset()
@@ -87,6 +114,9 @@ namespace YARG.Core.Engine.Drums
             // TotalAccents = 0;
 
             DynamicsBonus = 0;
+            // Preserve chart totals and mode across a reset.
+            OptionalPedalHits = 0;
+            AssistedPedalNotes = 0;
         }
 
         public override void Serialize(BinaryWriter writer)
@@ -99,6 +129,10 @@ namespace YARG.Core.Engine.Drums
             writer.Write(AccentsHit);
             writer.Write(TotalAccents);
             writer.Write(DynamicsBonus);
+            writer.Write(OptionalPedalNotes);
+            writer.Write(OptionalPedalHits);
+            writer.Write(AssistedPedalNotes);
+            writer.Write(OptionalPedalAccuracyEnabled);
         }
 
         public void RecordOverhit(int? action)

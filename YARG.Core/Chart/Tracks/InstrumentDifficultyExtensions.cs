@@ -821,6 +821,83 @@ namespace YARG.Core.Chart
             }
         }
 
+        /// <summary>
+        /// Removes native Elite hi-hat hits and/or playable pedal notes without deleting
+        /// invisible pedal terminators, which mark drum-fill boundaries.
+        /// </summary>
+        public static void RemoveEliteHiHatNotes(this InstrumentDifficulty<EliteDrumNote> difficulty,
+            bool removeHiHat, bool removePedal)
+        {
+            if (!removeHiHat && !removePedal) return;
+            if (removePedal) difficulty.NativeElitePedalsFiltered = true;
+
+            bool ShouldRemove(EliteDrumNote note) =>
+                (removeHiHat && note.Pad == (int) EliteDrumNote.EliteDrumPad.HiHat) ||
+                (removePedal && note.Pad == (int) EliteDrumNote.EliteDrumPad.HatPedal &&
+                    !note.IsInvisibleTerminator);
+
+            for (int i = difficulty.Notes.Count - 1; i >= 0; i--)
+            {
+                var note = difficulty.Notes[i];
+                var surviving = new List<EliteDrumNote>();
+                foreach (var member in note.AllNotes)
+                {
+                    if (!ShouldRemove(member)) surviving.Add(member);
+                }
+                if (surviving.Count == 0)
+                {
+                    difficulty.Notes.RemoveAt(i);
+                    continue;
+                }
+
+                if (surviving.Count == note.ChildNotes.Count + 1)
+                {
+                    if (removePedal)
+                    {
+                        foreach (var member in surviving)
+                        {
+                            if (member.Pad == (int) EliteDrumNote.EliteDrumPad.HiHat)
+                                member.HatState = EliteDrumNote.EliteDrumsHatState.Indifferent;
+                        }
+                    }
+                    continue;
+                }
+
+                var replacement = surviving[0].CloneWithoutChildNotes();
+                // Phrase/activation/coda boundaries may have been attached to the
+                // removed parent. Preserve these per-tick control flags on the new
+                // parent without changing the surviving member's pad identity.
+                if (ShouldRemove(note))
+                {
+                    const NoteFlags BOUNDARY = NoteFlags.StarPowerStart | NoteFlags.StarPowerEnd |
+                        NoteFlags.SoloStart | NoteFlags.SoloEnd | NoteFlags.CodaStart |
+                        NoteFlags.CodaEnd | NoteFlags.BigRockEnding;
+                    replacement.ActivateFlag(note.Flags & BOUNDARY);
+                    if (note.IsStarPowerActivator)
+                        replacement.ActivateFlag(DrumNoteFlags.StarPowerActivator);
+                }
+                foreach (var child in surviving.Skip(1))
+                {
+                    replacement.AddChildNote(child.CloneWithoutChildNotes());
+                }
+                if (removePedal)
+                {
+                    foreach (var member in replacement.AllNotes)
+                    {
+                        if (member.Pad == (int) EliteDrumNote.EliteDrumPad.HiHat)
+                            member.HatState = EliteDrumNote.EliteDrumsHatState.Indifferent;
+                    }
+                }
+                difficulty.Notes[i] = replacement;
+            }
+
+            for (int i = 0; i < difficulty.Notes.Count; i++)
+            {
+                difficulty.Notes[i].PreviousNote = i > 0 ? difficulty.Notes[i - 1] : null;
+                difficulty.Notes[i].NextNote = i + 1 < difficulty.Notes.Count ? difficulty.Notes[i + 1] : null;
+            }
+        }
+
         /// <summary>Removes accent/ghost dynamics from every Elite drum note and chord member.</summary>
         public static void RemoveEliteDynamics(this InstrumentDifficulty<EliteDrumNote> difficulty)
         {

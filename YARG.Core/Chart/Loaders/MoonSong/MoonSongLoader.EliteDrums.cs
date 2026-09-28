@@ -1,6 +1,7 @@
 ﻿using MoonscraperChartEditor.Song;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using YARG.Core.Parsing;
 using static YARG.Core.Chart.EliteDrumNote;
 
@@ -22,13 +23,38 @@ namespace YARG.Core.Chart
             _eliteSourceOrdinal = 0;
             var difficulties = new Dictionary<Difficulty, InstrumentDifficulty<EliteDrumNote>>()
             {
-                { Difficulty.Easy, LoadDifficulty(instrument, Difficulty.Easy, createNote, HandleEliteDrumsTextEvent) },
-                { Difficulty.Medium, LoadDifficulty(instrument, Difficulty.Medium, createNote, HandleEliteDrumsTextEvent) },
-                { Difficulty.Hard, LoadDifficulty(instrument, Difficulty.Hard, createNote, HandleEliteDrumsTextEvent) },
-                { Difficulty.Expert, LoadDifficulty(instrument, Difficulty.Expert, createNote, HandleEliteDrumsTextEvent) },
-                { Difficulty.ExpertPlus, LoadDifficulty(instrument, Difficulty.ExpertPlus, createNote, HandleEliteDrumsTextEvent) },
+                { Difficulty.Easy, LoadNativeEliteDrumsDifficulty(instrument, Difficulty.Easy, createNote) },
+                { Difficulty.Medium, LoadNativeEliteDrumsDifficulty(instrument, Difficulty.Medium, createNote) },
+                { Difficulty.Hard, LoadNativeEliteDrumsDifficulty(instrument, Difficulty.Hard, createNote) },
+                { Difficulty.Expert, LoadNativeEliteDrumsDifficulty(instrument, Difficulty.Expert, createNote) },
+                { Difficulty.ExpertPlus, LoadNativeEliteDrumsDifficulty(instrument, Difficulty.ExpertPlus, createNote) },
             };
             return new(instrument, difficulties);
+        }
+
+        private InstrumentDifficulty<EliteDrumNote> LoadEliteDrumsDifficulty(Instrument instrument,
+            Difficulty difficulty, CreateNoteDelegate<EliteDrumNote> createNote)
+        {
+            return LoadDifficulty(instrument, difficulty, createNote, HandleEliteDrumsTextEvent);
+        }
+
+        private InstrumentDifficulty<EliteDrumNote> LoadNativeEliteDrumsDifficulty(Instrument instrument,
+            Difficulty difficulty, CreateNoteDelegate<EliteDrumNote> createNote)
+        {
+            var chart = LoadEliteDrumsDifficulty(instrument, difficulty, createNote);
+            var records = new List<EliteDrumNativeAuthoredLaneRecord>();
+            for (int index = 0; index < chart.Phrases.Count; index++)
+            {
+                var phrase = chart.Phrases[index];
+                if (!EliteDrumNativeAuthoredLaneRecord.TryGetNativePad(phrase.Type, out var pad)) continue;
+                var sources = chart.Notes.SelectMany(note => note.ChildNotes.Prepend(note))
+                    .Where(note => note.Pad == (int) pad && note.Tick >= phrase.Tick && note.Tick < phrase.TickEnd)
+                    .Select(note => note.SourceDefinition).OfType<EliteDrumSourceDefinition>();
+                records.Add(new EliteDrumNativeAuthoredLaneRecord(index, phrase.Type,
+                    phrase.Tick, phrase.TickEnd, sources));
+            }
+            chart.SetEliteDrumNativeAuthoredLaneRecords(records);
+            return chart;
         }
 
         private EliteDrumNote CreateEliteDrumNote(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases,
@@ -36,8 +62,8 @@ namespace YARG.Core.Chart
         {
             var pad = GetEliteDrumPad(moonNote);
             var noteDynamics = GetEliteDrumNoteDynamics(moonNote);
-            var hatState = GetEliteDrumHatState(moonNote);
             var hatPedalType = GetEliteDrumHatPedalType(moonNote);
+            var hatState = GetEliteDrumHatState(moonNote);
             var isFlam = GetEliteDrumNoteIsFlam(moonNote);
             var drumFlags = GetDrumNoteFlags(moonNote, currentPhrases);
             var generalFlags = GetGeneralFlags(moonNote, currentPhrases);
@@ -114,10 +140,10 @@ namespace YARG.Core.Chart
 
             var hatState = EliteDrumsHatState.Open;
 
-            if ((moonNote.flags & MoonNote.Flags.EliteDrums_ForcedClosed) != 0)
-                hatState = EliteDrumsHatState.Closed;
-            else if ((moonNote.flags & MoonNote.Flags.EliteDrums_ForcedIndifferent) != 0)
+            if ((moonNote.flags & MoonNote.Flags.EliteDrums_ForcedIndifferent) != 0)
                 hatState = EliteDrumsHatState.Indifferent;
+            else if ((moonNote.flags & MoonNote.Flags.EliteDrums_ForcedClosed) != 0)
+                hatState = EliteDrumsHatState.Closed;
 
             return hatState;
         }

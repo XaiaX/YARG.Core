@@ -22,7 +22,7 @@ namespace YARG.Core.UnitTests.Replays;
 [TestFixture]
 public sealed class ReplayDataEliteDrumsDownchartTests
 {
-    private const int REPLAY_VERSION = 20;
+    private static readonly int REPLAY_VERSION = ReplayIO.REPLAY_VERSIONS.CURRENT;
     private const int OLD_REPLAY_VERSION = 17;
 
     private static readonly float[] StarMultiplierThresholds =

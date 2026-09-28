@@ -1341,7 +1341,9 @@ namespace MoonscraperChartEditor.Song.IO
                             // Process velocity
                             if (pad == MoonNote.EliteDrumPad.HatPedal)
                             {
-                                ProcessNoteOnEventAsFlagToggle(ref eventProcessParams, MoonNote.Flags.EliteDrums_ForcedClosed, (int) MoonNote.EliteDrumPad.HiHat);
+                                // A held pedal closes hi-hats for its MIDI sustain, regardless of
+                                // strict-state mode. Strict mode only affects pedal-note semantics.
+                                ProcessNoteOnEventAsFlagSet(ref eventProcessParams, difficulty, MoonNote.Flags.EliteDrums_ForcedClosed, (int) MoonNote.EliteDrumPad.HiHat);
 
                                 switch (noteEvent.Velocity)
                                 {

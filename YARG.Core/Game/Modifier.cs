@@ -21,7 +21,8 @@ namespace YARG.Core.Game
         OpensToGreens = 1 << 11,
         ManualVocalStarPower = 1 << 12,
         UnpitchedHarm2 = 1 << 13,
-        UnpitchedHarm3 = 1 << 14
+        UnpitchedHarm3 = 1 << 14,
+        NoHiHat = 1 << 15
     }
 
     public static class ModifierConflicts
@@ -57,6 +58,11 @@ namespace YARG.Core.Game
                 _ => Modifier.None
             };
 
+            if (gameMode == GameMode.EliteDrums && instrument != Instrument.EliteDrums)
+            {
+                excusable |= Modifier.NoHiHat;
+            }
+
             var possible = all & ~excusable;
 
             return (possible, excusable);
@@ -83,10 +89,14 @@ namespace YARG.Core.Game
                     Modifier.TapsToHopos,
 
                 GameMode.FourLaneDrums or
-                GameMode.FiveLaneDrums or
-                GameMode.EliteDrums =>
+                GameMode.FiveLaneDrums =>
                     Modifier.NoKicks    |
                     Modifier.NoDynamics,
+
+                GameMode.EliteDrums =>
+                    Modifier.NoKicks    |
+                    Modifier.NoDynamics |
+                    Modifier.NoHiHat,
 
                 GameMode.Vocals or
                 GameMode.PartyVocals =>

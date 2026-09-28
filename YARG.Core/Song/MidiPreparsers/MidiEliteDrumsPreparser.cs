@@ -119,6 +119,14 @@ namespace YARG.Core.Song
             var stats = default(MidiStats);
             while (track.ParseEvent(ref stats))
             {
+                // Finish the previous tick before processing text or marker events at
+                // the next tick, so their state only affects notes from this tick on.
+                if (stats.Position != currentTick)
+                {
+                    FinalizeTick();
+                    currentTick = stats.Position;
+                }
+
                 // Text events can switch the track into strict hat pedal state from
                 // this point on, exactly like the full reader's process-map switch
                 if (IsTextMetaEvent(stats.Type))
@@ -133,13 +141,6 @@ namespace YARG.Core.Song
                 if (stats.Type != MidiEventType.Note_On && stats.Type != MidiEventType.Note_Off)
                 {
                     continue;
-                }
-
-                // A new tick means the previous tick's chord context is complete
-                if (stats.Position != currentTick)
-                {
-                    FinalizeTick();
-                    currentTick = stats.Position;
                 }
 
                 track.ExtractMidiNote(ref note);

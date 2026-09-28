@@ -53,6 +53,35 @@ namespace YARG.Core.Chart
                 records ?? throw new ArgumentNullException(nameof(records))).AsReadOnly();
         }
 
+        /// <summary>Native Elite Drums authored pad-lane phrases and their source-gem membership.</summary>
+        public IReadOnlyList<EliteDrumNativeAuthoredLaneRecord> EliteDrumNativeAuthoredLaneRecords { get; private set; }
+            = Array.Empty<EliteDrumNativeAuthoredLaneRecord>();
+
+        /// <summary>Set only on a native gameplay clone whose authored pedal gems were intentionally filtered.</summary>
+        public bool NativeElitePedalsFiltered { get; internal set; }
+
+        public void SetNativeElitePedalsFiltered(bool filtered) => NativeElitePedalsFiltered = filtered;
+
+        public void SetEliteDrumNativeAuthoredLaneRecords(IEnumerable<EliteDrumNativeAuthoredLaneRecord> records)
+        {
+            EliteDrumNativeAuthoredLaneRecords = new List<EliteDrumNativeAuthoredLaneRecord>(
+                records ?? throw new ArgumentNullException(nameof(records))).AsReadOnly();
+        }
+
+        /// <summary>Project native authored lanes onto a half-open practice interval.</summary>
+        public IReadOnlyList<EliteDrumNativeAuthoredLaneRecord> SliceEliteDrumNativeAuthoredLaneRecords(
+            uint startTick, uint endTick)
+        {
+            if (endTick < startTick) throw new ArgumentOutOfRangeException(nameof(endTick));
+            var records = new List<EliteDrumNativeAuthoredLaneRecord>();
+            foreach (var record in EliteDrumNativeAuthoredLaneRecords)
+            {
+                var sliced = record.Slice(startTick, endTick);
+                if (sliced is not null) records.Add(sliced);
+            }
+            return records.AsReadOnly();
+        }
+
         /// <summary>
         /// Whether or not this difficulty contains any data.
         /// </summary>
@@ -95,6 +124,9 @@ namespace YARG.Core.Chart
             EliteDrumVisualDescriptors = new List<EliteDrumVisualDescriptorV1>(other.EliteDrumVisualDescriptors).AsReadOnly();
             EliteDrumAuthoredLanePhraseRecords = new List<EliteDrumVisualDescriptorV1>(
                 other.EliteDrumAuthoredLanePhraseRecords).AsReadOnly();
+            EliteDrumNativeAuthoredLaneRecords = new List<EliteDrumNativeAuthoredLaneRecord>(
+                other.EliteDrumNativeAuthoredLaneRecords).AsReadOnly();
+            NativeElitePedalsFiltered = other.NativeElitePedalsFiltered;
         }
 
         /// <summary>

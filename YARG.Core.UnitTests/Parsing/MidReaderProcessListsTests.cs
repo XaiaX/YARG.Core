@@ -205,6 +205,23 @@ public class MidReaderProcessListsTests
     }
 
     [Test]
+    public void EliteDrumsStrictPedal_AppliesDurationBasedClosedFlag()
+    {
+        var start = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert];
+        var song = MidReader.ReadMidi(MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Text(0, $"[{MidIOHelper.STRICT_HAT_PEDAL_STATE}]"),
+            Note(10, 20, start - 2),
+            Note(15, 30, start + 2))));
+        var notes = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes;
+
+        using (Assert.EnterMultipleScope())
+        {
+            AssertHasFlag(notes.Single(note => note.eliteDrumPad is EliteDrumPad.HatPedal), Flags.EliteDrums_StrictHatState);
+            AssertHasFlag(notes.Single(note => note.eliteDrumPad is EliteDrumPad.HiHat), Flags.EliteDrums_ForcedClosed);
+        }
+    }
+
+    [Test]
     public void EliteDrumsHatPedalChordDoesNotCrossDifficulties()
     {
         // Chord context is per-difficulty: an Expert hat pedal at the same tick as

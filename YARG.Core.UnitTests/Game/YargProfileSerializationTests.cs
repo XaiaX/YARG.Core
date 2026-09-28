@@ -44,7 +44,7 @@ public sealed class YargProfileSerializationTests
             Assert.That(deserialized.LeftyFlip, Is.True);
             Assert.That(deserialized.RangeEnabled, Is.False);
             Assert.That(deserialized.Name, Is.EqualTo("TestProfile"));
-            Assert.That(deserialized.Version, Is.EqualTo(14));
+            Assert.That(deserialized.Version, Is.EqualTo(15));
         });
     }
 

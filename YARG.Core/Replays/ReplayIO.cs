@@ -42,9 +42,11 @@ namespace YARG.Core.Replays
         /// Replays written by the YOLO line at its forked versions 15-17 are not readable;
         /// they are rejected by deserialization validation rather than a version gate.
         /// </remarks>
-        public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 20);
+        public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 21);
         /// <summary>Replay version in which Elite drum fill parameters were appended to drum frames.</summary>
         public const int ELITE_FILL_MIN = 20;
+        /// <summary>Replay version in which optional pedal stats were appended to drum frames and metadata.</summary>
+        public const int OPTIONAL_PEDAL_STATS_MIN = 21;
         /// <remarks>
         /// Increase this whenever the engine is functionally changed in any way,
         /// to where a replay may no longer simulate accurately what was originally performed.

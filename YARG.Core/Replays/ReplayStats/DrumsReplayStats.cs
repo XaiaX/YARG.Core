@@ -15,6 +15,10 @@ namespace YARG.Core.Replays
         public readonly float PercentageHit;
         public readonly int Overhits;
         public readonly int SoloBonuses;
+        public readonly int OptionalPedalNotes;
+        public readonly int OptionalPedalHits;
+        public readonly int AssistedPedalNotes;
+        public readonly bool OptionalPedalAccuracyEnabled;
 
         public DrumsReplayStats(string name, bool isReplayPlayer, DrumsStats stats)
             : base(name, stats, isReplayPlayer)
@@ -23,8 +27,12 @@ namespace YARG.Core.Replays
             NumNotesHit = stats.NotesHit;
             Overhits = stats.Overhits;
             SoloBonuses = stats.SoloBonuses;
+            OptionalPedalNotes = stats.OptionalPedalNotes;
+            OptionalPedalHits = stats.OptionalPedalHits;
+            AssistedPedalNotes = stats.AssistedPedalNotes;
+            OptionalPedalAccuracyEnabled = stats.OptionalPedalAccuracyEnabled;
 
-            PercentageHit = 100.0f * NumNotesHit / TotalNotes;
+            PercentageHit = TotalNotes == 0 ? 100.0f : 100.0f * NumNotesHit / TotalNotes;
         }
 
         public DrumsReplayStats(ref FixedArrayStream stream, int version)
@@ -34,8 +42,15 @@ namespace YARG.Core.Replays
             NumNotesHit = stream.Read<int>(Endianness.Little);
             Overhits = stream.Read<int>(Endianness.Little);
             SoloBonuses = stream.Read<int>(Endianness.Little);
+            if (version >= ReplayIO.OPTIONAL_PEDAL_STATS_MIN)
+            {
+                OptionalPedalNotes = stream.Read<int>(Endianness.Little);
+                OptionalPedalHits = stream.Read<int>(Endianness.Little);
+                AssistedPedalNotes = stream.Read<int>(Endianness.Little);
+                OptionalPedalAccuracyEnabled = stream.ReadBoolean();
+            }
 
-            PercentageHit = 100.0f * NumNotesHit / TotalNotes;
+            PercentageHit = TotalNotes == 0 ? 100.0f : 100.0f * NumNotesHit / TotalNotes;
         }
 
 
@@ -48,6 +63,10 @@ namespace YARG.Core.Replays
             writer.Write(NumNotesHit);
             writer.Write(Overhits);
             writer.Write(SoloBonuses);
+            writer.Write(OptionalPedalNotes);
+            writer.Write(OptionalPedalHits);
+            writer.Write(AssistedPedalNotes);
+            writer.Write(OptionalPedalAccuracyEnabled);
         }
     }
 }

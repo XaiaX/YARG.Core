@@ -402,6 +402,19 @@ public sealed class EliteDrumsDownchartScanTests
     }
 
     [Test]
+    public void IndifferentMarkerEndingAtNextTick_DoesNotProtectEarlierChord()
+    {
+        // The marker's note-off at tick 288 must not change the chord at tick 192.
+        var parts = ScanParts(EliteTrack(
+            Note(RESOLUTION / 2, EXPERT_INDIFFERENT_HAT_MARKER, MidIOHelper.VELOCITY, length: RESOLUTION),
+            Note(RESOLUTION, EXPERT_HAT_PEDAL, MidIOHelper.VELOCITY,
+                MidIOHelper.ELITE_DRUMS_CHANNEL_FLAG_YELLOW),
+            Note(RESOLUTION, EXPERT_HIHAT, MidIOHelper.VELOCITY)));
+
+        Assert.That(parts.EliteDrumsDownchart[Difficulty.Expert], Is.True);
+    }
+
+    [Test]
     public void MixedDifficulties_SuppressedChordUnflaggedPedalAndSnare_PerDifficultyMasksMatch()
     {
         // Mixed-difficulty variant: Easy has only an unflagged pedal (converts to
