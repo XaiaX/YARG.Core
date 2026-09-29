@@ -28,7 +28,7 @@ namespace YARG.Core.Engine.Drums.Engines
             : base(chart, syncTrack, engineParameters, true, isBot)
         {
             _autoHiHatPedal = autoHiHatPedal;
-            _authoredLanes = new NativeEliteAuthoredLaneMap(chart);
+            _authoredLanes = new NativeEliteAuthoredLaneMap(chart, engineParameters.HitWindow.LaneAutohitWindow);
             EngineStats.OptionalPedalAccuracyEnabled = autoHiHatPedal;
             // Invisible pedal terminators are chart control events, not playable notes.
             foreach (var parent in Notes)
@@ -248,6 +248,12 @@ namespace YARG.Core.Engine.Drums.Engines
             {
                 CheckForNoteHit();
             }
+            else if (_action is { } action)
+            {
+                // Preserve harmless freestyle feedback after the final note (and
+                // on an empty chart); there is no note left to adjudicate or overhit.
+                OnPadHit?.Invoke(action, false, false, false, DrumNoteType.Neutral, _velocity.GetValueOrDefault());
+            }
             _action = null;
             _velocity = null;
             // Scheduled updates run hit logic, not AfterFrameUpdate. A cadence
@@ -353,6 +359,11 @@ namespace YARG.Core.Engine.Drums.Engines
                     return;
                 }
                 OnPadHit?.Invoke(action, false, false, false, DrumNoteType.Neutral, _velocity.GetValueOrDefault());
+                // Pedal motion is free outside an active hi-hat sustain. A charted
+                // pedal gem still misses normally if no matching strike arrives.
+                // Sustain enforcement is not implemented yet; do not penalize an
+                // unmatched stomp/splash as an ordinary drum overhit.
+                if (action is EliteDrumsAction.EliteStomp or EliteDrumsAction.EliteSplash) return;
                 Overhit();
             }
         }

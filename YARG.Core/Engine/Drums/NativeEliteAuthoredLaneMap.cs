@@ -24,9 +24,13 @@ namespace YARG.Core.Engine.Drums
 
         private readonly Dictionary<EliteDrumNote, List<Lane>> _members = new();
         private readonly List<Lane> _lanes = new();
+        private readonly double _laneAutohitWindow;
         private EliteFillBarrierWindow? _barrier;
-        public NativeEliteAuthoredLaneMap(InstrumentDifficulty<EliteDrumNote> chart)
+        public NativeEliteAuthoredLaneMap(InstrumentDifficulty<EliteDrumNote> chart, double laneAutohitWindow)
         {
+            if (double.IsNaN(laneAutohitWindow) || double.IsInfinity(laneAutohitWindow) || laneAutohitWindow < 0)
+                throw new ArgumentOutOfRangeException(nameof(laneAutohitWindow));
+            _laneAutohitWindow = laneAutohitWindow;
             var sourceNotes = new Dictionary<EliteDrumSourceDefinition, EliteDrumNote>();
             foreach (var parent in chart.Notes)
                 foreach (var note in parent.AllNotes)
@@ -106,7 +110,7 @@ namespace YARG.Core.Engine.Drums
                 if (!lane.Entered || lane.Pad != pad || lane.Members[^1].WasHit ||
                     lane.Members[^1].WasMissed || time < lane.EntryTime ||
                     time > EliteFillPolicyV1.Default.DeadlineAt(lane.Members[^1].Time).GraceUntil ||
-                    time > EliteFillPolicyV1.Default.DeadlineAt(lane.LastRefresh).GraceUntil ||
+                    time > lane.LastRefresh + _laneAutohitWindow ||
                     !matchesAction(lane.Members[0]))
                     continue;
                 if (_barrier is { } barrier && barrier.At(time) != EliteFillBarrierPhase.Clear &&
@@ -139,8 +143,8 @@ namespace YARG.Core.Engine.Drums
                     lane.Members[^1].WasHit || lane.Members[^1].WasMissed) continue;
                 if (_barrier is { } barrier && barrier.At(judgmentTime) != EliteFillBarrierPhase.Clear &&
                     lane.EntryTime < barrier.TriggerTimestamp) continue;
-                var deadline = EliteFillPolicyV1.Default.DeadlineAt(lane.LastRefresh);
-                if (note.Time <= deadline.GraceUntil && judgmentTime <= deadline.GraceUntil)
+                double expiry = lane.LastRefresh + _laneAutohitWindow;
+                if (_laneAutohitWindow > 0 && note.Time <= expiry && judgmentTime <= expiry)
                     return true;
             }
             return false;
@@ -155,10 +159,10 @@ namespace YARG.Core.Engine.Drums
             {
                 if (ReferenceEquals(lane.Members[0], note) || !lane.Entered ||
                     lane.Members[^1].WasHit || lane.Members[^1].WasMissed) continue;
-                var grace = EliteFillPolicyV1.Default.DeadlineAt(lane.LastRefresh).GraceUntil;
-                if (note.Time > grace) continue;
+                double expiry = lane.LastRefresh + _laneAutohitWindow;
+                if (_laneAutohitWindow <= 0 || note.Time > expiry) continue;
                 double deadline = Math.Min(note.Time + EliteFillPolicyV1.Default.Parameters.CadenceStepSeconds,
-                    grace);
+                    expiry);
                 if (earliest is null || deadline < earliest) earliest = deadline;
             }
             return earliest;

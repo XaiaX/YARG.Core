@@ -109,6 +109,7 @@ namespace MoonscraperChartEditor.Song
 
             // Elite Drums
             EliteDrums_Flam = 1 << 10,
+            EliteDrums_FlatFlam = 1 << 25,
             EliteDrums_ForcedIndifferent = 1 << 11, // Open is the default hat state; weird internally, but very convenient for charting
             EliteDrums_ForcedClosed = 1 << 12,
             EliteDrums_Splash = 1 << 13,

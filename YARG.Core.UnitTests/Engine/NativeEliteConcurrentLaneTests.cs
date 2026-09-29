@@ -141,14 +141,14 @@ public sealed class NativeEliteConcurrentLaneTests
         }.Concat(kicks.Select(kick => (kick.Time, EliteDrumsAction.Kick))).ToArray());
         Assert.Multiple(() =>
         {
-            Assert.That(left.Take(2).All(note => note.WasHit), Is.True, Outcomes(chart));
-            Assert.That(right.Take(2).All(note => note.WasHit), Is.True, Outcomes(chart));
-            Assert.That(left.Skip(2).All(note => note.WasMissed), Is.True,
+            Assert.That(left.Take(3).All(note => note.WasHit), Is.True, Outcomes(chart));
+            Assert.That(right.Take(3).All(note => note.WasHit), Is.True, Outcomes(chart));
+            Assert.That(left.Skip(3).All(note => note.WasMissed), Is.True,
                 "The opening crash must not carry a two-measure lane without real refresh.");
-            Assert.That(right.Skip(2).All(note => note.WasMissed), Is.True,
+            Assert.That(right.Skip(3).All(note => note.WasMissed), Is.True,
                 "Keeping-time kicks must not refresh either crash lane.");
             Assert.That(kicks.All(note => note.WasHit), Is.True, Outcomes(chart));
-            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(4 + kicks.Length));
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(6 + kicks.Length));
         });
     }
 
@@ -172,8 +172,9 @@ public sealed class NativeEliteConcurrentLaneTests
         Assert.That(right, Has.Length.EqualTo(65));
         Assert.That(chart.EliteDrumNativeAuthoredLaneRecords.Select(record => record.MemberSources.Count),
             Is.EquivalentTo(new[] { 65, 65 }));
-        // Refresh each lane physically throughout the first measure; only the
-        // immediate next member may continue after those real strikes stop.
+        // Refresh each lane physically throughout the first measure; the next
+        // two 62.5 ms-spaced members fit the configured 160 ms lane window,
+        // but assisted continuation must not refresh it further.
         var strikes = left.Take(33).Select(note => (note.Time, EliteDrumsAction.EliteLeftCrash))
             .Concat(right.Take(33).Select(note => (note.Time, EliteDrumsAction.EliteRightCrash)))
             .Concat(kicks.Select(note => (note.Time, EliteDrumsAction.Kick))).ToArray();
@@ -181,12 +182,12 @@ public sealed class NativeEliteConcurrentLaneTests
         Play(engine, strikes);
         Assert.Multiple(() =>
         {
-            Assert.That(left.Take(34).All(note => note.WasHit), Is.True, Outcomes(chart));
-            Assert.That(right.Take(34).All(note => note.WasHit), Is.True, Outcomes(chart));
-            Assert.That(left.Skip(34).All(note => note.WasMissed), Is.True, Outcomes(chart));
-            Assert.That(right.Skip(34).All(note => note.WasMissed), Is.True, Outcomes(chart));
+            Assert.That(left.Take(35).All(note => note.WasHit), Is.True, Outcomes(chart));
+            Assert.That(right.Take(35).All(note => note.WasHit), Is.True, Outcomes(chart));
+            Assert.That(left.Skip(35).All(note => note.WasMissed), Is.True, Outcomes(chart));
+            Assert.That(right.Skip(35).All(note => note.WasMissed), Is.True, Outcomes(chart));
             Assert.That(kicks.All(note => note.WasHit), Is.True, Outcomes(chart));
-            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(34 * 2 + kicks.Length));
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(35 * 2 + kicks.Length));
             Assert.That(engine.EngineStats.Overhits, Is.Zero);
         });
     }

@@ -524,6 +524,33 @@ namespace YARG.Core.UnitTests.Parsing
         }
 
         [Test]
+        public void EliteDrumsDownchart_AuthoredRollFlamExpandsOnlyInGeneratedDrums()
+        {
+            var song = CreateSong();
+            var chart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
+            chart.Add(new MoonPhrase(TICKS(0), TICKS(4), MoonPhrase.Type.EliteDrums_SnareLane));
+            var flam = new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.Snare);
+            flam.flags = MoonNote.Flags.EliteDrums_Flam;
+            chart.Add(flam);
+
+            var eliteTrack = new MoonSongLoader(song, ParseSettings.Default).LoadEliteDrumsTrack(Instrument.EliteDrums);
+            var native = eliteTrack.GetDifficulty(Difficulty.Expert).Notes.Single();
+            var generated = LoadDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
+            var physical = ExpandNotes(generated.Notes).ToArray();
+
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(native.IsFlam, Is.False);
+                Assert.That(native.IsAuthoredFlam, Is.True);
+                Assert.That(native.ChannelFlag, Is.EqualTo(EliteDrumsChannelFlag.None));
+                Assert.That(physical, Has.Length.EqualTo(2));
+                Assert.That(physical.Select(note => note.ConversionOrigin!.ExpansionOrdinal).OrderBy(ordinal => ordinal),
+                    Is.EqualTo(new[] { 0, 1 }));
+                Assert.That(physical.Select(note => note.Pad).Distinct().ToArray(), Has.Length.EqualTo(2));
+            }
+        }
+
+        [Test]
         public void EliteDrumsDownchart_CollisionShuntedGemsRemainSurvivingLaneMembers()
         {
             var song = CreateSong();

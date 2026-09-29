@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using NUnit.Framework;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
@@ -83,8 +84,84 @@ public class EliteDrumsEngineTests
         });
     }
 
+    [TestCase(EliteDrumsAction.EliteStomp)]
+    [TestCase(EliteDrumsAction.EliteSplash)]
+    public void UnmatchedPedalDoesNotBreakComboOrScore(EliteDrumsAction pedal)
+    {
+        var first = MakeNote(EliteDrumNote.EliteDrumPad.Snare, 1);
+        var second = MakeNote(EliteDrumNote.EliteDrumPad.Snare, 3);
+        first.NextNote = second;
+        second.PreviousNote = first;
+        var engine = Create(first, second);
+        Press(engine, 1, EliteDrumsAction.EliteSnare);
+        int score = engine.EngineStats.CommittedScore;
+        int unmatched = 0;
+        engine.OnPadHit += (action, hit, _, _, _, _) =>
+        {
+            if (action == pedal && !hit) unmatched++;
+        };
+        Press(engine, 1.5, pedal);
+        Press(engine, 2, pedal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(engine.EngineStats.Combo, Is.EqualTo(1));
+            Assert.That(engine.EngineStats.Overhits, Is.Zero);
+            Assert.That(engine.EngineStats.CommittedScore, Is.EqualTo(score));
+            Assert.That(unmatched, Is.EqualTo(2));
+        });
+        Press(engine, 3, EliteDrumsAction.EliteSnare);
+        Assert.That(engine.EngineStats.Combo, Is.EqualTo(2));
+    }
+
+    [TestCase(EliteDrumsAction.EliteSnare)]
+    [TestCase(EliteDrumsAction.EliteStomp)]
+    public void PostSongInputStillEmitsHarmlessPadFeedback(EliteDrumsAction action)
+    {
+        var note = MakeNote(EliteDrumNote.EliteDrumPad.Snare);
+        var engine = Create(note);
+        Press(engine, 1, EliteDrumsAction.EliteSnare);
+        engine.Update(2);
+        int feedback = 0;
+        engine.OnPadHit += (received, hit, _, _, _, _) =>
+        {
+            if (received == action && !hit) feedback++;
+        };
+        Press(engine, 3, action);
+        Assert.Multiple(() =>
+        {
+            Assert.That(feedback, Is.EqualTo(1));
+            Assert.That(engine.EngineStats.Overhits, Is.Zero);
+            Assert.That(engine.EngineStats.Combo, Is.EqualTo(1));
+        });
+    }
+
     [Test]
-    public void SplashIsNotStomp_AndMismatchAfterFirstNoteOverhits()
+    public void ChartedPedalStillRequiresASeparateStrike()
+    {
+        var first = MakeNote(EliteDrumNote.EliteDrumPad.Snare, 1);
+        var pedal = MakeNote(EliteDrumNote.EliteDrumPad.HatPedal, 2);
+        var last = MakeNote(EliteDrumNote.EliteDrumPad.Snare, 3);
+        first.NextNote = pedal;
+        pedal.PreviousNote = first;
+        pedal.NextNote = last;
+        last.PreviousNote = pedal;
+        var engine = Create(first, pedal, last);
+        Press(engine, 1, EliteDrumsAction.EliteSnare);
+        Press(engine, 1.5, EliteDrumsAction.EliteStomp); // too early; not held for the gem
+        engine.Update(2.5);
+        Assert.Multiple(() =>
+        {
+            Assert.That(pedal.WasMissed, Is.True);
+            Assert.That(pedal.WasHit, Is.False);
+            Assert.That(engine.EngineStats.Overhits, Is.Zero);
+            Assert.That(engine.EngineStats.Combo, Is.Zero);
+        });
+        Press(engine, 3, EliteDrumsAction.EliteSnare);
+        Assert.That(engine.EngineStats.Combo, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void SplashIsNotStomp_AndMismatchAfterFirstNoteDoesNotOverhit()
     {
         var first = MakeNote(EliteDrumNote.EliteDrumPad.Snare);
         var splash = MakeNote(EliteDrumNote.EliteDrumPad.HatPedal, 2,
@@ -97,8 +174,8 @@ public class EliteDrumsEngineTests
         Assert.Multiple(() =>
         {
             Assert.That(splash.WasHit, Is.False);
-            Assert.That(engine.EngineStats.Overhits, Is.EqualTo(1));
-            Assert.That(engine.EngineStats.OverhitsByAction[(int) EliteDrumsAction.EliteStomp], Is.EqualTo(1));
+            Assert.That(engine.EngineStats.Overhits, Is.Zero);
+            Assert.That(engine.EngineStats.OverhitsByAction.GetValueOrDefault((int) EliteDrumsAction.EliteStomp), Is.Zero);
         });
         Press(engine, 2.01, EliteDrumsAction.EliteSplash);
         Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(2));

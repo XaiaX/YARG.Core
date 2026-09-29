@@ -64,7 +64,15 @@ namespace YARG.Core.Chart
             var noteDynamics = GetEliteDrumNoteDynamics(moonNote);
             var hatPedalType = GetEliteDrumHatPedalType(moonNote);
             var hatState = GetEliteDrumHatState(moonNote);
-            var isFlam = GetEliteDrumNoteIsFlam(moonNote);
+            // A paired 1x+2x kick remains an ordinary 1x kick on Expert;
+            // only Expert+ presents the combined kick as a flam.
+            var inSamePadAuthoredRollLane = IsInSamePadAuthoredRollLane(moonNote, pad, currentPhrases);
+            var isAuthoredFlam = GetEliteDrumNoteIsFlam(moonNote);
+            var isFlam = isAuthoredFlam &&
+                (pad is not EliteDrumPad.Kick || _currentDifficulty == Difficulty.ExpertPlus) &&
+                (pad is EliteDrumPad.Kick or EliteDrumPad.HatPedal || !inSamePadAuthoredRollLane);
+            var isFlatFlam = GetEliteDrumNoteIsFlatFlam(moonNote) &&
+                pad is not EliteDrumPad.Kick and not EliteDrumPad.HatPedal && !inSamePadAuthoredRollLane;
             var drumFlags = GetDrumNoteFlags(moonNote, currentPhrases);
             var generalFlags = GetGeneralFlags(moonNote, currentPhrases);
             var channelFlag = GetEliteDrumsChannelFlag(moonNote);
@@ -80,7 +88,7 @@ namespace YARG.Core.Chart
                 moonNote.length,
                 time,
                 _moonSong.TickToTime(moonNote.tick + moonNote.length) - time);
-            return new(pad, noteDynamics, hatState, hatPedalType, isFlam, drumFlags, generalFlags, channelFlag, time, moonNote.tick, isDoubleKick, source);
+            return new(pad, noteDynamics, hatState, hatPedalType, isFlam, drumFlags, generalFlags, channelFlag, time, moonNote.tick, isDoubleKick, source, isFlatFlam, isAuthoredFlam);
         }
 
         private void HandleEliteDrumsTextEvent(MoonText text)
@@ -167,6 +175,38 @@ namespace YARG.Core.Chart
         {
             return (moonNote.flags & MoonNote.Flags.EliteDrums_Flam) != 0;
         }
+
+        private bool GetEliteDrumNoteIsFlatFlam(MoonNote moonNote)
+        {
+            return (moonNote.flags & MoonNote.Flags.EliteDrums_FlatFlam) != 0;
+        }
+
+        private static bool IsInSamePadAuthoredRollLane(MoonNote moonNote, EliteDrumPad pad,
+            Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases)
+        {
+            foreach (var (laneType, lanePad) in AuthoredRollLanes)
+            {
+                if (lanePad == pad && currentPhrases.TryGetValue(laneType, out var lane) &&
+                    IsEventInPhrase(moonNote, lane))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static readonly (MoonPhrase.Type Type, EliteDrumPad Pad)[] AuthoredRollLanes =
+        {
+            (MoonPhrase.Type.EliteDrums_SnareLane, EliteDrumPad.Snare),
+            (MoonPhrase.Type.EliteDrums_HiHatLane, EliteDrumPad.HiHat),
+            (MoonPhrase.Type.EliteDrums_LeftCrashLane, EliteDrumPad.LeftCrash),
+            (MoonPhrase.Type.EliteDrums_Tom1Lane, EliteDrumPad.Tom1),
+            (MoonPhrase.Type.EliteDrums_Tom2Lane, EliteDrumPad.Tom2),
+            (MoonPhrase.Type.EliteDrums_Tom3Lane, EliteDrumPad.Tom3),
+            (MoonPhrase.Type.EliteDrums_RideLane, EliteDrumPad.Ride),
+            (MoonPhrase.Type.EliteDrums_RightCrashLane, EliteDrumPad.RightCrash),
+        };
 
         private EliteDrumsChannelFlag GetEliteDrumsChannelFlag(MoonNote moonNote)
         {

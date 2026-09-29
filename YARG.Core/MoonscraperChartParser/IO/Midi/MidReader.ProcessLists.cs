@@ -687,25 +687,33 @@ namespace MoonscraperChartEditor.Song.IO
             {
                 var chart = processParams.song.GetChart(processParams.instrument, difficulty);
 
-                // Find and suppress non-strict hat pedal notes that are chorded with non-indifferent hi-hats
-                foreach (var kick in chart.notes)
+                // A plain kick and an Expert+ kick at the same tick represent one flam.
+                // Keep the plain note so Expert retains its 1x kick and both difficulties
+                // load exactly one kick (the Expert+ note is removed, not made a chord).
+                for (int i = chart.notes.Count - 1; i >= 0; --i)
                 {
-                    if (
-                        kick.eliteDrumPad is MoonNote.EliteDrumPad.Kick &&
-                        ((kick.flags & MoonNote.Flags.InstrumentPlus) != 0) &&
-                        kick.isChord
-                    )
+                    var kick = chart.notes[i];
+                    if (kick.eliteDrumPad is not MoonNote.EliteDrumPad.Kick ||
+                        (kick.flags & MoonNote.Flags.InstrumentPlus) == 0)
+                        continue;
+
+                    int first = i;
+                    while (first > 0 && chart.notes[first - 1].tick == kick.tick)
+                        --first;
+                    for (int j = first; j < chart.notes.Count && chart.notes[j].tick == kick.tick; ++j)
                     {
-                        foreach (var otherKick in kick.chord)
-                        {
-                            if (
-                                otherKick.eliteDrumPad is MoonNote.EliteDrumPad.Kick &&
-                                ((otherKick.flags & MoonNote.Flags.InstrumentPlus) == 0)
-                            )
-                            {
-                                kick.flags |= MoonNote.Flags.EliteDrums_Flam;
-                            }
-                        }
+                        var plainKick = chart.notes[j];
+                        if (plainKick.eliteDrumPad is not MoonNote.EliteDrumPad.Kick ||
+                            (plainKick.flags & MoonNote.Flags.InstrumentPlus) != 0)
+                            continue;
+
+                        plainKick.flags |= MoonNote.Flags.EliteDrums_Flam;
+                        if (kick.previous != null)
+                            kick.previous.next = kick.next;
+                        if (kick.next != null)
+                            kick.next.previous = kick.previous;
+                        chart.notes.RemoveAt(i);
+                        break;
                     }
                 }
             }
@@ -1438,6 +1446,10 @@ namespace MoonscraperChartEditor.Song.IO
                     int flagKey = difficultyStartRange + 13;
                     processFnDict.Add(flagKey, (ref EventProcessParams eventProcessParams) =>
                     {
+                        var flamFlag = eventProcessParams.timedEvent.midiEvent is NoteEvent marker &&
+                            marker.Channel == MidIOHelper.ELITE_DRUMS_CHANNEL_FLAT_FLAM
+                            ? MoonNote.Flags.EliteDrums_FlatFlam
+                            : MoonNote.Flags.EliteDrums_Flam;
                         foreach (var pad in EnumExtensions<MoonNote.EliteDrumPad>.Values)
                         {
                             // Kick flams are marked differently. Stomp and splash flams don't exist at all
@@ -1446,7 +1458,7 @@ namespace MoonscraperChartEditor.Song.IO
                                 continue;
                             }
 
-                            ProcessNoteOnEventAsFlagToggle(ref eventProcessParams, MoonNote.Flags.EliteDrums_Flam, (int) pad);
+                            ProcessNoteOnEventAsFlagToggle(ref eventProcessParams, flamFlag, (int) pad);
                         }
                     });
                 }

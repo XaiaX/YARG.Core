@@ -107,6 +107,56 @@ public class MidReaderProcessListsTests
         }
     }
 
+    [TestCase(0, false)]
+    [TestCase(1, true)]
+    [TestCase(2, false)]
+    public void EliteDrumsFlamModifier_ChannelOneSelectsFlatFlam(int channel, bool isFlatFlam)
+    {
+        var start = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert];
+        var note = start + 2;
+        var modifier = start + 13;
+        var song = MidReader.ReadMidi(MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(10, 20, modifier, channel: channel),
+            Note(12, 30, note, velocity: MidIOHelper.VELOCITY_ACCENT))));
+        var raw = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes.Single();
+        var loaded = new MoonSongLoader(song, ParseSettings.Default)
+            .LoadEliteDrumsTrack(YARG.Core.Instrument.EliteDrums).GetDifficulty(YARG.Core.Difficulty.Expert).Notes.Single();
+
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(raw.flags.HasFlag(Flags.EliteDrums_FlatFlam), Is.EqualTo(isFlatFlam));
+            Assert.That(raw.flags.HasFlag(Flags.EliteDrums_Flam), Is.EqualTo(!isFlatFlam));
+            Assert.That(loaded.IsFlatFlam, Is.EqualTo(isFlatFlam));
+            Assert.That(loaded.IsFlam, Is.EqualTo(!isFlatFlam));
+            Assert.That(loaded.Dynamics, Is.EqualTo(DrumNoteType.Accent));
+        }
+    }
+
+    [Test]
+    public void EliteDrumsFlatFlamModifier_ExcludesEndTick()
+    {
+        var start = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert];
+        var song = MidReader.ReadMidi(MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(10, 20, start + 13, channel: MidIOHelper.ELITE_DRUMS_CHANNEL_FLAT_FLAM),
+            Note(20, 30, start + 2))));
+        var note = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes.Single();
+        Assert.That(note.flags, Is.Not.EqualTo(Flags.EliteDrums_FlatFlam));
+    }
+
+    [Test]
+    public void EliteDrumsFlatFlamModifier_IsIgnoredInsideSamePadAuthoredRollLane()
+    {
+        var start = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert];
+        var song = MidReader.ReadMidi(MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(10, 20, MidIOHelper.ELITE_DRUMS_SNARE_ROLL_LANE_NOTE),
+            Note(10, 20, start + 13, channel: MidIOHelper.ELITE_DRUMS_CHANNEL_FLAT_FLAM),
+            Note(12, 30, start + 1))));
+        var loaded = new MoonSongLoader(song, ParseSettings.Default)
+            .LoadEliteDrumsTrack(YARG.Core.Instrument.EliteDrums).GetDifficulty(YARG.Core.Difficulty.Expert).Notes.Single();
+        Assert.That(loaded.IsFlatFlam, Is.False);
+        Assert.That(loaded.IsFlam, Is.False);
+    }
+
     [Test]
     public void EliteDrumsStrictHatPedalStateTextEvent_SetsStrictHatPedalFlag()
     {
@@ -242,6 +292,63 @@ public class MidReaderProcessListsTests
             Assert.That(pedal.isChord, Is.False,
                 "a Hard-only hi-hat is not part of the Expert pedal's chord");
             AssertDoesNotHaveFlag(pedal, Flags.EliteDrums_InvisibleTerminator);
+        }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void EliteKickPair_ProducesPlainExpertAndFlamExpertPlus(bool plusFirst)
+    {
+        const int plain = 74;
+        const int plus = 73;
+        var eliteTrack = MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(10, 20, plus), Note(10, 20, plain),
+            Note(10, 20, 75), Note(30, 40, plus), Note(50, 60, plain));
+        if (!plusFirst)
+        {
+            // MakeTrack sorts equal-tick events by pitch; explicitly reverse their
+            // MIDI order to exercise plain-first insertion as well.
+            (eliteTrack.Events[1], eliteTrack.Events[2]) = (eliteTrack.Events[2], eliteTrack.Events[1]);
+            eliteTrack.Events[1].DeltaTime = 10;
+            eliteTrack.Events[2].DeltaTime = 0;
+        }
+        var midi = MakeMidi(eliteTrack,
+            MakeTrack(MidIOHelper.DRUMS_TRACK, Note(10, 20, 96), Note(10, 20, 96)));
+
+        var song = MidReader.ReadMidi(midi);
+        var rawKicks = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes
+            .Where(note => note.eliteDrumPad is EliteDrumPad.Kick).ToArray();
+        var pair = rawKicks.Single(note => note.tick == 10);
+        using (Assert.EnterMultipleScope())
+        {
+            Assert.That(rawKicks, Has.Length.EqualTo(3));
+            Assert.That(song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes
+                .Count(note => note.tick == 10 && note.eliteDrumPad is EliteDrumPad.Snare), Is.EqualTo(1));
+            Assert.That(song.GetChart(MoonInstrument.Drums, Difficulty.Expert).notes, Has.Count.EqualTo(1));
+            Assert.That(pair.rawNote, Is.EqualTo((int) EliteDrumPad.Kick));
+            AssertHasFlag(pair, Flags.EliteDrums_Flam);
+            AssertDoesNotHaveFlag(pair, Flags.InstrumentPlus);
+            AssertDoesNotHaveFlag(rawKicks.Single(note => note.tick == 30), Flags.EliteDrums_Flam);
+            AssertHasFlag(rawKicks.Single(note => note.tick == 30), Flags.InstrumentPlus);
+            AssertDoesNotHaveFlag(rawKicks.Single(note => note.tick == 50), Flags.EliteDrums_Flam);
+        }
+
+        var track = new MoonSongLoader(song, ParseSettings.Default).LoadEliteDrumsTrack(YARG.Core.Instrument.EliteDrums);
+        foreach (var difficulty in new[] { YARG.Core.Difficulty.Expert, YARG.Core.Difficulty.ExpertPlus })
+        {
+            var kicks = track.GetDifficulty(difficulty).Notes
+                .SelectMany(note => note.ChildNotes.Prepend(note))
+                .Where(note => note.Pad == (int) YARG.Core.Chart.EliteDrumNote.EliteDrumPad.Kick).ToArray();
+            var loadedPair = kicks.Single(note => note.Tick == 10);
+            using (Assert.EnterMultipleScope())
+            {
+                Assert.That(loadedPair.IsFlam, Is.EqualTo(difficulty == YARG.Core.Difficulty.ExpertPlus));
+                Assert.That(loadedPair.IsDoubleKick, Is.False);
+                Assert.That(kicks.Single(note => note.Tick == 50).IsFlam, Is.False);
+                Assert.That(kicks.Any(note => note.Tick == 30), Is.EqualTo(difficulty == YARG.Core.Difficulty.ExpertPlus));
+                if (difficulty == YARG.Core.Difficulty.ExpertPlus)
+                    Assert.That(kicks.Single(note => note.Tick == 30).IsDoubleKick, Is.True);
+            }
         }
     }
 

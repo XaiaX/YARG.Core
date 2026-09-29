@@ -406,7 +406,9 @@ namespace YARG.Core.Chart
 
                 notes.Add(new(mainNote, eliteDrumNote, 0));
 
-                if (eliteDrumNote.IsFlam)
+                // Generated drums retain authored flam expansion even when native Elite
+                // suppresses the flam within a same-pad roll lane.
+                if (eliteDrumNote.IsAuthoredFlam)
                 {
                     MoonNote.DrumPad? otherPad = pad.Value switch
                     {

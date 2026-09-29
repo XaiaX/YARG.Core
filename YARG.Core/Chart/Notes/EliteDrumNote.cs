@@ -22,6 +22,9 @@ namespace YARG.Core.Chart
         public bool IsClosed => HatState == EliteDrumsHatState.Closed;
         public bool IsIndifferent => HatState == EliteDrumsHatState.Indifferent;
         public bool IsFlam { get; set; }
+        /// <summary>Authored flam intent for generated downcharts; native roll lanes may suppress IsFlam.</summary>
+        public bool IsAuthoredFlam { get; }
+        public bool IsFlatFlam { get; set; }
         public EliteDrumsChannelFlag ChannelFlag { get; set; }
         public float? HitVelocity;
         /// <summary>Immutable authored source identity, retained through cloning and modifiers.</summary>
@@ -30,14 +33,14 @@ namespace YARG.Core.Chart
 
         public EliteDrumNote (EliteDrumPad pad, DrumNoteType dynamics, EliteDrumsHatState hatState, EliteDrumsHatPedalType hatPedalType, bool isFlam, DrumNoteFlags drumFlags,
             NoteFlags flags, EliteDrumsChannelFlag channelFlag, double time, uint tick, bool isDoubleKick,
-            EliteDrumSourceDefinition? sourceDefinition = null)
-            : this((int)pad, dynamics, hatState, hatPedalType, isFlam, drumFlags, flags, channelFlag, time, tick, isDoubleKick, sourceDefinition)
+            EliteDrumSourceDefinition? sourceDefinition = null, bool isFlatFlam = false, bool? isAuthoredFlam = null)
+            : this((int)pad, dynamics, hatState, hatPedalType, isFlam, drumFlags, flags, channelFlag, time, tick, isDoubleKick, sourceDefinition, isFlatFlam, isAuthoredFlam)
         {
         }
 
         public EliteDrumNote(int pad, DrumNoteType dynamics, EliteDrumsHatState hatState, EliteDrumsHatPedalType hatPedalType, bool isFlam, DrumNoteFlags drumFlags,
             NoteFlags flags, EliteDrumsChannelFlag channelFlag, double time, uint tick, bool isDoubleKick,
-            EliteDrumSourceDefinition? sourceDefinition = null)
+            EliteDrumSourceDefinition? sourceDefinition = null, bool isFlatFlam = false, bool? isAuthoredFlam = null)
             : base(flags, time, 0, tick, 0)
         {
             Pad = pad;
@@ -45,6 +48,8 @@ namespace YARG.Core.Chart
             HatState = hatState;
             HatPedalType = hatPedalType;
             IsFlam = isFlam;
+            IsAuthoredFlam = isAuthoredFlam ?? isFlam;
+            IsFlatFlam = isFlatFlam;
             DrumFlags = _drumFlags = drumFlags;
             ChannelFlag = channelFlag;
             _padMask = 1 << pad;
@@ -60,6 +65,8 @@ namespace YARG.Core.Chart
             HatState = other.HatState;
             HatPedalType = other.HatPedalType;
             IsFlam = other.IsFlam;
+            IsAuthoredFlam = other.IsAuthoredFlam;
+            IsFlatFlam = other.IsFlatFlam;
             ChannelFlag = other.ChannelFlag;
             SourceDefinition = other.SourceDefinition;
 

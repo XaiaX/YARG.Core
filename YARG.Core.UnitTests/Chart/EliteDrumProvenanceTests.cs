@@ -110,7 +110,7 @@ namespace YARG.Core.UnitTests.Chart
             var note = new EliteDrumNote(EliteDrumPad.HiHat, DrumNoteType.Accent,
                 EliteDrumsHatState.Closed, EliteDrumsHatPedalType.Splash, true,
                 DrumNoteFlags.None, NoteFlags.CodaEnd, EliteDrumsChannelFlag.Blue,
-                1.0, 30, false, source);
+                1.0, 30, false, source, isFlatFlam: true);
             var clone = note.Clone();
 
             using (Assert.EnterMultipleScope())
@@ -119,6 +119,7 @@ namespace YARG.Core.UnitTests.Chart
                 Assert.That(clone.HatState, Is.EqualTo(note.HatState));
                 Assert.That(clone.HatPedalType, Is.EqualTo(note.HatPedalType));
                 Assert.That(clone.IsFlam, Is.EqualTo(note.IsFlam));
+                Assert.That(clone.IsFlatFlam, Is.True);
                 Assert.That(clone.ChannelFlag, Is.EqualTo(note.ChannelFlag));
                 Assert.That(clone.SourceDefinition, Is.SameAs(source));
             }

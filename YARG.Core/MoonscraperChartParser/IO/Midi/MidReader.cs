@@ -763,7 +763,38 @@ namespace MoonscraperChartEditor.Song.IO
             if (chart.notes.Capacity == 0)
                 chart.notes.Capacity = 5000;
 
-            MoonObjectHelper.OrderedInsertFromBack(newMoonNote, chart.notes);
+            if (eventProcessParams.instrument is MoonSong.MoonInstrument.EliteDrums &&
+                newMoonNote.eliteDrumPad is MoonNote.EliteDrumPad.Kick)
+            {
+                // Elite MIDI uses two pitches for the same pad. Keep one of each variant
+                // until postprocessing can distinguish a kick flam from a lone 2x kick.
+                int pos = chart.notes.Count;
+                while (pos > 0 && chart.notes[pos - 1].tick > tick)
+                    --pos;
+
+                for (int check = pos - 1; check >= 0 && chart.notes[check].tick == tick; --check)
+                {
+                    if (chart.notes[check].InsertionEquals(newMoonNote) &&
+                        ((chart.notes[check].flags ^ defaultFlags) & MoonNote.Flags.InstrumentPlus) == 0)
+                        return;
+                }
+
+                if (pos > 0)
+                {
+                    newMoonNote.previous = chart.notes[pos - 1];
+                    chart.notes[pos - 1].next = newMoonNote;
+                }
+                if (pos < chart.notes.Count)
+                {
+                    newMoonNote.next = chart.notes[pos];
+                    chart.notes[pos].previous = newMoonNote;
+                }
+                chart.notes.Insert(pos, newMoonNote);
+            }
+            else
+            {
+                MoonObjectHelper.OrderedInsertFromBack(newMoonNote, chart.notes);
+            }
         }
 
         private static void ProcessNoteOnEventAsAnimation(ref EventProcessParams eventProcessParams, MoonSong.Difficulty diff, int noteNumber)

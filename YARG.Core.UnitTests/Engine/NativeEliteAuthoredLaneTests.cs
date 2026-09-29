@@ -21,11 +21,14 @@ public sealed class NativeEliteAuthoredLaneTests
             NoteFlags.None, EliteDrumNote.EliteDrumsChannelFlag.None, time, tick, false, source), source);
     }
 
-    private static EliteDrumsEngine Engine(InstrumentDifficulty<EliteDrumNote> chart, bool auto = false)
+    private static EliteDrumsEngine Engine(InstrumentDifficulty<EliteDrumNote> chart, bool auto = false,
+        double? laneAutohitWindow = null)
     {
         var sync = new SyncTrack(480);
         sync.Tempos.Add(new TempoChange(120, 0, 0));
-        var parameters = EnginePreset.Default.Drums.Create([1f, 2f, 3f, 4f, 5f, 6f],
+        var preset = EnginePreset.Default.Drums.Copy();
+        if (laneAutohitWindow is { } window) preset.HitWindow.LaneAutohitWindow = window;
+        var parameters = preset.Create([1f, 2f, 3f, 4f, 5f, 6f],
             [1f, 2f, 3f, 4f, 5f, 6f], DrumsEngineParameters.DrumMode.ProFourLane);
         return new EliteDrumsEngine(chart, sync, parameters, false, true, auto);
     }
@@ -93,6 +96,32 @@ public sealed class NativeEliteAuthoredLaneTests
     }
 
     [Test]
+    public void ConfiguredLaneAutohitWindowControlsNativeContinuation()
+    {
+        foreach (double window in new[] { 0.16, 0.06, 0.0 })
+        {
+            var first = Member(EliteDrumNote.EliteDrumPad.Snare, 1, 0);
+            var second = Member(EliteDrumNote.EliteDrumPad.Snare, 1.12, 1);
+            var third = Member(EliteDrumNote.EliteDrumPad.Snare, 1.5, 2);
+            var chart = new InstrumentDifficulty<EliteDrumNote>(Instrument.EliteDrums, Difficulty.Expert,
+                new([first.note, second.note, third.note]), new(), new());
+            chart.SetEliteDrumNativeAuthoredLaneRecords([
+                new EliteDrumNativeAuthoredLaneRecord(0, PhraseType.EliteDrums_SnareLane,
+                    960, 2000, [first.source, second.source, third.source])
+            ]);
+            var engine = Engine(chart, laneAutohitWindow: window);
+            Strike(engine, 1, EliteDrumsAction.EliteSnare);
+            engine.Update(2);
+            Assert.Multiple(() =>
+            {
+                Assert.That(second.note.WasHit, Is.EqualTo(window == 0.16), $"window={window}");
+                Assert.That(second.note.WasMissed, Is.EqualTo(window != 0.16), $"window={window}");
+                Assert.That(third.note.WasMissed, Is.True, "silence beyond the configured window must still miss");
+            });
+        }
+    }
+
+    [Test]
     public void OffPadFaultBarsPriorLaneButRealStrikeCanEnterNewLane()
     {
         var first = Member(EliteDrumNote.EliteDrumPad.Snare, 1, 0);
@@ -133,7 +162,7 @@ public sealed class NativeEliteAuthoredLaneTests
         ]);
         var engine = Engine(chart);
         Strike(engine, 1, EliteDrumsAction.EliteSnare);
-        Strike(engine, 1.1, EliteDrumsAction.EliteRide);
+        Strike(engine, 1.14, EliteDrumsAction.EliteRide);
         Assert.Multiple(() =>
         {
             Assert.That(second.note.WasHit, Is.True);
