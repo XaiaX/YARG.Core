@@ -189,7 +189,7 @@ public sealed class NativeEliteFallbackReplayIdentityTests
         if (!nativeEliteAvailable)
         {
             Assert.That(DrumDifficultySelector.ResolveNativeEliteRequest(chart, profile, Difficulty.Expert),
-                Is.EqualTo(Instrument.ProDrums));
+                Is.EqualTo(Instrument.EliteDrums), "New live playback upconverts; recorded Pro replay identity remains unchanged.");
         }
         var parameters = NativeEliteReplayFixture.Parameters();
         var inputs = new[]

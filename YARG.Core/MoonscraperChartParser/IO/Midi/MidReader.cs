@@ -1001,8 +1001,12 @@ namespace MoonscraperChartEditor.Song.IO
 
                     if (individualNoteSpecifier < 0 || note.rawNote == individualNoteSpecifier)
                     {
-                        // Toggle flag
-                        note.flags ^= flags;
+                        // Indifferent hi-hat ranges are additive: overlapping markers
+                        // must not restore a pedal-dependent state or suppress paired pedals.
+                        if (flags == MoonNote.Flags.EliteDrums_ForcedIndifferent)
+                            note.flags |= flags;
+                        else
+                            note.flags ^= flags;
                     }
                 }
             }

@@ -357,8 +357,9 @@ public sealed class EliteDrumsDownchartScanTests
         }
     }
 
-    [Test]
-    public void ChordedFlaggedHatPedalWithIndifferentHiHat_AdvertisesDownchart()
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ChordedFlaggedHatPedalWithIndifferentHiHat_AdvertisesDownchart(bool overlappingMarker)
     {
         // The same chord, but an "indifferent hat" marker covers the hi-hat: the
         // reader leaves the hi-hat forced-indifferent, so the stomp is NOT
@@ -366,6 +367,8 @@ public sealed class EliteDrumsDownchartScanTests
         var parts = ScanParts(EliteTrack(
             Note(RESOLUTION / 2, EXPERT_INDIFFERENT_HAT_MARKER, MidIOHelper.VELOCITY, 0,
                 length: RESOLUTION * 2),
+            Note(overlappingMarker ? RESOLUTION / 2 : RESOLUTION * 3,
+                EXPERT_INDIFFERENT_HAT_MARKER - 24, MidIOHelper.VELOCITY, length: RESOLUTION * 2),
             Note(RESOLUTION, EXPERT_HAT_PEDAL, MidIOHelper.VELOCITY,
                 MidIOHelper.ELITE_DRUMS_CHANNEL_FLAG_YELLOW),
             Note(RESOLUTION, EXPERT_HIHAT, MidIOHelper.VELOCITY)));

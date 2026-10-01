@@ -353,7 +353,7 @@ namespace YARG.Core.Engine.Drums.Engines
             if (_action is { } action)
             {
                 if (TryAuthoredPad(action, out int pad) &&
-                    _authoredLanes.ProtectStrike(pad, CurrentTime, member => Matches(action, member)))
+                    _authoredLanes.ProtectStrike(pad, CurrentTime))
                 {
                     OnPadHit?.Invoke(action, false, false, true, DrumNoteType.Neutral, _velocity.GetValueOrDefault());
                     return;

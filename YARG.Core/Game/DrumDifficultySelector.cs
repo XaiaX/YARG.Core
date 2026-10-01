@@ -42,8 +42,9 @@ namespace YARG.Core.Game
 
         /// <summary>
         /// Resolves a native Elite request at the requested difficulty. Native Elite wins when
-        /// it contains playable notes; otherwise Pro, Four-Lane, then Five-Lane are checked in
-        /// that fixed order. Empty/missing difficulties and event-only charts are not playable.
+        /// it contains playable notes; otherwise native Pro and Four-Lane notes are converted
+        /// to Elite in that order, before falling back to native Five-Lane. Empty/missing
+        /// difficulties and event-only charts are not playable.
         /// An explicit generated target is strict and never participates in native fallback.
         /// Returns null if no native track has playable notes at this difficulty.
         /// </summary>
@@ -79,10 +80,13 @@ namespace YARG.Core.Game
             foreach (var instrument in new[] { Instrument.ProDrums, Instrument.FourLaneDrums,
                          Instrument.FiveLaneDrums })
             {
-                if (chart.GetDrumsTrack(instrument).TryGetDifficulty(difficulty, out var nativeDifficulty) &&
-                    nativeDifficulty.Notes.Count > 0)
+                if (!chart.GetDrumsTrack(instrument).IsConvertedDrumsTrack &&
+                    chart.GetDrumsTrack(instrument).TryGetDifficulty(difficulty, out var nativeDifficulty) &&
+                    nativeDifficulty.Notes.Count > 0 &&
+                    !nativeDifficulty.Notes.Exists(note =>
+                        note.ConversionOrigin is not null || note.ChildNotes.Exists(child => child.ConversionOrigin is not null)))
                 {
-                    return instrument;
+                    return instrument == Instrument.FiveLaneDrums ? instrument : Instrument.EliteDrums;
                 }
             }
 
@@ -102,7 +106,8 @@ namespace YARG.Core.Game
         }
 
         /// <summary>
-        /// Selects the native Elite track for a profile that actually plays native Elite notes.
+        /// Selects playable native Elite notes at the profile difficulty, or a deterministic
+        /// conversion of native Pro/Four-Lane notes without changing the shared song chart.
         /// An explicit generated target must never fall back to this track.
         /// </summary>
         public static InstrumentTrack<EliteDrumNote> SelectNativeEliteTrack(SongChart chart, YargProfile profile)
@@ -113,6 +118,27 @@ namespace YARG.Core.Game
             {
                 throw new InvalidDataException(
                     $"Profile {profile.GameMode}/{profile.CurrentInstrument} does not select native Elite Drums");
+            }
+
+            var difficulty = profile.CurrentDifficulty;
+            if (chart.EliteDrums.TryGetDifficulty(difficulty, out var native) &&
+                native.Notes.Exists(note => !note.IsInvisibleTerminator))
+            {
+                return chart.EliteDrums;
+            }
+
+            foreach (var instrument in new[] { Instrument.ProDrums, Instrument.FourLaneDrums })
+            {
+                if (!chart.GetDrumsTrack(instrument).IsConvertedDrumsTrack &&
+                    chart.GetDrumsTrack(instrument).TryGetDifficulty(difficulty, out var source) &&
+                    source.Notes.Count > 0 &&
+                    !source.Notes.Exists(note =>
+                        note.ConversionOrigin is not null || note.ChildNotes.Exists(child => child.ConversionOrigin is not null)))
+                {
+                    var converted = new InstrumentTrack<EliteDrumNote>(Instrument.EliteDrums);
+                    converted.AddDifficulty(difficulty, source.ConvertToEliteDrums());
+                    return converted;
+                }
             }
 
             return chart.EliteDrums;

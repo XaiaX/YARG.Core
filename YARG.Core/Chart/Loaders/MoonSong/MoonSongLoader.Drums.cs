@@ -59,7 +59,12 @@ namespace YARG.Core.Chart
                 if (difficulty.Value.Notes.Count > 0)
                 {
                     // If at least one difficulty has at least one note, return the native chart
-                    return new(instrument, difficulties, GetAnimationTrack(instrument));
+                    return new(instrument, difficulties, GetAnimationTrack(instrument))
+                    {
+                        IsConvertedDrumsTrack = _settings.DrumsType == DrumsType.FiveLane
+                            ? instrument != Instrument.FiveLaneDrums
+                            : instrument == Instrument.FiveLaneDrums,
+                    };
                 }
             }
 

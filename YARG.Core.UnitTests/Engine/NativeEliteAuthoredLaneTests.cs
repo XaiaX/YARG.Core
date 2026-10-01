@@ -249,7 +249,7 @@ public sealed class NativeEliteAuthoredLaneTests
     }
 
     [Test]
-    public void ExpiredLaneAndWrongArticulationCannotProtectStrikes()
+    public void ActiveLaneProtectsAllPadStrikesWithoutForgivingSilence()
     {
         var first = Member(EliteDrumNote.EliteDrumPad.HiHat, 1, 0);
         var second = Member(EliteDrumNote.EliteDrumPad.HiHat, 1.4, 1);
@@ -263,12 +263,19 @@ public sealed class NativeEliteAuthoredLaneTests
         ]);
         var engine = Engine(chart);
         Strike(engine, 1, EliteDrumsAction.EliteClosedHiHat);
-        Strike(engine, 1.05, EliteDrumsAction.EliteOpenHiHat);
-        Assert.That(engine.EngineStats.Overhits, Is.EqualTo(1), "Open cannot protect a closed-hat lane.");
         Strike(engine, 1.2, EliteDrumsAction.EliteClosedHiHat);
-        Assert.That(engine.EngineStats.Overhits, Is.EqualTo(2), "Expired cadence cannot restart by protection.");
+        Assert.That(engine.EngineStats.Overhits, Is.Zero,
+            "A matching strike inside an active lane must not break combo when continuation has expired.");
+        Strike(engine, 1.21, EliteDrumsAction.EliteOpenHiHat);
+        Assert.That(engine.EngineStats.Overhits, Is.Zero,
+            "A strike on the hi-hat pad remains in-lane even when its articulation does not match a note.");
+        Strike(engine, 1.22, EliteDrumsAction.EliteRide);
+        Assert.That(engine.EngineStats.Overhits, Is.EqualTo(1), "An off-lane strike still breaks combo.");
+        Strike(engine, 1.23, EliteDrumsAction.EliteOpenHiHat);
+        Assert.That(engine.EngineStats.Overhits, Is.EqualTo(1),
+            "An off-lane fault must not make later in-lane strikes into overhits.");
         engine.Update(2);
-        Assert.That(second.note.WasMissed, Is.True);
+        Assert.That(second.note.WasMissed, Is.True, "Protected strikes must not award an unplayed note at 1.4.");
     }
 
     [Test]
@@ -291,6 +298,30 @@ public sealed class NativeEliteAuthoredLaneTests
             Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(1));
             Assert.That(engine.EngineStats.CommittedScore, Is.EqualTo(50));
         });
+    }
+
+    [Test]
+    public void EarlyFinalHitKeepsLaneProtectedUntilChartedEnd()
+    {
+        var first = Member(EliteDrumNote.EliteDrumPad.Snare, 1, 0);
+        var last = Member(EliteDrumNote.EliteDrumPad.Snare, 1.2, 1);
+        var next = Member(EliteDrumNote.EliteDrumPad.Ride, 1.5, 2);
+        var chart = new InstrumentDifficulty<EliteDrumNote>(Instrument.EliteDrums, Difficulty.Expert,
+            new([first.note, last.note, next.note]), new(), new());
+        chart.SetEliteDrumNativeAuthoredLaneRecords([
+            new EliteDrumNativeAuthoredLaneRecord(0, PhraseType.EliteDrums_SnareLane,
+                960, 1300, [first.source, last.source])
+        ]);
+        var engine = Engine(chart);
+        Strike(engine, 1, EliteDrumsAction.EliteSnare);
+        Strike(engine, 1.15, EliteDrumsAction.EliteSnare);
+        Assert.That(last.note.WasHit, Is.True, "The last note is struck inside its early hit window.");
+        Strike(engine, 1.16, EliteDrumsAction.EliteSnare);
+        Assert.That(engine.EngineStats.Overhits, Is.Zero,
+            "The lane still protects its pad until the final note's charted time.");
+        Strike(engine, 1.3, EliteDrumsAction.EliteSnare);
+        Assert.That(engine.EngineStats.Overhits, Is.EqualTo(1),
+            "After the lane ends, an unmatched strike is an overhit again.");
     }
 
     [Test]

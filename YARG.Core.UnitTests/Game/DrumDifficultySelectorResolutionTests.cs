@@ -104,11 +104,11 @@ public sealed class DrumDifficultySelectorResolutionTests
 
     [TestCase(false, false, false, false, null)]
     [TestCase(false, false, false, true, Instrument.FiveLaneDrums)]
-    [TestCase(false, false, true, true, Instrument.FourLaneDrums)]
-    [TestCase(false, true, true, true, Instrument.ProDrums)]
+    [TestCase(false, false, true, true, Instrument.EliteDrums)]
+    [TestCase(false, true, true, true, Instrument.EliteDrums)]
     [TestCase(true, true, true, true, Instrument.EliteDrums)]
-    [TestCase(false, true, false, true, Instrument.ProDrums)]
-    [TestCase(false, false, true, false, Instrument.FourLaneDrums)]
+    [TestCase(false, true, false, true, Instrument.EliteDrums)]
+    [TestCase(false, false, true, false, Instrument.EliteDrums)]
     public void NativePriorityUsesOnlyPlayableRequestedDifficulty(bool elite, bool pro, bool four,
         bool five, Instrument? expected)
     {
@@ -156,7 +156,7 @@ public sealed class DrumDifficultySelectorResolutionTests
         AddElite(chart, Requested, invisible: true);
         AddDrum(chart, Instrument.ProDrums, Requested);
         Assert.That(DrumDifficultySelector.ResolveNativeEliteRequest(chart, EliteProfile(), Requested),
-            Is.EqualTo(Instrument.ProDrums));
+            Is.EqualTo(Instrument.EliteDrums));
     }
 
     [TestCase(Instrument.ProDrums)]
@@ -185,6 +185,52 @@ public sealed class DrumDifficultySelectorResolutionTests
                 new List<DrumNote> { new(FourLaneDrumPad.RedDrum, DrumNoteType.Neutral,
                     DrumNoteFlags.None, NoteFlags.None, 0, 0) }, new(), new()));
         Assert.That(DrumDifficultySelector.ResolveNativeEliteRequest(chart, profile, Requested), Is.EqualTo(target));
+    }
+
+    [TestCase(Instrument.ProDrums)]
+    [TestCase(Instrument.FourLaneDrums)]
+    public void ConvertedFallbackUsesEliteIdentityWithoutChangingSharedTracks(Instrument sourceInstrument)
+    {
+        var chart = new SongChart(192);
+        AddDrum(chart, sourceInstrument, Requested);
+        var profile = EliteProfile();
+        profile.CurrentDifficulty = Requested;
+        var source = chart.GetDrumsTrack(sourceInstrument).GetDifficulty(Requested);
+        var selected = DrumDifficultySelector.SelectNativeEliteTrack(chart, profile).GetDifficulty(Requested);
+
+        Assert.That(selected.Instrument, Is.EqualTo(Instrument.EliteDrums));
+        Assert.That(selected.Notes[0].Pad, Is.EqualTo((int) EliteDrumPad.Snare));
+        Assert.That(source.Notes[0].Pad, Is.EqualTo((int) FourLaneDrumPad.RedDrum));
+        Assert.That(chart.EliteDrums.TryGetDifficulty(Requested, out _), Is.False);
+        Assert.That(DrumDifficultySelector.SelectNativeEliteTrack(chart, profile).GetDifficulty(Requested),
+            Is.Not.SameAs(selected));
+    }
+
+    [Test]
+    public void FiveLaneConvertedProTrackIsNotANativeUpconversionSource()
+    {
+        var chart = new SongChart(192);
+        AddDrum(chart, Instrument.ProDrums, Requested);
+        AddDrum(chart, Instrument.FiveLaneDrums, Requested);
+        chart.ProDrums.IsConvertedDrumsTrack = true;
+        Assert.That(chart.ProDrums.Clone().IsConvertedDrumsTrack, Is.True);
+        Assert.That(DrumDifficultySelector.ResolveNativeEliteRequest(chart, EliteProfile(), Requested),
+            Is.EqualTo(Instrument.FiveLaneDrums));
+    }
+
+    [Test]
+    public void NativeEliteSelectionWinsOnlyAtTheRequestedDifficulty()
+    {
+        var chart = new SongChart(192);
+        AddElite(chart, Difficulty.Expert);
+        AddDrum(chart, Instrument.ProDrums, Requested);
+        var profile = EliteProfile();
+        profile.CurrentDifficulty = Requested;
+        Assert.That(DrumDifficultySelector.SelectNativeEliteTrack(chart, profile).GetDifficulty(Requested)
+            .Notes[0].Pad, Is.EqualTo((int) EliteDrumPad.Snare));
+
+        AddElite(chart, Requested);
+        Assert.That(DrumDifficultySelector.SelectNativeEliteTrack(chart, profile), Is.SameAs(chart.EliteDrums));
     }
 
     [Test]

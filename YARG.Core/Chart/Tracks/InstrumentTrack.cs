@@ -14,6 +14,9 @@ namespace YARG.Core.Chart
     {
         public Instrument Instrument { get; }
 
+        /// <summary>Whether this track was converted from a different native drum layout.</summary>
+        public bool IsConvertedDrumsTrack { get; internal set; }
+
         // TODO: Smerge these...
         public List<AnimationEvent> AnimationEvents { get; }      = new();
         public AnimationTrack       Animations      { get; }      = new();
@@ -63,6 +66,7 @@ namespace YARG.Core.Chart
         public InstrumentTrack(InstrumentTrack<TNote> other)
             : this(other.Instrument)
         {
+            IsConvertedDrumsTrack = other.IsConvertedDrumsTrack;
             foreach (var (difficulty, diffTrack) in other._difficulties)
             {
                 _difficulties.Add(difficulty, diffTrack.Clone());

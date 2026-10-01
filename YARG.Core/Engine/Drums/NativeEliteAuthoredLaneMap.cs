@@ -102,20 +102,24 @@ namespace YARG.Core.Engine.Drums
             }
         }
 
-        public bool ProtectStrike(int pad, double time, Func<EliteDrumNote, bool> matchesAction)
+        public bool ProtectStrike(int pad, double time)
         {
             bool protectedStrike = false;
             foreach (var lane in _lanes)
             {
-                if (!lane.Entered || lane.Pad != pad || lane.Members[^1].WasHit ||
-                    lane.Members[^1].WasMissed || time < lane.EntryTime ||
+                // An active lane accepts any strike on its physical pad, regardless of
+                // articulation or the continuation timer. Neither a prior off-pad fault
+                // nor a lapsed timer turns an in-lane strike into an overhit.
+                if (!lane.Entered || lane.Pad != pad || lane.Members[^1].WasMissed ||
+                    time < lane.EntryTime ||
                     time > EliteFillPolicyV1.Default.DeadlineAt(lane.Members[^1].Time).GraceUntil ||
-                    time > lane.LastRefresh + _laneAutohitWindow ||
-                    !matchesAction(lane.Members[0]))
+                    (lane.Members[^1].WasHit && time > lane.Members[^1].Time))
                     continue;
-                if (_barrier is { } barrier && barrier.At(time) != EliteFillBarrierPhase.Clear &&
-                    lane.EntryTime < barrier.TriggerTimestamp) continue;
-                lane.LastRefresh = time;
+                // Fault barriers still prevent old lanes from auto-hitting notes;
+                // protection from overhits is independent of automatic scoring.
+                if (_barrier is not { } barrier || barrier.At(time) == EliteFillBarrierPhase.Clear ||
+                    lane.EntryTime >= barrier.TriggerTimestamp)
+                    lane.LastRefresh = time;
                 protectedStrike = true;
             }
             return protectedStrike;

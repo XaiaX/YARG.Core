@@ -24,7 +24,7 @@ namespace YARG.Core.Song
         private const int HIHAT_LANE = 4;
 
         // "Indifferent hat" marker notes (ELITE_DRUMS_DIFF_START_LOOKUP[diff] + 14).
-        // The full reader toggles MoonNote.Flags.EliteDrums_ForcedIndifferent on the
+        // The full reader sets MoonNote.Flags.EliteDrums_ForcedIndifferent on the
         // hi-hat notes of EVERY difficulty whose tick lies inside the marker's
         // note-on/note-off range, so all four values are equivalent range markers.
         private const int INDIFFERENT_HAT_MARKER_E = 16;
@@ -71,21 +71,12 @@ namespace YARG.Core.Song
 
             void FinalizeTick()
             {
-                // Hi-hats at this tick are forced-indifferent when an odd number of
-                // marker ranges cover the tick (the reader toggles the flag per range)
-                var coveringMarkers = 0;
-                for (var block = 0; block < 4; block++)
-                {
-                    if ((openIndifferentMarkerValues & (1 << block)) != 0)
-                    {
-                        coveringMarkers++;
-                    }
-                }
-
+                // Any covering indifferent marker protects paired pedals, including
+                // overlapping ranges: the full reader sets rather than toggles this flag.
                 // Non-strict pedals chorded with a non-indifferent hi-hat are
                 // suppressed into invisible terminators by the full reader
                 var suppressed = 0;
-                if ((coveringMarkers & 1) == 0)
+                if (openIndifferentMarkerValues == 0)
                 {
                     suppressed = tickEligibleHatPedals & ~tickStrictHatPedals & tickHiHats;
                 }
