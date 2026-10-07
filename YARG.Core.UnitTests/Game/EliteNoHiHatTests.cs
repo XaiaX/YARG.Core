@@ -150,7 +150,7 @@ public sealed class EliteNoHiHatTests
         bytes.CopyTo(buffer.Span);
         var stream = new FixedArrayStream(buffer);
         var replay = new YargProfile(ref stream);
-        Assert.That(replay.Version, Is.EqualTo(15));
+        Assert.That(replay.Version, Is.EqualTo(16));
         Assert.That(replay.AutoHiHatPedal, Is.False);
         Assert.That(replay.NoHiHatPedal, Is.True);
         Assert.That(replay.IsModifierActive(Modifier.NoHiHat), Is.True);

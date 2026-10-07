@@ -98,6 +98,7 @@ namespace YARG.Core.Game
 
         public static ColorProfile CircularDefault = new("Circular", true)
         {
+            EliteDrums = new EliteDrumsColors(),
             FiveFretGuitar = new FiveFretGuitarColors
             {
                 OpenFret   = CircularPurple,
@@ -132,6 +133,7 @@ namespace YARG.Core.Game
 
         public static ColorProfile AprilFoolsDefault = new("YARG on Fire", true)
         {
+            EliteDrums = new EliteDrumsColors(),
             FiveFretGuitar = new FiveFretGuitarColors
             {
                 OpenFret   = CircularOrange,

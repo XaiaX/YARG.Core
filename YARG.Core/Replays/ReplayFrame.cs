@@ -24,9 +24,11 @@ namespace YARG.Core.Replays
         
         public int InputCount => Inputs.Length;
 
-        public ReplayFrame(YargProfile profile, BaseEngineParameters param, BaseStats stats, GameInput[] inputs)
+        public ReplayFrame(YargProfile profile, BaseEngineParameters param, BaseStats stats, GameInput[] inputs,
+            ResolvedDrumPlayback resolvedDrumPlayback = null)
         {
-            Profile = profile;
+            Profile = profile.CreateReplaySnapshot();
+            if (resolvedDrumPlayback != null) Profile.ReplayDrumPlayback = resolvedDrumPlayback.Copy();
             Stats = stats;
             EngineParameters = param;
             Inputs = inputs;

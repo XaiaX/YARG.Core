@@ -8,7 +8,7 @@ namespace YARG.Core.Game
 {
     public partial class ColorProfile : BasePreset, IBinarySerializable
     {
-        private const int COLOR_PROFILE_VERSION = 2;
+        private const int COLOR_PROFILE_VERSION = 4;
 
         /// <summary>
         /// Interface that has methods that allows for generic fret color retrieval.
@@ -34,6 +34,9 @@ namespace YARG.Core.Game
         public FiveLaneDrumsColors FiveLaneDrums;
         [SettingSubSection]
         public ProKeysColors ProKeys;
+        [SettingSubSection]
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public EliteDrumsColors EliteDrums;
 
         public ColorProfile(string name, bool defaultPreset = false) : base(name, defaultPreset)
         {
@@ -42,6 +45,7 @@ namespace YARG.Core.Game
             FourLaneDrums = new FourLaneDrumsColors();
             FiveLaneDrums = new FiveLaneDrumsColors();
             ProKeys = new ProKeysColors();
+            EliteDrums = new EliteDrumsColors();
         }
 
         public override BasePreset CopyWithNewName(string name)
@@ -53,12 +57,14 @@ namespace YARG.Core.Game
                 FourLaneDrums = FourLaneDrums.Copy(),
                 FiveLaneDrums = FiveLaneDrums.Copy(),
                 ProKeys = ProKeys.Copy(),
+                EliteDrums = (EliteDrums ?? new EliteDrumsColors()).Copy(),
             };
         }
 
         public void Serialize(BinaryWriter writer)
         {
-            writer.Write(Version);
+            // Always emit the current layout, even after loading an older profile.
+            writer.Write(COLOR_PROFILE_VERSION);
             writer.Write(Name);
 
             FiveFretGuitar.Serialize(writer);
@@ -66,6 +72,7 @@ namespace YARG.Core.Game
             FourLaneDrums.Serialize(writer);
             FiveLaneDrums.Serialize(writer);
             ProKeys.Serialize(writer);
+            (EliteDrums ?? new EliteDrumsColors()).Serialize(writer);
         }
 
         public void Deserialize(BinaryReader reader, int version = 0)
@@ -78,6 +85,12 @@ namespace YARG.Core.Game
             FourLaneDrums.Deserialize(reader, version);
             FiveLaneDrums.Deserialize(reader, version);
             ProKeys.Deserialize(reader, version);
+            EliteDrums = new EliteDrumsColors();
+            if (version >= 3)
+            {
+                EliteDrums.Deserialize(reader, version);
+            }
+            Version = COLOR_PROFILE_VERSION;
         }
     }
 }

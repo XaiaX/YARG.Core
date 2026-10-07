@@ -167,6 +167,13 @@ namespace YARG.Core.Chart
             }
         }
 
+        internal void GeneratePlaybackActivationPhrases(InstrumentDifficulty<DrumNote> difficulty)
+        {
+            var phrases = new List<Phrase>();
+            ParseForActivationPhrases(difficulty, phrases);
+            ApplyDrumActivationPhrases(difficulty, phrases);
+        }
+
         private void ParseForActivationPhrases(InstrumentDifficulty<DrumNote> diffChart, List<Phrase> newActivationPhrases)
         {
             var starPowerPhrases = new List<Phrase>();

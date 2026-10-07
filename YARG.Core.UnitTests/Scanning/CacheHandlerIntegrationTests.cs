@@ -110,6 +110,23 @@ public sealed class CacheHandlerIntegrationTests
         Assert.That(File.ReadAllText(_badSongsPath), Does.Contain("update").IgnoreCase);
     }
 
+    [Test]
+    public void AuthoredDrumFacts_EffectiveReplacementAndQuickFullCacheRoundTrip()
+    {
+        AddUpdate("alpha", "Alpha", "PART DRUMS", true);
+        var scanned = Scan(false, true);
+        Assert.That(scanned.AuthoredDrumSourceFacts, Has.Count.EqualTo(1));
+        Assert.That(scanned.AuthoredDrumSourceFacts[0].OrdinaryKick, Is.True);
+        Assert.That(Scan(true, true).AuthoredDrumSourceFacts, Is.EqualTo(scanned.AuthoredDrumSourceFacts));
+        Assert.That(Scan(false, true).AuthoredDrumSourceFacts, Is.EqualTo(scanned.AuthoredDrumSourceFacts));
+
+        // A later named empty track replaces the earlier authored drums, while base bass remains valid.
+        AddUpdate("zeta", "Zeta", "PART DRUMS", false);
+        Assert.That(Scan(false, true).AuthoredDrumSourceFacts, Is.Empty);
+        Assert.That(Scan(true, true).AuthoredDrumSourceFacts, Is.Empty);
+        Assert.That(Scan(false, true).AuthoredDrumSourceFacts, Is.Empty);
+    }
+
     private SongCache ScanAll(bool quick, bool cumulative) => CacheHandler.RunScan(quick, _cachePath,
         _badSongsPath, false, new List<string> { _library }, cumulative);
 

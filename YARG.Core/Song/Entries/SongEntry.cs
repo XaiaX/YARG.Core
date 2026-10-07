@@ -1,5 +1,6 @@
 ﻿using System;
 using System.IO;
+using System.Collections.Generic;
 using YARG.Core.Extensions;
 using YARG.Core.IO;
 
@@ -76,6 +77,10 @@ namespace YARG.Core.Song
 
         protected SongMetadata _metadata = SongMetadata.Default;
         protected AvailableParts _parts = AvailableParts.Default;
+        private IReadOnlyList<Game.DrumSourceTierFacts> _authoredDrumSourceFacts = Array.Empty<Game.DrumSourceTierFacts>();
+
+        /// <summary>Native authored drum tiers before conversion, kick filtering or Beginner collapse.</summary>
+        public IReadOnlyList<Game.DrumSourceTierFacts> AuthoredDrumSourceFacts => _authoredDrumSourceFacts;
         protected HashWrapper _hash = default;
         protected LoaderSettings _settings = LoaderSettings.Default;
         protected string _parsedYear = string.Empty;
@@ -400,6 +405,8 @@ namespace YARG.Core.Song
                 stream.Write(new Span<byte>(&parts, sizeof(AvailableParts)));
             }
 
+            SerializeAuthoredDrumSourceFacts(stream);
+
             stream.Write(node.Title, Endianness.Little);
             stream.Write(node.Artist, Endianness.Little);
             stream.Write(node.Album, Endianness.Little);
@@ -499,6 +506,8 @@ namespace YARG.Core.Song
                 stream.Read(&parts, sizeof(AvailableParts));
                 _parts = parts;
             }
+
+            DeserializeAuthoredDrumSourceFacts(ref stream);
 
             _metadata.Name =     strings.Titles   [stream.Read<int>(Endianness.Little)];
             _metadata.Artist =   strings.Artists  [stream.Read<int>(Endianness.Little)];

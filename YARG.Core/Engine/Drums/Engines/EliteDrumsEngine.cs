@@ -233,11 +233,16 @@ namespace YARG.Core.Engine.Drums.Engines
             // continuation for the complete physical timestamp group.
             ResolveAuthoredCadenceBefore(input.Time);
             _processingPhysicalInput = true;
-            // Drum presses are axes; a zero axis is a release, not a hit.
-            if (input.Axis > 0)
+            var action = input.GetAction<EliteDrumsAction>();
+            if (!IsStrikeAction(action)) return;
+            // Pedals are buttons, but historical callers also send positive axes.
+            // GameInput is an untagged union: use the action's declared value type.
+            bool pedal = action is EliteDrumsAction.EliteStomp or EliteDrumsAction.EliteSplash;
+            bool buttonPress = pedal && input.Integer == 1;
+            if (buttonPress || (input.Integer != 1 && input.Axis > 0 && !float.IsInfinity(input.Axis)))
             {
-                _action = input.GetAction<EliteDrumsAction>();
-                _velocity = input.Axis;
+                _action = action;
+                _velocity = buttonPress ? 1f : input.Axis;
             }
         }
 
@@ -388,10 +393,15 @@ namespace YARG.Core.Engine.Drums.Engines
             return pad >= 0;
         }
 
+        private static bool IsStrikeAction(EliteDrumsAction action) =>
+            action is >= EliteDrumsAction.Kick and <= EliteDrumsAction.WildcardPad or
+                >= EliteDrumsAction.FourLaneRedDrum and <= EliteDrumsAction.FiveLaneOrangeCymbal;
+
         private static bool Matches(EliteDrumsAction action, EliteDrumNote note)
         {
             return (EliteDrumNote.EliteDrumPad) note.Pad switch
             {
+                EliteDrumNote.EliteDrumPad.Wildcard => IsStrikeAction(action),
                 EliteDrumNote.EliteDrumPad.Kick => action == EliteDrumsAction.Kick,
                 EliteDrumNote.EliteDrumPad.HatPedal => note.HatPedalType switch
                 {
@@ -429,6 +439,7 @@ namespace YARG.Core.Engine.Drums.Engines
                 _action = (EliteDrumNote.EliteDrumPad) note.Pad switch
                 {
                     EliteDrumNote.EliteDrumPad.HatPedal => note.IsStomp ? EliteDrumsAction.EliteStomp : EliteDrumsAction.EliteSplash,
+                    EliteDrumNote.EliteDrumPad.Wildcard => EliteDrumsAction.WildcardPad,
                     EliteDrumNote.EliteDrumPad.Kick => EliteDrumsAction.Kick,
                     EliteDrumNote.EliteDrumPad.Snare => EliteDrumsAction.EliteSnare,
                     EliteDrumNote.EliteDrumPad.HiHat => note.IsOpen ? EliteDrumsAction.EliteOpenHiHat : EliteDrumsAction.EliteClosedHiHat,

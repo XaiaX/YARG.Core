@@ -51,7 +51,8 @@ namespace YARG.Core.Replays
         /// Increase this whenever the engine is functionally changed in any way,
         /// to where a replay may no longer simulate accurately what was originally performed.
         /// </remarks>
-        private const int ENGINE_VERSION = 5;
+        // Resolved source/tier/kick policy is recorded in profile v16; the container remains v21.
+        private const int ENGINE_VERSION = 6;
 
         public static (ReplayReadResult Result, ReplayInfo Info, ReplayData Data) TryDeserialize(string path, ReplayReadOptions replayOptions)
         {

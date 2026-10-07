@@ -22,7 +22,10 @@ namespace YARG.Core.Game
         ManualVocalStarPower = 1 << 12,
         UnpitchedHarm2 = 1 << 13,
         UnpitchedHarm3 = 1 << 14,
-        NoHiHat = 1 << 15
+        NoHiHat = 1 << 15,
+        EnableEliteUpconversion = 1UL << 16,
+        Enable2xKicks = 1UL << 17,
+        PreferEliteDowncharts = 1UL << 18
     }
 
     public static class ModifierConflicts
@@ -96,7 +99,10 @@ namespace YARG.Core.Game
                 GameMode.EliteDrums =>
                     Modifier.NoKicks    |
                     Modifier.NoDynamics |
-                    Modifier.NoHiHat,
+                    Modifier.NoHiHat |
+                    Modifier.EnableEliteUpconversion |
+                    Modifier.Enable2xKicks |
+                    Modifier.PreferEliteDowncharts,
 
                 GameMode.Vocals or
                 GameMode.PartyVocals =>

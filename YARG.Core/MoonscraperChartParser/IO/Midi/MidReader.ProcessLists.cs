@@ -707,6 +707,7 @@ namespace MoonscraperChartEditor.Song.IO
                             (plainKick.flags & MoonNote.Flags.InstrumentPlus) != 0)
                             continue;
 
+                        plainKick.pairedExtraKick = kick.Clone();
                         plainKick.flags |= MoonNote.Flags.EliteDrums_Flam;
                         if (kick.previous != null)
                             kick.previous.next = kick.next;

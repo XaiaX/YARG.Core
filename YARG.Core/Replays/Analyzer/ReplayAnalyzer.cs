@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using YARG.Core.Chart;
 using YARG.Core.Engine;
@@ -251,6 +252,16 @@ namespace YARG.Core.Replays.Analyzer
                 case GameMode.FiveLaneDrums:
                 case GameMode.EliteDrums:
                 {
+                    if (profile.ReplayDrumPlayback != null)
+                    {
+                        var prepared = PrepareRecordedDrums(profile);
+                        if (prepared.Elite is { } elite)
+                            manager.Register((EliteDrumsEngine)engine, elite, _chart, rockMeterPreset);
+                        else
+                            manager.Register((DrumsEngine)engine, prepared.Classic!, _chart, rockMeterPreset);
+                        break;
+                    }
+
                     if (DrumDifficultySelector.UsesNativeEliteTrack(profile))
                     {
                         var eliteNotes = DrumDifficultySelector.SelectNativeEliteTrack(_chart, profile)
@@ -299,6 +310,24 @@ namespace YARG.Core.Replays.Analyzer
                 default:
                     throw new InvalidOperationException("Game mode not configured!");
             }
+        }
+
+        private PreparedDrumPlayback PrepareRecordedDrums(YargProfile profile)
+        {
+            var playback = profile.ReplayDrumPlayback;
+            if (profile.GameMode != GameMode.EliteDrums ||
+                profile.CurrentInstrument != playback.RequestedOutput ||
+                profile.CurrentDifficulty != playback.BaseDifficulty || profile.EliteDrumsDownchartTarget != null)
+            {
+                throw new InvalidDataException("Resolved drum state does not match replay profile");
+            }
+
+            var prepared = DrumPlaybackPreparer.Prepare(_chart, playback,
+                notes => profile.ApplyModifiers(notes, _chart.SyncTrack),
+                notes => profile.ApplyModifiers(notes, _chart.SyncTrack));
+            prepared.Classic?.SetDrumActivationFlags(profile.StarPowerActivationType);
+            prepared.Elite?.SetDrumActivationFlags(profile.StarPowerActivationType);
+            return prepared;
         }
 
         private BaseEngine CreateEngine(YargProfile profile, BaseEngineParameters parameters)
@@ -350,6 +379,24 @@ namespace YARG.Core.Replays.Analyzer
                 case GameMode.FiveLaneDrums:
                 case GameMode.EliteDrums:
                 {
+                    if (profile.ReplayDrumPlayback != null)
+                    {
+                        var prepared = PrepareRecordedDrums(profile);
+                        if (prepared.Elite is { } elite)
+                        {
+                            foreach (var note in elite.Notes)
+                                foreach (var member in note.AllNotes) member.ResetNoteState();
+                            return new EliteDrumsEngine(elite, _chart.SyncTrack,
+                                (DrumsEngineParameters) parameters, profile.IsBot, true);
+                        }
+
+                        var classic = prepared.Classic!;
+                        foreach (var note in classic.Notes)
+                            foreach (var member in note.AllNotes) member.ResetNoteState();
+                        return new YargDrumsEngine(classic, _chart.SyncTrack,
+                            (DrumsEngineParameters) parameters, profile.IsBot, true);
+                    }
+
                     if (DrumDifficultySelector.UsesNativeEliteTrack(profile))
                     {
                         var eliteNotes = DrumDifficultySelector.SelectNativeEliteTrack(_chart, profile)

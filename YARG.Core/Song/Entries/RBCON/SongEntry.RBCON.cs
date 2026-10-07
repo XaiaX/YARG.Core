@@ -737,6 +737,18 @@ namespace YARG.Core.Song
                     entry._settings.HopoThreshold = entry._settings.SustainCutoffThreshold;
                 }
 
+                var authoredSettings = new ParseSettings
+                {
+                    HopoThreshold = entry._settings.HopoThreshold,
+                    SustainCutoffThreshold = entry._settings.SustainCutoffThreshold,
+                    StarPowerNote = entry._settings.OverdiveMidiNote,
+                    TuningOffsetCents = entry._settings.TuningOffsetCents,
+                    DrumsType = DrumsType.FourLane,
+                    ChordHopoCancellation = true,
+                    NoteSnapThreshold = NOTE_SNAP_THRESHOLD,
+                };
+                entry.CollectAuthoredDrumSourceFacts(MoonSongLoader.LoadMidi(authoredSettings, effectiveMidi));
+
                 using var buffer = FixedArray<byte>.Alloc(bufLength);
                 unsafe
                 {

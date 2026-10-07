@@ -18,6 +18,7 @@ namespace YARG.Core.Song
                 return new ScanUnexpected(ScanResult.InvalidResolution);
             }
 
+            var nativeDrumDifficulties = DifficultyMask.None;
             bool harm2 = false;
             bool harm3 = false;
             while (midiFile.GetNextTrack(out var _, out var track))
@@ -45,7 +46,10 @@ namespace YARG.Core.Song
                     case MidiTrackType.Rhythm_6: if (!parts.SixFretRhythm.IsActive())      parts.SixFretRhythm.Difficulties      = Midi_SixFret_Preparser.Parse(track); break;
                     case MidiTrackType.Coop_6:   if (!parts.SixFretCoopGuitar.IsActive())  parts.SixFretCoopGuitar.Difficulties  = Midi_SixFret_Preparser.Parse(track); break;
 
-                    case MidiTrackType.Drums:      if (!parts.FourLaneDrums.IsActive()) parts.FourLaneDrums.Difficulties = Midi_Drums_Preparser.Parse(track, ref drumsType); break;
+                    case MidiTrackType.Drums:
+                        if (nativeDrumDifficulties == DifficultyMask.None)
+                            nativeDrumDifficulties = Midi_Drums_Preparser.Parse(track, ref drumsType);
+                        break;
                     case MidiTrackType.EliteDrums:
                         var difficulties = Midi_EliteDrums_Preparser.Parse(track);
 
@@ -60,11 +64,6 @@ namespace YARG.Core.Song
                             // downchart would be empty (e.g. an Elite chart made only of
                             // unforced/invisible hat pedal notes).
                             parts.EliteDrumsDownchart.Difficulties = difficulties.downchartDifficulties;
-                        }
-
-                        if (parts.FourLaneDrums.Difficulties is DifficultyMask.None)
-                        {
-                            parts.FourLaneDrums.Difficulties = difficulties.downchartDifficulties;
                         }
 
                         break;
@@ -85,6 +84,10 @@ namespace YARG.Core.Song
                     case MidiTrackType.Harm3:  if (!harm3) harm3 = Midi_Vocal_Preparser.Parse(track, false); break;
                 }
             }
+
+            // Generated Elite downcharts must not suppress a later native PART DRUMS track.
+            parts.FourLaneDrums.Difficulties = nativeDrumDifficulties != DifficultyMask.None
+                ? nativeDrumDifficulties : parts.EliteDrumsDownchart.Difficulties;
 
             // HARM 2/3 are not playable without HARM1 phrases
             if (parts.HarmonyVocals[0])

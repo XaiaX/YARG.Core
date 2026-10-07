@@ -19,6 +19,8 @@ namespace YARG.Core.Chart
         InstrumentTrack<DrumNote> LoadDrumsTrack(Instrument instrument, InstrumentTrack<EliteDrumNote>? eliteDrumsFallback);
         InstrumentTrack<EliteDrumNote> LoadEliteDrumsTrack(Instrument instrument);
 
+        AuthoredDrumSourceCollection LoadAuthoredDrumSources() => new();
+
         /// <summary>
         /// Builds the forced Elite Drums downchart tracks requested by the parse settings
         /// (see <see cref="ParseSettings.EliteDrumsDownchartOutputs"/>). Unlike the

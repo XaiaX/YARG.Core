@@ -123,6 +123,7 @@ namespace YARG.Core.Chart
             Tom3,
             Ride,
             RightCrash,
+            Wildcard,
         }
 
         public enum EliteDrumsHatState {

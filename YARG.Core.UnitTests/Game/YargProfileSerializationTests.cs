@@ -44,8 +44,70 @@ public sealed class YargProfileSerializationTests
             Assert.That(deserialized.LeftyFlip, Is.True);
             Assert.That(deserialized.RangeEnabled, Is.False);
             Assert.That(deserialized.Name, Is.EqualTo("TestProfile"));
-            Assert.That(deserialized.Version, Is.EqualTo(15));
+            Assert.That(deserialized.Version, Is.EqualTo(16));
         });
+    }
+
+    [Test]
+    public void MidiModifierInitializationRoundTrip()
+    {
+        var profile = JsonConvert.DeserializeObject<YargProfile>("{\"GameMode\":7,\"CurrentInstrument\":23}");
+        Assert.That(profile.IsModifierActive(Modifier.EnableEliteUpconversion), Is.True);
+        Assert.That(profile.IsModifierActive(Modifier.Enable2xKicks), Is.False);
+        Assert.That(profile.IsModifierActive(Modifier.PreferEliteDowncharts), Is.False);
+        profile.RemoveModifiers(Modifier.EnableEliteUpconversion);
+        profile.AddSingleModifier(Modifier.Enable2xKicks);
+        var restored = JsonConvert.DeserializeObject<YargProfile>(JsonConvert.SerializeObject(profile));
+        restored.InitializeLiveMidiDrumModifiers();
+        Assert.That(restored.IsModifierActive(Modifier.EnableEliteUpconversion), Is.False);
+        Assert.That(restored.IsModifierActive(Modifier.Enable2xKicks), Is.True);
+        var allowed = GameMode.EliteDrums.PossibleModifiers(Instrument.FiveLaneDrums);
+        Assert.That(allowed.possible & Modifier.Enable2xKicks, Is.EqualTo(Modifier.Enable2xKicks));
+    }
+
+    [Test]
+    public void ReplayProfileSnapshotDoesNotAliasLiveValues()
+    {
+        var original = CreateTestProfile(instrument: Instrument.EliteDrums);
+        var snapshot = original.CreateReplaySnapshot();
+        original.Name = "changed";
+        Assert.That(snapshot.Name, Is.EqualTo("TestProfile"));
+        Assert.That(snapshot.FourLaneDrumsHighwayOrdering, Is.Not.SameAs(original.FourLaneDrumsHighwayOrdering));
+        Assert.That(snapshot.ProDrumsHighwayOrdering, Is.Not.SameAs(original.ProDrumsHighwayOrdering));
+        Assert.That(snapshot.FiveLaneDrumsHighwayOrdering, Is.Not.SameAs(original.FiveLaneDrumsHighwayOrdering));
+    }
+
+    [Test]
+    public void ResolvedProfileMultiFrameBoundariesAndFutureVersionRejection()
+    {
+        var original = CreateTestProfile(instrument: Instrument.EliteDrums);
+        original.GameMode = GameMode.EliteDrums;
+        original.CurrentDifficulty = Difficulty.Hard;
+        original.ReplayDrumPlayback = new ResolvedDrumPlayback(Instrument.EliteDrums,
+            DrumSourceFormat.FourLane, Difficulty.Hard, Difficulty.Hard,
+            DrumExtraKickPolicy.Remove, false, DrumScoreCategory.FourLaneDerivedElite);
+        using var ms = new MemoryStream();
+        using var writer = new BinaryWriter(ms);
+        original.Serialize(writer);
+        long boundary = ms.Position;
+        original.Serialize(writer);
+        writer.Write(0x12345678);
+        using var array = FixedArray<byte>.Alloc((int) ms.Length);
+        ms.ToArray().CopyTo(array.Span);
+        var stream = new FixedArrayStream(array);
+        var first = new YargProfile(ref stream);
+        var second = new YargProfile(ref stream);
+        Assert.That(stream.Read<int>(Endianness.Little), Is.EqualTo(0x12345678));
+        Assert.That(first.ReplayDrumPlayback.SourceFormat, Is.EqualTo(DrumSourceFormat.FourLane));
+        Assert.That(first.ReplayDrumPlayback, Is.Not.SameAs(second.ReplayDrumPlayback));
+        Assert.That(first.ReplayDrumPlayback, Is.Not.SameAs(original.ReplayDrumPlayback));
+        Assert.That(ms.Length, Is.EqualTo(boundary * 2 + 4));
+        Assert.That(JsonConvert.SerializeObject(original), Does.Not.Contain("ReplayDrumPlayback"));
+
+        using var future = FixedArray<byte>.Alloc(4);
+        BitConverter.GetBytes(17).CopyTo(future.Span);
+        var futureStream = new FixedArrayStream(future);
+        Assert.Throws<InvalidDataException>(() => new YargProfile(ref futureStream));
     }
 
     // v10 profiles (unified upstream layout) deserialize cleanly;

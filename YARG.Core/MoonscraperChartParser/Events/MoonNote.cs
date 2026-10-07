@@ -409,11 +409,17 @@ namespace MoonscraperChartEditor.Song
             return rawNote;
         }
 
+        // Retains the removed extra-kick member of a merged MIDI kick pair.
+        public MoonNote? pairedExtraKick;
+
         protected override MoonObject CloneImpl() => Clone();
 
         public new MoonNote Clone()
         {
-            return new MoonNote(tick, rawNote, length, flags);
+            return new MoonNote(tick, rawNote, length, flags)
+            {
+                pairedExtraKick = pairedExtraKick?.Clone()
+            };
         }
 
         public override string ToString()

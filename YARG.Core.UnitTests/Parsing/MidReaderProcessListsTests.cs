@@ -326,6 +326,10 @@ public class MidReaderProcessListsTests
                 .Count(note => note.tick == 10 && note.eliteDrumPad is EliteDrumPad.Snare), Is.EqualTo(1));
             Assert.That(song.GetChart(MoonInstrument.Drums, Difficulty.Expert).notes, Has.Count.EqualTo(1));
             Assert.That(pair.rawNote, Is.EqualTo((int) EliteDrumPad.Kick));
+            Assert.That(pair.pairedExtraKick, Is.Not.Null);
+            Assert.That(pair.pairedExtraKick!.tick, Is.EqualTo(pair.tick));
+            AssertHasFlag(pair.pairedExtraKick, Flags.InstrumentPlus);
+            Assert.That(pair.Clone().pairedExtraKick, Is.Not.SameAs(pair.pairedExtraKick));
             AssertHasFlag(pair, Flags.EliteDrums_Flam);
             AssertDoesNotHaveFlag(pair, Flags.InstrumentPlus);
             AssertDoesNotHaveFlag(rawKicks.Single(note => note.tick == 30), Flags.EliteDrums_Flam);

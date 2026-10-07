@@ -24,7 +24,7 @@ namespace YARG.Core.Game
         /// serialized starting at 14. This is the *replay* profile version — it only
         /// ever appears inside ReplayFrame serialization, never in JSON persistence.
         /// </remarks>
-        private const int PROFILE_VERSION = 15;
+        private const int PROFILE_VERSION = 16;
 
         public int Version;
 
@@ -114,6 +114,10 @@ namespace YARG.Core.Game
         [JsonIgnore]
         public Instrument? EliteDrumsDownchartTarget { get; set; }
 
+        /// <summary>Recorded chart policy only; live song state belongs to the player.</summary>
+        [JsonIgnore]
+        public ResolvedDrumPlayback ReplayDrumPlayback { get; set; }
+
         /// <summary>Whether this session is playing an unconverted native Elite Drums chart.</summary>
         [JsonIgnore]
         public bool IsNativeEliteDrums => GameMode == GameMode.EliteDrums &&
@@ -124,6 +128,20 @@ namespace YARG.Core.Game
 
         /// <summary>Remove playable hi-hat pedal notes from native Elite gameplay.</summary>
         public bool NoHiHatPedal;
+
+        [JsonProperty]
+        private int _midiDrumModifierVersion;
+
+        /// <summary>Initialize live MIDI preferences once; never called by binary replay decoding.</summary>
+        public void InitializeLiveMidiDrumModifiers()
+        {
+            if (GameMode != GameMode.EliteDrums || _midiDrumModifierVersion >= 1) return;
+            const Modifier preferences = Modifier.EnableEliteUpconversion | Modifier.Enable2xKicks |
+                Modifier.PreferEliteDowncharts;
+            _savedModifiers = (_savedModifiers & ~preferences) | Modifier.EnableEliteUpconversion;
+            CurrentModifiers = (CurrentModifiers & ~preferences) | Modifier.EnableEliteUpconversion;
+            _midiDrumModifierVersion = 1;
+        }
 
         /// <summary>Effective auto-pedal setting, excluding non-native tracks and removed pedals.</summary>
         [JsonIgnore]
@@ -317,6 +335,8 @@ namespace YARG.Core.Game
         public YargProfile(ref FixedArrayStream stream)
         {
             Version = stream.Read<int>(Endianness.Little);
+            if (Version < 1 || Version > PROFILE_VERSION)
+                throw new InvalidDataException($"Unsupported replay profile version {Version}");
 
             Name = stream.ReadString();
 
@@ -478,6 +498,16 @@ namespace YARG.Core.Game
             // Version 15 adds native Elite hi-hat controls. Older replays use their defaults.
             AutoHiHatPedal = Version >= 15 ? stream.ReadBoolean() : true;
             NoHiHatPedal = Version >= 15 && stream.ReadBoolean();
+            if (Version >= 16)
+            {
+                byte present = stream.ReadByte();
+                if (present > 1) throw new InvalidDataException("Invalid resolved drum state presence flag");
+                ReplayDrumPlayback = present != 0 ? ResolvedDrumPlayback.Deserialize(ref stream) : null;
+                if (ReplayDrumPlayback != null && (GameMode != GameMode.EliteDrums ||
+                    CurrentInstrument != ReplayDrumPlayback.RequestedOutput ||
+                    CurrentDifficulty != ReplayDrumPlayback.BaseDifficulty || EliteDrumsDownchartTarget != null))
+                    throw new InvalidDataException("Resolved drum state does not match replay profile");
+            }
         }
 
         /// <summary>
@@ -538,6 +568,28 @@ namespace YARG.Core.Game
         public void RestoreSessionModifiers(Modifier modifiers)
         {
             CurrentModifiers = modifiers;
+        }
+
+        /// <summary>Copies saved and effective modifiers, including live MIDI initialization state,
+        /// without running JSON load callbacks or changing either profile's instrument preference.</summary>
+        public void CopyModifierState(YargProfile source)
+        {
+            _savedModifiers = source._savedModifiers;
+            CurrentModifiers = source.CurrentModifiers;
+            _midiDrumModifierVersion = source._midiDrumModifierVersion;
+        }
+
+        public const Modifier MIDI_DRUM_PREFERENCES = Modifier.EnableEliteUpconversion |
+            Modifier.Enable2xKicks | Modifier.PreferEliteDowncharts;
+
+        /// <summary>Persists only the MIDI preferences; ordinary Maestro adjustments remain session-only.</summary>
+        public void CopyLiveMidiDrumPreferences(YargProfile source)
+        {
+            _savedModifiers = (_savedModifiers & ~MIDI_DRUM_PREFERENCES) |
+                (source._savedModifiers & MIDI_DRUM_PREFERENCES);
+            CurrentModifiers = (CurrentModifiers & ~MIDI_DRUM_PREFERENCES) |
+                (source.CurrentModifiers & MIDI_DRUM_PREFERENCES);
+            _midiDrumModifierVersion = source._midiDrumModifierVersion;
         }
 
         /// <summary>
@@ -707,6 +759,7 @@ namespace YARG.Core.Game
             // The saved modifier selection is the serialized source of truth;
             // a freshly loaded profile starts with it in effect.
             CurrentModifiers = _savedModifiers;
+            InitializeLiveMidiDrumModifiers();
         }
 
         private void ValidatePreferredInstrument()
@@ -720,6 +773,17 @@ namespace YARG.Core.Game
         public void ClaimProfile()
         {
             LastUsed = DateTime.Now;
+        }
+
+        /// <summary>Capture replay profile values without sharing mutable live profile state.</summary>
+        public YargProfile CreateReplaySnapshot()
+        {
+            var snapshot = (YargProfile) MemberwiseClone();
+            snapshot.FourLaneDrumsHighwayOrdering = (DrumsHighwayItem[]) FourLaneDrumsHighwayOrdering.Clone();
+            snapshot.ProDrumsHighwayOrdering = (DrumsHighwayItem[]) ProDrumsHighwayOrdering.Clone();
+            snapshot.FiveLaneDrumsHighwayOrdering = (DrumsHighwayItem[]) FiveLaneDrumsHighwayOrdering.Clone();
+            snapshot.ReplayDrumPlayback = ReplayDrumPlayback?.Copy();
+            return snapshot;
         }
 
         // For replay serialization
@@ -800,6 +864,10 @@ namespace YARG.Core.Game
             // Version 15+: native Elite pedal settings affect the played chart and inputs.
             writer.Write(AutoHiHatPedal);
             writer.Write(NoHiHatPedal);
+
+            // Version 16 appends the resolved chart policy without changing the v15 prefix.
+            writer.Write(ReplayDrumPlayback != null);
+            ReplayDrumPlayback?.Serialize(writer);
         }
 
         private static DrumsHighwayItem[] DEFAULT_FOUR_LANE_ORDERING = new DrumsHighwayItem[] {

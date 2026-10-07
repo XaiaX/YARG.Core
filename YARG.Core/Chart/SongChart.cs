@@ -72,6 +72,8 @@ namespace YARG.Core.Chart
 
         public InstrumentTrack<EliteDrumNote> EliteDrums { get; set; } = new(Instrument.EliteDrums);
 
+        public AuthoredDrumSourceCollection AuthoredDrumSources { get; internal set; } = new();
+
         /// <summary>
         /// Forced Elite Drums downchart tracks (experimental), keyed by the output instrument.
         /// Only populated when requested at load time (see
@@ -150,6 +152,7 @@ namespace YARG.Core.Chart
             SixFretRhythm = loader.LoadGuitarTrack(Instrument.SixFretRhythm);
             SixFretBass = loader.LoadGuitarTrack(Instrument.SixFretBass);
 
+            AuthoredDrumSources = loader.LoadAuthoredDrumSources();
             EliteDrums = loader.LoadEliteDrumsTrack(Instrument.EliteDrums); // Load elite first, because the others will fall back to it if they don't natively exist
             FourLaneDrums = loader.LoadDrumsTrack(Instrument.FourLaneDrums, EliteDrums);
             ProDrums = loader.LoadDrumsTrack(Instrument.ProDrums, EliteDrums);
@@ -188,6 +191,7 @@ namespace YARG.Core.Chart
 
         public void Append(SongChart song)
         {
+            AuthoredDrumSources.Append(song.AuthoredDrumSources);
             if (!song.FiveFretGuitar.IsEmpty)
                 FiveFretGuitar = song.FiveFretGuitar;
 

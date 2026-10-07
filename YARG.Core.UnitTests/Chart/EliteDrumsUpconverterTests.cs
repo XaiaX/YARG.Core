@@ -163,7 +163,7 @@ namespace YARG.Core.UnitTests.Chart
         public void RejectsNonNativeOrUnsupportedSources()
         {
             Assert.Throws<ArgumentNullException>(() => EliteDrumsUpconverter.ConvertToEliteDrums(null!));
-            Assert.Throws<ArgumentException>(() => new InstrumentDifficulty<DrumNote>(Instrument.FiveLaneDrums,
+            Assert.Throws<ArgumentException>(() => new InstrumentDifficulty<DrumNote>(Instrument.FiveFretGuitar,
                 Difficulty.Expert).ConvertToEliteDrums());
             var source = new InstrumentDifficulty<DrumNote>(Instrument.ProDrums, Difficulty.Expert);
             source.Notes.Add(Gem(FourLaneDrumPad.Wildcard, 100));

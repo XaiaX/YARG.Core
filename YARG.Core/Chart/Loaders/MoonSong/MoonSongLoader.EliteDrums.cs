@@ -69,7 +69,7 @@ namespace YARG.Core.Chart
             var inSamePadAuthoredRollLane = IsInSamePadAuthoredRollLane(moonNote, pad, currentPhrases);
             var isAuthoredFlam = GetEliteDrumNoteIsFlam(moonNote);
             var isFlam = isAuthoredFlam &&
-                (pad is not EliteDrumPad.Kick || _currentDifficulty == Difficulty.ExpertPlus) &&
+                (pad is not EliteDrumPad.Kick || _currentDifficulty == Difficulty.ExpertPlus || _loadingAuthoredDrums) &&
                 (pad is EliteDrumPad.Kick or EliteDrumPad.HatPedal || !inSamePadAuthoredRollLane);
             var isFlatFlam = GetEliteDrumNoteIsFlatFlam(moonNote) &&
                 pad is not EliteDrumPad.Kick and not EliteDrumPad.HatPedal && !inSamePadAuthoredRollLane;

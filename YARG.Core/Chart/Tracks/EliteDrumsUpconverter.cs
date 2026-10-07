@@ -15,13 +15,14 @@ namespace YARG.Core.Chart
         /// Lane membership uses the source loader's validated Tremolo/Trill/KickLane flags.
         /// Callers must select an actual native source, not an Elite-generated downchart or
         /// a Pro/Four-Lane representation synthesized from native Five-Lane drums.
+        /// Native Five-Lane uses its own direct pad mapping.
         /// </summary>
         public static InstrumentDifficulty<EliteDrumNote> ConvertToEliteDrums(
             this InstrumentDifficulty<DrumNote> source)
         {
             if (source is null) throw new ArgumentNullException(nameof(source));
-            if (source.Instrument is not (Instrument.ProDrums or Instrument.FourLaneDrums))
-                throw new ArgumentException("Only Pro/Four-Lane drums can be converted to Elite drums.", nameof(source));
+            if (source.Instrument is not (Instrument.ProDrums or Instrument.FourLaneDrums or Instrument.FiveLaneDrums))
+                throw new ArgumentException("Only native classic drums can be converted to Elite drums.", nameof(source));
 
             var result = new InstrumentDifficulty<EliteDrumNote>(Instrument.EliteDrums, source.Difficulty);
             var sourceMembers = new Dictionary<EliteDrumSourceDefinition, DrumNote>();
@@ -33,7 +34,8 @@ namespace YARG.Core.Chart
                 {
                     if (member.ConversionOrigin is not null)
                         throw new ArgumentException("Elite-generated downcharts are not native conversion sources.", nameof(source));
-                    var pad = MapPad(member.Pad);
+                    var pad = source.Instrument == Instrument.FiveLaneDrums
+                        ? MapFiveLanePad(member.Pad) : MapPad(member.Pad);
                     var definition = new EliteDrumSourceDefinition(
                         $"{source.Instrument}:{source.Difficulty}:{ordinal}", ordinal++, (int)pad,
                         member.Tick, member.TickLength, member.Time, member.TimeLength);
@@ -95,6 +97,17 @@ namespace YARG.Core.Chart
             result.RangeShiftEvents.AddRange(source.RangeShiftEvents.Duplicate());
             return result;
         }
+
+        private static EliteDrumPad MapFiveLanePad(int pad) => (FiveLaneDrumPad)pad switch
+        {
+            FiveLaneDrumPad.Kick => EliteDrumPad.Kick,
+            FiveLaneDrumPad.Red => EliteDrumPad.Snare,
+            FiveLaneDrumPad.Yellow => EliteDrumPad.HiHat,
+            FiveLaneDrumPad.Orange => EliteDrumPad.RightCrash,
+            FiveLaneDrumPad.Blue => EliteDrumPad.Tom2,
+            FiveLaneDrumPad.Green => EliteDrumPad.Tom3,
+            _ => throw new ArgumentException($"Unsupported native Five-Lane drum pad: {pad}.")
+        };
 
         private static EliteDrumPad MapPad(int pad) => (FourLaneDrumPad)pad switch
         {

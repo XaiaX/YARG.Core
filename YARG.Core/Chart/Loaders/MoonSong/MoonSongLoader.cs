@@ -169,6 +169,8 @@ namespace YARG.Core.Chart
             return chart;
         }
 
+        private bool _loadingAuthoredDrums;
+
         private List<TNote> GetNotes<TNote>(MoonChart moonChart, Difficulty difficulty,
             CreateNoteDelegate<TNote> createNote, ProcessTextDelegate? processText = null)
             where TNote : Note<TNote>
@@ -210,7 +212,7 @@ namespace YARG.Core.Chart
                 }
 
                 // Skip Expert+ notes if not on Expert+
-                if (difficulty != Difficulty.ExpertPlus && (moonNote.flags & MoonNote.Flags.InstrumentPlus) != 0)
+                if (!_loadingAuthoredDrums && difficulty != Difficulty.ExpertPlus && (moonNote.flags & MoonNote.Flags.InstrumentPlus) != 0)
                 {
                     continue;
                 }

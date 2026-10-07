@@ -139,7 +139,10 @@ namespace YARG.Core.Replays
             List<Instrument>? outputs = null;
             foreach (var frame in Frames)
             {
-                if (!EliteDrumsDownchartRules.IsDownchartTargetActive(frame.Profile))
+                // Current policies reconstruct directly from authored sources; only historical
+                // frames need the loader's generated downchart variants.
+                if (frame.Profile.ReplayDrumPlayback != null ||
+                    !EliteDrumsDownchartRules.IsDownchartTargetActive(frame.Profile))
                 {
                     continue;
                 }
