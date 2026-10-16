@@ -122,7 +122,7 @@ public class EliteDrumsColorProfileTests
         writer.Write(0x12345678);
         stream.Position = 0;
         using var reader = new BinaryReader(stream, Encoding.UTF8, true);
-        Assert.That(reader.ReadInt32(), Is.EqualTo(4));
+        Assert.That(reader.ReadInt32(), Is.EqualTo(5));
         Assert.That(reader.ReadString(), Is.EqualTo(source.Name));
         var classic = new ColorProfile("classic");
         classic.FiveFretGuitar.Deserialize(reader, 3);
@@ -158,7 +158,7 @@ public class EliteDrumsColorProfileTests
         using var elite = new MemoryStream();
         using (var eliteWriter = new BinaryWriter(elite, Encoding.UTF8, true))
             source.EliteDrums.Serialize(eliteWriter);
-        writer.Write(elite.ToArray(), 0, (int) elite.Length - 32 * sizeof(int));
+        writer.Write(elite.ToArray(), 0, (int) elite.Length - (32 + 20) * sizeof(int));
         long boundary = stream.Position;
         writer.Write(0x12345678);
         stream.Position = 0;
@@ -204,7 +204,7 @@ public class EliteDrumsColorProfileTests
         restored.Serialize(upgradedWriter);
         upgraded.Position = 0;
         using var upgradedReader = new BinaryReader(upgraded);
-        Assert.That(upgradedReader.ReadInt32(), Is.EqualTo(4));
+        Assert.That(upgradedReader.ReadInt32(), Is.EqualTo(5));
     }
 
     // V1 lacked only these known V2 tails; preserve the original section order and ProKeys boundary.

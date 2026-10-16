@@ -161,6 +161,7 @@ namespace YARG.Core.Game
                 writer.Write(RideTom2Particles); writer.Write(RightCrashTom3Particles); writer.Write(DoubleKickParticles);
                 writer.Write(Miss); writer.Write(Metal); writer.Write(MetalStarPower);
                 SerializeInputColors(writer);
+                SerializeSlotColors(writer);
             }
 
             public void Deserialize(BinaryReader reader, int version = 0)
@@ -184,6 +185,8 @@ namespace YARG.Core.Game
                 Miss = reader.ReadColor(); Metal = reader.ReadColor(); MetalStarPower = reader.ReadColor();
                 if (version >= 4) DeserializeInputColors(reader);
                 else MigrateInputColors();
+                if (version >= 5) DeserializeSlotColors(reader);
+                else MigrateSlotColors();
             }
         }
     }

@@ -25,10 +25,15 @@ namespace YARG.Core.Replays
         public int InputCount => Inputs.Length;
 
         public ReplayFrame(YargProfile profile, BaseEngineParameters param, BaseStats stats, GameInput[] inputs,
-            ResolvedDrumPlayback resolvedDrumPlayback = null)
+            ResolvedDrumPlayback resolvedDrumPlayback = null,
+            EliteDrumsLayoutPreset eliteDrumsLayout = null)
         {
             Profile = profile.CreateReplaySnapshot();
             if (resolvedDrumPlayback != null) Profile.ReplayDrumPlayback = resolvedDrumPlayback.Copy();
+            // The resolved Elite Drums layout content the player actually used; the
+            // profile's layout GUID alone cannot reproduce it (custom or since-edited
+            // presets). Deep-copied so later live edits never bleed into the recording.
+            if (eliteDrumsLayout != null) Profile.ReplayEliteDrumsLayout = eliteDrumsLayout.Copy();
             Stats = stats;
             EngineParameters = param;
             Inputs = inputs;

@@ -1,7 +1,9 @@
 #nullable disable
 using System;
 using System.IO;
+using System.Text;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using YARG.Core.Chart;
 using YARG.Core.Utility;
 using YARG.Core.Extensions;
@@ -23,8 +25,10 @@ namespace YARG.Core.Game
         /// fields (Party Vocals chart preference, Elite Drums downchart target) are
         /// serialized starting at 14. This is the *replay* profile version — it only
         /// ever appears inside ReplayFrame serialization, never in JSON persistence.
+        /// 17 appends the Elite Drums layout identity plus an optional resolved-layout
+        /// content snapshot; older versions read as the built-in Compact layout.
         /// </remarks>
-        private const int PROFILE_VERSION = 16;
+        private const int PROFILE_VERSION = 17;
 
         public int Version;
 
@@ -83,6 +87,15 @@ namespace YARG.Core.Game
         public Guid RockMeterPreset;
 
         /// <summary>
+        /// The Elite Drums layout preset this profile plays with, identified by preset
+        /// ID like the other preset selections. Defaults to the built-in Compact layout.
+        /// The GUID alone is only an external identity: replay playback supplements it
+        /// with <see cref="ReplayEliteDrumsLayout"/>, the resolved layout content
+        /// captured at record time (see there for why the GUID is not sufficient).
+        /// </summary>
+        public Guid EliteDrumsLayout;
+
+        /// <summary>
         /// The selected instrument.
         /// </summary>
         public Instrument CurrentInstrument;
@@ -117,6 +130,30 @@ namespace YARG.Core.Game
         /// <summary>Recorded chart policy only; live song state belongs to the player.</summary>
         [JsonIgnore]
         public ResolvedDrumPlayback ReplayDrumPlayback { get; set; }
+
+        /// <summary>
+        /// The resolved Elite Drums layout content captured for replay playback:
+        /// a deep copy of the layout the player actually used, recorded instead of
+        /// (not derived from) <see cref="EliteDrumsLayout"/>.
+        /// <para>
+        /// The external GUID is not sufficient to reproduce a run: the referenced
+        /// preset lives in the player's local preset container, can be renamed,
+        /// deleted, or edited after the fact, and custom layouts are not portable
+        /// across machines. The recording caller therefore populates this snapshot
+        /// with the resolved content (typically via the <c>ReplayFrame</c>
+        /// constructor), and replay playback prefers it over re-resolving the GUID.
+        /// </para>
+        /// <para>
+        /// Transient replay state: <c>[JsonIgnore]</c> keeps it out of JSON profile
+        /// persistence; it is written to the replay-only binary form
+        /// (<see cref="Serialize(BinaryWriter)"/>, profile version 17+) only when it
+        /// passes <see cref="EliteDrumsLayoutValidator"/> as structurally complete
+        /// and runtime supported — a layout the runtime cannot activate is never
+        /// recorded or activated on read, and older profiles carry no snapshot.
+        /// </para>
+        /// </summary>
+        [JsonIgnore]
+        public EliteDrumsLayoutPreset ReplayEliteDrumsLayout { get; set; }
 
         /// <summary>Whether this session is playing an unconverted native Elite Drums chart.</summary>
         [JsonIgnore]
@@ -322,6 +359,7 @@ namespace YARG.Core.Game
             CameraPreset = Game.CameraPreset.Default.Id;
             HighwayPreset = Game.HighwayPreset.Default.Id;
             RockMeterPreset = Game.RockMeterPreset.Normal.Id;
+            EliteDrumsLayout = EliteDrumsLayoutPreset.CompactId;
 
             CurrentModifiers = Modifier.None;
             _savedModifiers = Modifier.None;
@@ -508,6 +546,22 @@ namespace YARG.Core.Game
                     CurrentDifficulty != ReplayDrumPlayback.BaseDifficulty || EliteDrumsDownchartTarget != null))
                     throw new InvalidDataException("Resolved drum state does not match replay profile");
             }
+
+            // Version 17 appends the Elite Drums layout identity and, when the recorder
+            // captured it, the resolved layout content. Replays from older versions
+            // predate selectable layouts entirely: they read as the built-in Compact
+            // layout with no content snapshot, and playback resolves from that identity.
+            if (Version >= 17)
+            {
+                EliteDrumsLayout = stream.ReadGuid();
+                byte layoutPresent = stream.ReadByte();
+                if (layoutPresent > 1) throw new InvalidDataException("Invalid Elite Drums layout presence flag");
+                ReplayEliteDrumsLayout = layoutPresent != 0 ? ReadEliteDrumsLayoutSnapshot(ref stream) : null;
+            }
+            else
+            {
+                EliteDrumsLayout = EliteDrumsLayoutPreset.CompactId;
+            }
         }
 
         /// <summary>
@@ -522,6 +576,122 @@ namespace YARG.Core.Game
         {
             var target = (Instrument) stream.ReadByte();
             return EliteDrumsDownchartRules.IsValidTarget(target) ? target : null;
+        }
+
+        /// <summary>Bound, in UTF-8 bytes, for one serialized layout snapshot. Valid
+        /// ten-slot layouts are far below this; anything larger is malformed, not a layout.</summary>
+        private const int MAX_LAYOUT_SNAPSHOT_JSON_BYTES = 16 * 1024;
+
+        /// <summary>Nesting bound for the snapshot document. A valid layout is three
+        /// levels deep (object → slots array → slot object); anything past this is hostile.</summary>
+        private const int MAX_LAYOUT_SNAPSHOT_JSON_DEPTH = 16;
+
+        private static readonly Encoding STRICT_UTF8 = new UTF8Encoding(false, true);
+
+        /// <summary>
+        /// Reads one layout content snapshot: a presence-gated, length-prefixed JSON
+        /// document. The length prefix is untrusted — it is checked against the byte
+        /// bound and the bytes actually remaining before anything is decoded — and the
+        /// decoded document must be strictly valid UTF-8, bounded-depth, free of
+        /// duplicate properties, and must validate as structurally complete and
+        /// runtime supported. Anything failing that is never activated: the replay is
+        /// rejected as corrupt rather than replayed against a different layout.
+        /// </summary>
+        private static EliteDrumsLayoutPreset ReadEliteDrumsLayoutSnapshot(ref FixedArrayStream stream)
+        {
+            int length;
+            try
+            {
+                length = stream.Read7BitEncodedInt();
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new InvalidDataException("Truncated Elite Drums layout snapshot length prefix", ex);
+            }
+
+            if (length < 0 || length > MAX_LAYOUT_SNAPSHOT_JSON_BYTES || length > stream.Remaining)
+            {
+                throw new InvalidDataException($"Invalid Elite Drums layout snapshot length {length}");
+            }
+
+            var bytes = new byte[length];
+            for (int i = 0; i < length; i++)
+            {
+                bytes[i] = stream.ReadByte();
+            }
+
+            string json;
+            try
+            {
+                json = STRICT_UTF8.GetString(bytes);
+            }
+            catch (DecoderFallbackException ex)
+            {
+                throw new InvalidDataException("Elite Drums layout snapshot is not valid UTF-8", ex);
+            }
+
+            EliteDrumsLayoutPreset layout;
+            try
+            {
+                using var textReader = new StringReader(json);
+                using var jsonReader = new JsonTextReader(textReader)
+                {
+                    MaxDepth = MAX_LAYOUT_SNAPSHOT_JSON_DEPTH
+                };
+                // JObject.Load with duplicate-property errors, then ToObject: a plain
+                // DeserializeObject call would silently take the last duplicate value.
+                var document = JObject.Load(jsonReader,
+                    new JsonLoadSettings { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error });
+                while (jsonReader.Read())
+                {
+                    if (jsonReader.TokenType != JsonToken.Comment)
+                    {
+                        throw new JsonReaderException("Unexpected trailing content after the Elite Drums layout snapshot.");
+                    }
+                }
+                layout = document.ToObject<EliteDrumsLayoutPreset>();
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+            {
+                throw new InvalidDataException("Malformed Elite Drums layout snapshot", ex);
+            }
+
+            if (!EliteDrumsLayoutValidator.Validate(layout).IsRuntimeSupported)
+            {
+                throw new InvalidDataException(
+                    "Elite Drums layout snapshot is not structurally complete and runtime supported");
+            }
+            return layout!;
+        }
+
+        /// <summary>
+        /// Writes the layout content snapshot when one is captured. Only layouts the
+        /// runtime could have played are recorded; the JSON is bounded by its UTF-8
+        /// byte count (the reader's bound), so a write can never produce a replay
+        /// this build refuses to read back.
+        /// </summary>
+        private void WriteEliteDrumsLayoutSnapshot(BinaryWriter writer)
+        {
+            if (ReplayEliteDrumsLayout is null)
+            {
+                writer.Write((byte) 0);
+                return;
+            }
+
+            if (!EliteDrumsLayoutValidator.Validate(ReplayEliteDrumsLayout).IsRuntimeSupported)
+            {
+                throw new InvalidDataException(
+                    "Cannot record an Elite Drums layout snapshot that is not runtime supported");
+            }
+
+            var json = JsonConvert.SerializeObject(ReplayEliteDrumsLayout);
+            if (Encoding.UTF8.GetByteCount(json) > MAX_LAYOUT_SNAPSHOT_JSON_BYTES)
+            {
+                throw new InvalidDataException("Elite Drums layout snapshot JSON exceeds the size bound");
+            }
+
+            writer.Write((byte) 1);
+            writer.Write(json);
         }
 
         public void AddSingleModifier(Modifier modifier)
@@ -783,6 +953,7 @@ namespace YARG.Core.Game
             snapshot.ProDrumsHighwayOrdering = (DrumsHighwayItem[]) ProDrumsHighwayOrdering.Clone();
             snapshot.FiveLaneDrumsHighwayOrdering = (DrumsHighwayItem[]) FiveLaneDrumsHighwayOrdering.Clone();
             snapshot.ReplayDrumPlayback = ReplayDrumPlayback?.Copy();
+            snapshot.ReplayEliteDrumsLayout = ReplayEliteDrumsLayout?.Copy();
             return snapshot;
         }
 
@@ -868,6 +1039,11 @@ namespace YARG.Core.Game
             // Version 16 appends the resolved chart policy without changing the v15 prefix.
             writer.Write(ReplayDrumPlayback != null);
             ReplayDrumPlayback?.Serialize(writer);
+
+            // Version 17 appends the Elite Drums layout identity and, when captured,
+            // the resolved layout content needed to reproduce the recorded lanes.
+            writer.Write(EliteDrumsLayout);
+            WriteEliteDrumsLayoutSnapshot(writer);
         }
 
         private static DrumsHighwayItem[] DEFAULT_FOUR_LANE_ORDERING = new DrumsHighwayItem[] {

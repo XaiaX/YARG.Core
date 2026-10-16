@@ -51,7 +51,10 @@ namespace YARG.Core.Replays
         /// Increase this whenever the engine is functionally changed in any way,
         /// to where a replay may no longer simulate accurately what was originally performed.
         /// </remarks>
-        // Resolved source/tier/kick policy is recorded in profile v16; the container remains v21.
+        // Resolved source/tier/kick policy is recorded in profile v16, and the Elite
+        // Drums layout identity + resolved content snapshot in profile v17; the
+        // container remains v21 and the engine version is unchanged — layout is
+        // presentation/lane-mapping state, not engine or score behavior.
         private const int ENGINE_VERSION = 6;
 
         public static (ReplayReadResult Result, ReplayInfo Info, ReplayData Data) TryDeserialize(string path, ReplayReadOptions replayOptions)

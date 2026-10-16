@@ -44,7 +44,7 @@ public sealed class YargProfileSerializationTests
             Assert.That(deserialized.LeftyFlip, Is.True);
             Assert.That(deserialized.RangeEnabled, Is.False);
             Assert.That(deserialized.Name, Is.EqualTo("TestProfile"));
-            Assert.That(deserialized.Version, Is.EqualTo(16));
+            Assert.That(deserialized.Version, Is.EqualTo(17));
         });
     }
 
@@ -105,7 +105,7 @@ public sealed class YargProfileSerializationTests
         Assert.That(JsonConvert.SerializeObject(original), Does.Not.Contain("ReplayDrumPlayback"));
 
         using var future = FixedArray<byte>.Alloc(4);
-        BitConverter.GetBytes(17).CopyTo(future.Span);
+        BitConverter.GetBytes(18).CopyTo(future.Span);
         var futureStream = new FixedArrayStream(future);
         Assert.Throws<InvalidDataException>(() => new YargProfile(ref futureStream));
     }
@@ -548,6 +548,9 @@ public sealed class YargProfileSerializationTests
             Assert.That(profile.Name, Is.EqualTo("V12Profile"));
             Assert.That(profile.CurrentInstrument, Is.EqualTo(Instrument.ProDrums));
             Assert.That(profile.EliteDrumsDownchartTarget, Is.Null);
+            // Versions 9-13 predate selectable layouts: they read as Compact.
+            Assert.That(profile.EliteDrumsLayout, Is.EqualTo(EliteDrumsLayoutPreset.CompactId));
+            Assert.That(profile.ReplayEliteDrumsLayout, Is.Null);
         });
     }
 
