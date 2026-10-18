@@ -36,6 +36,158 @@ public class EliteDrumsEngineTests
         engine.Update(time);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void HandFlamScoresTwoUnitsWithOneLifecycleAndOptionalFollowUp(bool flat)
+    {
+        var note = MakeNote(EliteDrumNote.EliteDrumPad.Snare, dynamics: DrumNoteType.Accent);
+        note.IsFlam = true;
+        note.IsFlatFlam = flat;
+        var engine = Create(note);
+        int hits = 0, pads = 0, followUps = 0;
+        engine.OnNoteHit += (_, _) => hits++;
+        engine.OnPadHit += (_, _, _, _, _, _) => pads++;
+        engine.OnFlamFollowUp += (original, action, velocity, bonus) =>
+        {
+            Assert.That(original, Is.SameAs(note));
+            Assert.That(action, Is.EqualTo(EliteDrumsAction.EliteSnare));
+            Assert.That(velocity, Is.EqualTo(0.5f));
+            Assert.That(bonus, Is.EqualTo(!flat));
+            followUps++;
+        };
+        Press(engine, 1, EliteDrumsAction.EliteSnare, 1f);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(flat ? 100 : 50));
+        Assert.That(engine.BaseNoteScore, Is.EqualTo(100));
+        Press(engine, 1.02, EliteDrumsAction.EliteSnare, 0.5f);
+        Assert.Multiple(() =>
+        {
+            Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(100));
+            Assert.That(engine.EngineStats.CommittedScore, Is.EqualTo(125));
+            Assert.That(engine.EngineStats.Combo, Is.EqualTo(1));
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(1));
+            Assert.That(engine.EngineStats.DynamicsBonus, Is.EqualTo(25));
+            Assert.That(hits, Is.EqualTo(1));
+            Assert.That(pads, Is.EqualTo(1));
+            Assert.That(followUps, Is.EqualTo(1));
+        });
+        Press(engine, 1.03, EliteDrumsAction.EliteSnare);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(100));
+        Assert.That(followUps, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void NewRealNoteTakesPriorityAndReplacesPendingFlam()
+    {
+        var first = MakeNote(EliteDrumNote.EliteDrumPad.Snare);
+        var second = MakeNote(EliteDrumNote.EliteDrumPad.Snare, 1.04);
+        first.IsFlam = second.IsFlam = true;
+        var engine = Create(first, second);
+        EliteDrumNote? followed = null;
+        engine.OnFlamFollowUp += (note, _, _, _) => followed = note;
+        Press(engine, 1, EliteDrumsAction.EliteSnare);
+        Press(engine, 1.04, EliteDrumsAction.EliteSnare);
+        Assert.That(second.WasHit, Is.True);
+        Assert.That(followed, Is.Null);
+        Press(engine, 1.05, EliteDrumsAction.EliteSnare);
+        Assert.That(followed, Is.SameAs(second));
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(150));
+        Assert.That(engine.EngineStats.Combo, Is.EqualTo(2));
+    }
+
+    [Test]
+    public void FollowUpUsesOriginalInclusiveWindowAndResetClearsIt()
+    {
+        var note = MakeNote(EliteDrumNote.EliteDrumPad.Snare);
+        note.IsFlam = true;
+        var engine = Create(note);
+        double end = note.Time + engine.CalculateHitWindow().BackEnd;
+        Press(engine, 1, EliteDrumsAction.EliteSnare);
+        Press(engine, end, EliteDrumsAction.EliteSnare);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(100));
+        engine.Reset();
+        Press(engine, 1, EliteDrumsAction.EliteSnare);
+        Press(engine, end + 0.001, EliteDrumsAction.EliteSnare);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(50));
+        engine.Reset();
+        Press(engine, 1.02, EliteDrumsAction.EliteSnare);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(50));
+    }
+
+    [TestCase(EliteDrumNote.EliteDrumPad.Kick, EliteDrumsAction.Kick)]
+    [TestCase(EliteDrumNote.EliteDrumPad.HatPedal, EliteDrumsAction.EliteStomp)]
+    [TestCase(EliteDrumNote.EliteDrumPad.Wildcard, EliteDrumsAction.WildcardPad)]
+    public void NonHandFlamFlagsNeverDoubleScore(EliteDrumNote.EliteDrumPad pad, EliteDrumsAction action)
+    {
+        var note = MakeNote(pad);
+        note.IsFlam = note.IsFlatFlam = true;
+        var engine = Create(note);
+        Press(engine, 1, action);
+        Press(engine, 1.02, action);
+        Assert.That(note.IsHandFlam, Is.False);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(50));
+        Assert.That(engine.BaseNoteScore, Is.EqualTo(50));
+    }
+
+    [Test]
+    public void FollowUpCapturesWindowAndHonorsHiHatState()
+    {
+        var note = MakeNote(EliteDrumNote.EliteDrumPad.HiHat, hat: EliteDrumNote.EliteDrumsHatState.Open);
+        note.IsFlam = true;
+        var engine = Create(note);
+        Press(engine, 1, EliteDrumsAction.EliteOpenHiHat);
+        engine.SetSpeed(0.001);
+        Press(engine, 1.01, EliteDrumsAction.EliteClosedHiHat);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(50));
+        Press(engine, 1.02, EliteDrumsAction.EliteSizzleHiHat);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(100));
+    }
+
+    [Test]
+    public void LaneFallbackClearsBothEffectiveFlagsButNotAuthoredIntentOrCache()
+    {
+        var source = new InstrumentDifficulty<EliteDrumNote>(Instrument.EliteDrums, Difficulty.Expert);
+        foreach (var pad in new[] { EliteDrumNote.EliteDrumPad.Snare, EliteDrumNote.EliteDrumPad.Kick })
+        {
+            var note = new EliteDrumNote(pad, DrumNoteType.Neutral,
+                EliteDrumNote.EliteDrumsHatState.Indifferent, EliteDrumNote.EliteDrumsHatPedalType.Stomp,
+                true, DrumNoteFlags.None, NoteFlags.None, EliteDrumNote.EliteDrumsChannelFlag.None,
+                1, 960, false, isFlatFlam: true);
+            source.Notes.Add(note);
+        }
+        source.Phrases.Add(new Phrase(PhraseType.EliteDrums_SnareLane, 1, 1, 960, 960));
+        source.Phrases.Add(new Phrase(PhraseType.EliteDrums_KickLane, 1, 1, 960, 960));
+        var copy = source.Clone();
+        DrumPlaybackPreparer.NormalizeEliteFlams(copy);
+        foreach (var note in copy.Notes)
+        {
+            Assert.That(note.IsFlam || note.IsFlatFlam, Is.False);
+            Assert.That(note.IsAuthoredFlam, Is.True);
+        }
+        foreach (var note in source.Notes) Assert.That(note.IsFlam && note.IsFlatFlam, Is.True);
+        var end = source.Clone();
+        foreach (var note in end.Notes) note.Tick = 1920;
+        DrumPlaybackPreparer.NormalizeEliteFlams(end);
+        foreach (var note in end.Notes) Assert.That(note.IsFlam && note.IsFlatFlam, Is.True);
+        source.Phrases.Clear();
+        source.Phrases.Add(new Phrase(PhraseType.DrumFill, 1, 1, 960, 960));
+        DrumPlaybackPreparer.NormalizeEliteFlams(source);
+        foreach (var note in source.Notes) Assert.That(note.IsFlam && note.IsFlatFlam, Is.True);
+    }
+
+    [Test]
+    public void ReleaseAndControlInputsDoNotConsumeFollowUp()
+    {
+        var note = MakeNote(EliteDrumNote.EliteDrumPad.Snare);
+        note.IsFlam = true;
+        var engine = Create(note);
+        Press(engine, 1, EliteDrumsAction.EliteSnare);
+        Press(engine, 1.01, EliteDrumsAction.EliteSnare, 0);
+        Press(engine, 1.02, EliteDrumsAction.EliteSnare, -1);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(50));
+        Press(engine, 1.03, EliteDrumsAction.EliteSnare);
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(100));
+    }
+
     [TestCase(EliteDrumNote.EliteDrumPad.Kick, EliteDrumsAction.Kick)]
     [TestCase(EliteDrumNote.EliteDrumPad.Snare, EliteDrumsAction.EliteSnare)]
     [TestCase(EliteDrumNote.EliteDrumPad.LeftCrash, EliteDrumsAction.EliteLeftCrash)]

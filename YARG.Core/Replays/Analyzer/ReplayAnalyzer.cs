@@ -411,6 +411,7 @@ namespace YARG.Core.Replays.Analyzer
                             }
                         }
 
+                        DrumPlaybackPreparer.NormalizeEliteFlams(eliteNotes);
                         return new EliteDrumsEngine(eliteNotes, _chart.SyncTrack,
                             (DrumsEngineParameters) parameters, profile.IsBot, true);
                     }

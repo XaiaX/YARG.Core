@@ -153,6 +153,26 @@ namespace YARG.Core.Chart
             }
         }
 
+        /// <summary>
+        /// Clears effective flam flags in same-pad authored lanes on a player-owned playback copy.
+        /// Call before engine construction, including direct Clone playback without resolved source records.
+        /// Authored intent and source identity are unchanged; activation DrumFill phrases are ignored.
+        /// </summary>
+        public static void NormalizeEliteFlams(InstrumentDifficulty<EliteDrumNote> difficulty)
+        {
+            foreach (var note in difficulty.Notes.SelectMany(n => n.ChildNotes.Prepend(n)))
+            {
+                bool inLane = difficulty.EliteDrumNativeAuthoredLaneRecords.Count > 0
+                    ? difficulty.EliteDrumNativeAuthoredLaneRecords.Any(r =>
+                        (int) r.AuthoredPad == note.Pad && note.Tick >= r.StartTick && note.Tick < r.EndTick &&
+                        note.SourceDefinition is not null && r.MemberSources.Contains(note.SourceDefinition))
+                    : difficulty.Phrases.Any(p =>
+                        EliteDrumNativeAuthoredLaneRecord.TryGetNativePad(p.Type, out var pad) &&
+                        (int) pad == note.Pad && note.Tick >= p.Tick && note.Tick < p.TickEnd);
+                if (inLane) { note.IsFlam = false; note.IsFlatFlam = false; }
+            }
+        }
+
         /// <summary>Re-establishes control boundaries and chord links after player-local filtering.</summary>
         public static void Rebuild<T>(InstrumentDifficulty<T> difficulty) where T : Note<T>
         {
@@ -183,6 +203,7 @@ namespace YARG.Core.Chart
             }
             if (difficulty is InstrumentDifficulty<EliteDrumNote> eliteDifficulty)
             {
+                NormalizeEliteFlams(eliteDifficulty);
                 var survivors = eliteDifficulty.Notes.SelectMany(n => n.ChildNotes.Prepend(n))
                     .Where(n => n.SourceDefinition is not null).ToList();
                 var records = new List<EliteDrumNativeAuthoredLaneRecord>();

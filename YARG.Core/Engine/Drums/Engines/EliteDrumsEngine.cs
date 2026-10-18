@@ -14,6 +14,34 @@ namespace YARG.Core.Engine.Drums.Engines
 
         public PadHitEvent? OnPadHit;
         public Action? OnOverhit;
+        /// <summary>One optional second hand-flam strike, without another note lifecycle or dynamics award.</summary>
+        public Action<EliteDrumNote, EliteDrumsAction, float, bool>? OnFlamFollowUp;
+
+        private readonly Dictionary<int, (EliteDrumNote Note, double Start, double End)> _pendingFlams = new();
+
+        private bool TryFlamFollowUp(EliteDrumsAction action)
+        {
+            if (!TryAuthoredPad(action, out int pad) || !_pendingFlams.TryGetValue(pad, out var pending))
+                return false;
+            var note = pending.Note;
+            if (CurrentTime > pending.End)
+            {
+                _pendingFlams.Remove(pad);
+                return false;
+            }
+            if (CurrentTime < pending.Start || !Matches(action, note)) return false;
+            _pendingFlams.Remove(pad);
+            bool bonus = !note.IsFlatFlam;
+            if (bonus) AwardFlamUnit();
+            OnFlamFollowUp?.Invoke(note, action, _velocity.GetValueOrDefault(), bonus);
+            return true;
+        }
+
+        private void AwardFlamUnit()
+        {
+            AddScore(POINTS_PER_NOTE);
+            EngineStats.NoteScore += POINTS_PER_NOTE;
+        }
         /// <summary>Raised for a visible pedal resolved by accessibility assistance, not a physical strike.</summary>
         public Action<EliteDrumNote>? OnPedalAssisted;
 
@@ -67,6 +95,7 @@ namespace YARG.Core.Engine.Drums.Engines
             _faultInInputGroup = false;
             _resolvingAuthoredContinuation = false;
             _authoredLanes?.Reset();
+            _pendingFlams?.Clear();
             base.Reset(keepCurrentButtons);
         }
 
@@ -253,7 +282,7 @@ namespace YARG.Core.Engine.Drums.Engines
             {
                 CheckForNoteHit();
             }
-            else if (_action is { } action)
+            else if (_action is { } action && !TryFlamFollowUp(action))
             {
                 // Preserve harmless freestyle feedback after the final note (and
                 // on an empty chart); there is no note left to adjudicate or overhit.
@@ -288,7 +317,7 @@ namespace YARG.Core.Engine.Drums.Engines
                             !IsNoteInWindow(candidate) ||
                             (_autoHiHatPedal && IsPlayablePedal(candidate) &&
                                 candidate.Time < CurrentTime)) continue;
-                        bool bonus = ApplyVelocity(candidate);
+                        bool bonus = !candidate.IsBigRockEnding && ApplyVelocity(candidate);
                         var hitAction = _action.Value;
                         HitNote(candidate);
                         OnPadHit?.Invoke(hitAction, true, bonus, false, candidate.Dynamics,
@@ -357,6 +386,7 @@ namespace YARG.Core.Engine.Drums.Engines
             }
             if (_action is { } action)
             {
+                if (TryFlamFollowUp(action)) return;
                 if (TryAuthoredPad(action, out int pad) &&
                     _authoredLanes.ProtectStrike(pad, CurrentTime))
                 {
@@ -472,6 +502,9 @@ namespace YARG.Core.Engine.Drums.Engines
         {
             if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator) return;
             note.SetHitState(true, false);
+            // Every real hit consumes this pad exclusively, including score-free coda
+            // notes which return before the ordinary note lifecycle below.
+            _pendingFlams.Remove(note.Pad);
             if (CodaHasStarted && note.IsBigRockEnding)
             {
                 SkipPreviousNotes(note.ParentOrSelf);
@@ -504,6 +537,12 @@ namespace YARG.Core.Engine.Drums.Engines
                 EngineStats.IncrementNotesHit(note, CurrentTime);
             UpdateMultiplier();
             AddScore(note);
+            if (note.IsHandFlam && !IsBot && !_resolvingAuthoredContinuation)
+            {
+                double window = EngineParameters.HitWindow.CalculateHitWindow(GetAverageNoteDistance(note));
+                _pendingFlams[note.Pad] = (note, note.Time + EngineParameters.HitWindow.GetFrontEnd(window),
+                    note.Time + EngineParameters.HitWindow.GetBackEnd(window));
+            }
             OnNoteHit?.Invoke(NoteIndex, note);
             base.HitNote(note);
         }
@@ -553,8 +592,9 @@ namespace YARG.Core.Engine.Drums.Engines
 
         protected override void AddScore(EliteDrumNote note)
         {
-            AddScore(POINTS_PER_NOTE);
-            EngineStats.NoteScore += POINTS_PER_NOTE;
+            AwardFlamUnit();
+            // Bot completion is deliberately not a synthetic physical follow-up.
+            if (note.IsHandFlam && (note.IsFlatFlam || IsBot)) AwardFlamUnit();
         }
 
         protected override (int baseScore, int noteScore) CalculateChartScores()
@@ -565,8 +605,9 @@ namespace YARG.Core.Engine.Drums.Engines
                 foreach (var note in parent.AllNotes)
                 {
                     if (note.IsInvisibleTerminator || note.IsBigRockEnding) continue;
-                    score += POINTS_PER_NOTE * Math.Min(combo / 10 + 1, BaseParameters.MaxMultiplier);
-                    noteScore += POINTS_PER_NOTE;
+                    int units = note.IsHandFlam ? 2 : 1;
+                    score += units * POINTS_PER_NOTE * Math.Min(combo / 10 + 1, BaseParameters.MaxMultiplier);
+                    noteScore += units * POINTS_PER_NOTE;
                     combo++;
                 }
             }

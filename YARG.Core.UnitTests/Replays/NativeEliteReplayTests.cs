@@ -154,6 +154,42 @@ public sealed class NativeEliteReplayRoundTripTests
 [TestFixture]
 public sealed class NativeEliteReplayAnalysisTests
 {
+    [TestCase(false, false)]
+    [TestCase(false, true)]
+    [TestCase(true, false)]
+    [TestCase(true, true)]
+    public void SerializedHandFlamsAnalyzeWithLiveScoreIncludingBotCompletion(bool bot, bool flat)
+    {
+        var chart = NativeEliteReplayFixture.EliteChart();
+        foreach (var note in chart.EliteDrums.GetDifficulty(Difficulty.Expert).Notes)
+        {
+            note.IsFlam = true;
+            note.IsFlatFlam = flat;
+        }
+        DrumPlaybackPreparer.Rebuild(chart.EliteDrums.GetDifficulty(Difficulty.Expert));
+        var profile = NativeEliteReplayFixture.Profile(Instrument.EliteDrums);
+        profile.IsBot = bot;
+        var parameters = NativeEliteReplayFixture.Parameters();
+        parameters.SongSpeed = 1;
+        var inputs = bot ? Array.Empty<GameInput>() : new[]
+        {
+            GameInput.Create(1, EliteDrumsAction.EliteSnare, 0.8f),
+            GameInput.Create(1.02, EliteDrumsAction.EliteSnare, 0.7f),
+            GameInput.Create(2, EliteDrumsAction.EliteRide, 0.8f),
+            GameInput.Create(2.02, EliteDrumsAction.EliteRide, 0.7f),
+            GameInput.Create(3, EliteDrumsAction.EliteTom1, 0.8f),
+            GameInput.Create(3.02, EliteDrumsAction.EliteTom1, 0.7f),
+        };
+        var engine = new EliteDrumsEngine(chart.EliteDrums.GetDifficulty(Difficulty.Expert).Clone(),
+            chart.SyncTrack, parameters, bot, true);
+        var live = NativeEliteReplayFixture.PlayLive(engine, inputs);
+        Assert.That(live.NoteScore, Is.EqualTo(300));
+        Assert.That(live.Combo, Is.EqualTo(3));
+        var data = NativeEliteReplayFixture.RoundTrip(NativeEliteReplayFixture.Data(profile, parameters, live, inputs));
+        Assert.That(data.Frames[0].Profile.IsBot, Is.EqualTo(bot));
+        NativeEliteReplayFixture.AssertLiveMatchesReplay(live, NativeEliteReplayFixture.Analyze(chart, data));
+    }
+
     [Test]
     public void SerializedNativeEliteInputsReplayWithLiveScoreHitsAndMiss()
     {

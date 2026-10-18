@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using YARG.Core.Parsing;
+using YARG.Core.Logging;
 using static YARG.Core.Chart.EliteDrumNote;
 
 namespace YARG.Core.Chart
@@ -68,9 +69,12 @@ namespace YARG.Core.Chart
             // only Expert+ presents the combined kick as a flam.
             var inSamePadAuthoredRollLane = IsInSamePadAuthoredRollLane(moonNote, pad, currentPhrases);
             var isAuthoredFlam = GetEliteDrumNoteIsFlam(moonNote);
+            if (inSamePadAuthoredRollLane && (isAuthoredFlam || GetEliteDrumNoteIsFlatFlam(moonNote)))
+                YargLogger.LogFormatWarning("Elite {0} flam at tick {1} belongs to an authored same-pad lane; treating it as an ordinary note.",
+                    pad, moonNote.tick);
             var isFlam = isAuthoredFlam &&
                 (pad is not EliteDrumPad.Kick || _currentDifficulty == Difficulty.ExpertPlus || _loadingAuthoredDrums) &&
-                (pad is EliteDrumPad.Kick or EliteDrumPad.HatPedal || !inSamePadAuthoredRollLane);
+                !inSamePadAuthoredRollLane;
             var isFlatFlam = GetEliteDrumNoteIsFlatFlam(moonNote) &&
                 pad is not EliteDrumPad.Kick and not EliteDrumPad.HatPedal && !inSamePadAuthoredRollLane;
             var drumFlags = GetDrumNoteFlags(moonNote, currentPhrases);

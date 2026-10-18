@@ -41,6 +41,9 @@ namespace YARG.Core.Game
             _ => throw new ArgumentOutOfRangeException(nameof(action), action, "Not a native Elite input.")
         };
 
+        /// <summary>The authored hand/pad color, independent of hand-flam presentation.</summary>
+        public static EliteDrumsColorRole GetHandRole(EliteDrumNote note) => GetRole(note, true);
+
         /// <summary>Split hand flams keep each hand's own role; unsplit hand flams use HandFlam.</summary>
         public static EliteDrumsColorRole GetRole(EliteDrumNote note, bool splitHandFlam = false)
         {
@@ -53,7 +56,7 @@ namespace YARG.Core.Game
                     note.IsDoubleKick ? EliteDrumsColorRole.DoubleKick : EliteDrumsColorRole.Kick;
             if (note.Pad == (int) EliteDrumPad.HatPedal)
                 return note.IsSplash ? EliteDrumsColorRole.Splash : EliteDrumsColorRole.Stomp;
-            if ((note.IsFlam || note.IsFlatFlam) && !splitHandFlam) return EliteDrumsColorRole.HandFlam;
+            if (note.IsHandFlam && !splitHandFlam) return EliteDrumsColorRole.HandFlam;
 
             return (EliteDrumPad) note.Pad switch
             {

@@ -22,6 +22,11 @@ namespace YARG.Core.Chart
         public bool IsClosed => HatState == EliteDrumsHatState.Closed;
         public bool IsIndifferent => HatState == EliteDrumsHatState.Indifferent;
         public bool IsFlam { get; set; }
+        /// <summary>Effective hand flam; kick, pedal and wildcard notes never use hand-flam scoring.</summary>
+        public bool IsHandFlam => (IsFlam || IsFlatFlam) && (EliteDrumPad) Pad is
+            EliteDrumPad.Snare or EliteDrumPad.HiHat or EliteDrumPad.LeftCrash or
+            EliteDrumPad.Tom1 or EliteDrumPad.Tom2 or EliteDrumPad.Tom3 or
+            EliteDrumPad.Ride or EliteDrumPad.RightCrash;
         /// <summary>Authored flam intent for generated downcharts; native roll lanes may suppress IsFlam.</summary>
         public bool IsAuthoredFlam { get; }
         public bool IsFlatFlam { get; set; }

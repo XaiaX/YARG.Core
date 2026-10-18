@@ -408,9 +408,15 @@ namespace YARG.Core.Game
             if (Version >= 4)
             {
                 UseCymbalModels = stream.ReadBoolean();
-                var splitProTomsAndCymbals = stream.ReadBoolean();
-                var swapSnareAndHiHat = stream.ReadBoolean();
-                var swapCrashAndRide = stream.ReadBoolean();
+                byte legacySplit = stream.ReadByte();
+                byte legacySnare = stream.ReadByte();
+                byte legacyCrash = stream.ReadByte();
+                var splitProTomsAndCymbals = legacySplit != 0;
+                var swapSnareAndHiHat = legacySnare != 0;
+                var swapCrashAndRide = legacyCrash != 0;
+                // Modern profiles no longer interpret these legacy ordering bytes.
+                // A tagged marker retains bot identity without changing the replay format.
+                IsBot = Version >= 17 && legacySplit == 0x59 && legacySnare == 0x42 && legacyCrash == 1;
 
                 if (Version < 8) // Interpret the old split-all and single-swap settings into highway orderings
                 {
@@ -466,6 +472,8 @@ namespace YARG.Core.Game
             {
                 GameMode = CurrentInstrument.ToNativeGameMode();
             }
+            // The reserved-byte marker is defined only for native Elite bot recordings.
+            IsBot &= GameMode == GameMode.EliteDrums;
 
             if (Version >= 7)
             {
@@ -985,9 +993,12 @@ namespace YARG.Core.Game
             writer.Write(RangeEnabled);
 
             writer.Write(UseCymbalModels);
-            writer.Write((byte)0); // Superseded by highway orderings
-            writer.Write((byte)0); // Superseded by highway orderings
-            writer.Write((byte)0); // Superseded by highway orderings
+            // Superseded ordering bytes carry a tagged native Elite bot marker.
+            // Length and version stay unchanged; old readers ignore these modern-profile bytes.
+            bool eliteBot = IsBot && GameMode == GameMode.EliteDrums;
+            writer.Write(eliteBot ? (byte)0x59 : (byte)0);
+            writer.Write(eliteBot ? (byte)0x42 : (byte)0);
+            writer.Write(eliteBot ? (byte)1 : (byte)0);
 
             writer.Write((byte) StarPowerActivationType);
 
