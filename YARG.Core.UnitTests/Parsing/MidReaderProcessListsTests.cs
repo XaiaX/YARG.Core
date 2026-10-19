@@ -132,6 +132,41 @@ public class MidReaderProcessListsTests
         }
     }
 
+    [TestCase(0)]
+    [TestCase(1)]
+    public void EliteDrumsFlamMarkers_StayWithinAuthoredDifficulty(int channel)
+    {
+        var hard = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Hard];
+        var expert = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert];
+        var song = MidReader.ReadMidi(MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(10, 20, hard + 13, channel: channel),
+            Note(10, 20, expert + 13, channel: channel),
+            Note(10, 20, hard + 2),
+            Note(10, 20, expert + 2),
+            Note(30, 40, expert + 13, channel: channel),
+            Note(30, 40, hard + 2),
+            Note(30, 40, expert + 2))));
+        var flag = channel == 1 ? Flags.EliteDrums_FlatFlam : Flags.EliteDrums_Flam;
+        var hardNotes = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Hard).notes;
+        var expertNotes = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes;
+        var loaded = new MoonSongLoader(song, ParseSettings.Default)
+            .LoadEliteDrumsTrack(YARG.Core.Instrument.EliteDrums);
+
+        using (Assert.EnterMultipleScope())
+        {
+            AssertHasFlag(hardNotes[0], flag);
+            AssertHasFlag(expertNotes[0], flag);
+            AssertDoesNotHaveFlag(hardNotes[1], flag);
+            AssertHasFlag(expertNotes[1], flag);
+            foreach (var tier in new[] { YARG.Core.Difficulty.Hard, YARG.Core.Difficulty.Expert })
+            {
+                var note = loaded.GetDifficulty(tier).Notes[0];
+                Assert.That(note.IsFlatFlam, Is.EqualTo(channel == 1));
+                Assert.That(note.IsFlam, Is.EqualTo(channel != 1));
+            }
+        }
+    }
+
     [Test]
     public void EliteDrumsFlatFlamModifier_ExcludesEndTick()
     {

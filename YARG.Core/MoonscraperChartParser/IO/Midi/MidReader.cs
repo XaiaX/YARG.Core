@@ -929,7 +929,7 @@ namespace MoonscraperChartEditor.Song.IO
             }
         }
 
-        private static void ProcessNoteOnEventAsFlagToggle(ref EventProcessParams eventProcessParams, MoonNote.Flags flags, int individualNoteSpecifier)
+        private static void ProcessNoteOnEventAsFlagToggle(ref EventProcessParams eventProcessParams, MoonNote.Flags flags, int individualNoteSpecifier, MoonSong.Difficulty? targetDifficulty = null)
         {
             var timedEvent = eventProcessParams.timedEvent;
             uint startTick = (uint)timedEvent.startTick;
@@ -941,7 +941,7 @@ namespace MoonscraperChartEditor.Song.IO
             // Delay the actual processing once all the notes are actually in
             eventProcessParams.forcingProcessList.Add((ref EventProcessParams processParams) =>
             {
-                ProcessNoteOnEventAsFlagTogglePostDelay(ref processParams, startTick, endTick, flags, individualNoteSpecifier);
+                ProcessNoteOnEventAsFlagTogglePostDelay(ref processParams, startTick, endTick, flags, individualNoteSpecifier, targetDifficulty);
             });
         }
 
@@ -977,7 +977,7 @@ namespace MoonscraperChartEditor.Song.IO
             }
         }
 
-        private static void ProcessNoteOnEventAsFlagTogglePostDelay(ref EventProcessParams eventProcessParams, uint startTick, uint endTick, MoonNote.Flags flags, int individualNoteSpecifier)   // individualNoteSpecifier as -1 to apply to the whole chord
+        private static void ProcessNoteOnEventAsFlagTogglePostDelay(ref EventProcessParams eventProcessParams, uint startTick, uint endTick, MoonNote.Flags flags, int individualNoteSpecifier, MoonSong.Difficulty? targetDifficulty)   // individualNoteSpecifier as -1 to apply to the whole chord
         {
             var song = eventProcessParams.song;
             var instrument = eventProcessParams.instrument;
@@ -991,6 +991,9 @@ namespace MoonscraperChartEditor.Song.IO
 
             foreach (var difficulty in EnumExtensions<MoonSong.Difficulty>.Values)
             {
+                if (targetDifficulty.HasValue && difficulty != targetDifficulty.Value)
+                    continue;
+
                 var chart = song.GetChart(instrument, difficulty);
 
                 MoonObjectHelper.GetRange(chart.notes, lookbackStart, endTick, out int index, out int length);

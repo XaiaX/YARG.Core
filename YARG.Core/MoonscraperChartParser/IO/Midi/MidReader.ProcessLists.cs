@@ -1459,7 +1459,8 @@ namespace MoonscraperChartEditor.Song.IO
                                 continue;
                             }
 
-                            ProcessNoteOnEventAsFlagToggle(ref eventProcessParams, flamFlag, (int) pad);
+                            // Flam markers belong only to the difficulty range that authored them.
+                            ProcessNoteOnEventAsFlagToggle(ref eventProcessParams, flamFlag, (int) pad, difficulty);
                         }
                     });
                 }
