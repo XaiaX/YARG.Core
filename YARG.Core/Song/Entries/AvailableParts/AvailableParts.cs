@@ -64,6 +64,11 @@ namespace YARG.Core.Song
 
         public PartValues EliteDrumsDownchart;
 
+        // Native discovery masks, before generated downcharts and output finalization.
+        public DifficultyMask NativeFourLaneDrums;
+        public DifficultyMask NativeFiveLaneDrums;
+        public DifficultyMask NativeEliteDrums;
+
         public PartValues ProGuitar_17Fret;
         public PartValues ProGuitar_22Fret;
         public PartValues ProBass_17Fret;

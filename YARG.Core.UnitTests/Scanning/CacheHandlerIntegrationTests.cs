@@ -111,20 +111,65 @@ public sealed class CacheHandlerIntegrationTests
     }
 
     [Test]
-    public void AuthoredDrumFacts_EffectiveReplacementAndQuickFullCacheRoundTrip()
+    public void DrumPresence_EffectiveReplacementAndQuickFullCacheRoundTripWithoutFullLoads()
     {
+        using var observation = YARG.Core.Chart.FullLoadObservation.Begin();
         AddUpdate("alpha", "Alpha", "PART DRUMS", true);
-        var scanned = Scan(false, true);
-        Assert.That(scanned.AuthoredDrumSourceFacts, Has.Count.EqualTo(1));
-        Assert.That(scanned.AuthoredDrumSourceFacts[0].OrdinaryKick, Is.True);
-        Assert.That(Scan(true, true).AuthoredDrumSourceFacts, Is.EqualTo(scanned.AuthoredDrumSourceFacts));
-        Assert.That(Scan(false, true).AuthoredDrumSourceFacts, Is.EqualTo(scanned.AuthoredDrumSourceFacts));
+        var presence = Scan(false, true).DrumSourcePresence;
+        Assert.That(presence.FourLane, Is.EqualTo(DifficultyMask.Expert));
+        Assert.That(presence.FiveLane, Is.EqualTo(DifficultyMask.None));
+        Assert.That(presence.Elite, Is.EqualTo(DifficultyMask.None));
+        Assert.That(Scan(true, true).DrumSourcePresence, Is.EqualTo(presence));
+        Assert.That(Scan(false, true).DrumSourcePresence, Is.EqualTo(presence));
 
-        // A later named empty track replaces the earlier authored drums, while base bass remains valid.
+        // A later named empty track replaces the earlier drums, while base bass remains valid.
         AddUpdate("zeta", "Zeta", "PART DRUMS", false);
-        Assert.That(Scan(false, true).AuthoredDrumSourceFacts, Is.Empty);
-        Assert.That(Scan(true, true).AuthoredDrumSourceFacts, Is.Empty);
-        Assert.That(Scan(false, true).AuthoredDrumSourceFacts, Is.Empty);
+        Assert.That(Scan(false, true).DrumSourcePresence, Is.EqualTo(default(YARG.Core.Game.DrumSourcePresence)));
+        Assert.That(Scan(true, true).DrumSourcePresence, Is.EqualTo(default(YARG.Core.Game.DrumSourcePresence)));
+        Assert.That(Scan(false, true).DrumSourcePresence, Is.EqualTo(default(YARG.Core.Game.DrumSourcePresence)));
+        Assert.That(observation.MidiLoads, Is.Zero);
+        Assert.That(observation.DotChartLoads, Is.Zero);
+        Assert.That(observation.AuthoredNoteBatches, Is.Zero);
+        Assert.That(observation.AuthoredNotes, Is.Zero);
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void UpdateAddsEliteAndKeys_LaterEmptyDrumsRetainsOtherSources(bool eliteFirst)
+    {
+        string update = AddUpdate("alpha", "Alpha", "PART DRUMS", true);
+        TrackChunk Part(string name, int pitch) => new(new SequenceTrackNameEvent(name),
+            new NoteOnEvent((Melanchall.DryWetMidi.Common.SevenBitNumber) pitch,
+                (Melanchall.DryWetMidi.Common.SevenBitNumber) 100) { DeltaTime = 1 },
+            new NoteOffEvent((Melanchall.DryWetMidi.Common.SevenBitNumber) pitch,
+                (Melanchall.DryWetMidi.Common.SevenBitNumber) 0) { DeltaTime = 120 });
+        var classic = Part("PART DRUMS", 96);
+        var elite = Part("PART ELITE_DRUMS", 75);
+        var midi = new MidiFile(new TrackChunk(), eliteFirst ? elite : classic,
+            eliteFirst ? classic : elite, Part("PART KEYS", 96))
+            { TimeDivision = new TicksPerQuarterNoteTimeDivision(480) };
+        midi.Write(Path.Combine(update, NODE, NODE + "_update.mid"), true);
+        using var observation = YARG.Core.Chart.FullLoadObservation.Begin();
+        foreach (bool quick in new[] { false, true, false })
+        {
+            var entry = Scan(quick, true);
+            Assert.That(entry.DrumSourcePresence.FourLane, Is.EqualTo(DifficultyMask.Expert));
+            Assert.That(entry.DrumSourcePresence.Elite, Is.EqualTo(DifficultyMask.Expert));
+            Assert.That(entry[Instrument.Keys][Difficulty.Expert], Is.True);
+        }
+        AddUpdate("zeta", "Zeta", "PART DRUMS", false);
+        foreach (bool quick in new[] { false, true, false })
+        {
+            var entry = Scan(quick, true);
+            Assert.That(entry.DrumSourcePresence.FourLane, Is.EqualTo(DifficultyMask.None));
+            Assert.That(entry.DrumSourcePresence.Elite, Is.EqualTo(DifficultyMask.Expert));
+            Assert.That(entry[Instrument.Keys][Difficulty.Expert], Is.True);
+            Assert.That(entry[Instrument.FiveFretBass].IsActive(), Is.True);
+        }
+        Assert.That(observation.MidiLoads, Is.Zero);
+        Assert.That(observation.DotChartLoads, Is.Zero);
+        Assert.That(observation.AuthoredNoteBatches, Is.Zero);
+        Assert.That(observation.AuthoredNotes, Is.Zero);
     }
 
     private SongCache ScanAll(bool quick, bool cumulative) => CacheHandler.RunScan(quick, _cachePath,

@@ -32,8 +32,9 @@ namespace YARG.Core.Game
         public DrumExtraKickPolicy KickPolicy(bool enableExtra) => enableExtra ? DrumExtraKickPolicy.Include :
             ExtraKick && !OrdinaryKick && !OtherPlayable ? DrumExtraKickPolicy.NormalizeExtraOnly : DrumExtraKickPolicy.Remove;
 
+        // The selection label describes authored kicks, not normalization or effective score contribution.
         public string KickSuffix(bool enableExtra) => !ExtraKick ? string.Empty : enableExtra ? "(2x Kick)" :
-            OrdinaryKick || !OtherPlayable ? "(1x Kick)" : "(0x Kick)";
+            OrdinaryKick ? "(1x Kick)" : "(0x Kick)";
     }
 
     /// <summary>Pure current-policy selection; historical replay selection remains separate.</summary>

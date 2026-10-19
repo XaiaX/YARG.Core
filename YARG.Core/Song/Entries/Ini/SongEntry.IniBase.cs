@@ -269,29 +269,6 @@ namespace YARG.Core.Song
                 }
             }
 
-            var authoredSettings = new ParseSettings
-            {
-                HopoThreshold = entry._settings.HopoThreshold,
-                SustainCutoffThreshold = entry._settings.SustainCutoffThreshold,
-                StarPowerNote = entry._settings.OverdiveMidiNote,
-                TuningOffsetCents = entry._settings.TuningOffsetCents,
-                DrumsType = ParseDrumsType(in entry._parts),
-                ChordHopoCancellation = entry._chartFormat != ChartFormat.Chart,
-            };
-            using (var authoredStream = file.ToReferenceStream())
-            {
-                if (entry._chartFormat == ChartFormat.Chart)
-                {
-                    using var reader = new StreamReader(authoredStream);
-                    entry.CollectAuthoredDrumSourceFacts(MoonSongLoader.LoadDotChart(authoredSettings, reader.ReadToEnd()));
-                }
-                else
-                {
-                    entry.CollectAuthoredDrumSourceFacts(MoonSongLoader.LoadMidi(authoredSettings,
-                        MidFileLoader.LoadMidiFile(authoredStream)));
-                }
-            }
-
             if (modifiers.Extract("background", out string background))
             {
                 entry._background = background;
@@ -424,6 +401,7 @@ namespace YARG.Core.Song
                     YARGChartFileReader.SkipToNextTrack(ref container);
                 }
             }
+            CaptureNativeClassicDrums(ref parts, drumsType, parts.FourLaneDrums.Difficulties);
             return resolution;
         }
 

@@ -35,7 +35,7 @@ namespace YARG.Core.Song.Cache
         /// if multiple cache version changes happen in a single day).
         /// </summary>
         /// <remarks>Change whenever the song cache needs to be cleared and regenerated, e.g. when the new data is added to the cache.</remarks>
-        private const int CACHE_VERSION = 26_09_25_01;
+        private const int CACHE_VERSION = 26_09_25_02;
 
         public static ScanProgressTracker Progress => _progress;
         private static ScanProgressTracker _progress;
@@ -51,11 +51,20 @@ namespace YARG.Core.Song.Cache
             GlobalAudioHandler.LogMixerStatus = false;
             try
             {
-                // Quick scans only fail if they parse zero entries (which could be the result of a few things)
-                if (!tryQuickScan || !QuickScan(handler, cacheLocation, fullDirectoryPlaylists))
+                if (tryQuickScan)
                 {
-                    // If a quick scan failed, there's no point to re-reading it in the full scan
-                    FullScan(handler, !tryQuickScan, cacheLocation, badSongsLocation, fullDirectoryPlaylists);
+                    if (!QuickScan(handler, cacheLocation, fullDirectoryPlaylists))
+                    {
+                        // A failed read may have populated entries and groups. Discard the
+                        // entire attempt, and do not reread the rejected cache during recovery.
+                        using var recovery = new CacheHandler(baseDirectories, cumulativeUpdates);
+                        FullScan(recovery, false, cacheLocation, badSongsLocation, fullDirectoryPlaylists);
+                        return recovery.cache;
+                    }
+                }
+                else
+                {
+                    FullScan(handler, true, cacheLocation, badSongsLocation, fullDirectoryPlaylists);
                 }
 
 
@@ -94,6 +103,7 @@ namespace YARG.Core.Song.Cache
             catch (Exception ex)
             {
                 YargLogger.LogException(ex, "Error occurred during quick cache file read!");
+                return false;
             }
 
             if (handler.cache.Entries.Count == 0)

@@ -50,7 +50,7 @@ public sealed class DrumOutputResolverTests
     [TestCase(false, false, true, false, "", DrumExtraKickPolicy.Remove)]
     [TestCase(true, true, true, false, "(1x Kick)", DrumExtraKickPolicy.Remove)]
     [TestCase(false, true, true, false, "(0x Kick)", DrumExtraKickPolicy.Remove)]
-    [TestCase(false, true, false, false, "(1x Kick)", DrumExtraKickPolicy.NormalizeExtraOnly)]
+    [TestCase(false, true, false, false, "(0x Kick)", DrumExtraKickPolicy.NormalizeExtraOnly)]
     [TestCase(false, false, true, true, "(1x Kick)", DrumExtraKickPolicy.Remove)]
     public void DrumKickTierLabelMatrix(bool ordinary, bool extra, bool other, bool paired,
         string suffix, DrumExtraKickPolicy policy)

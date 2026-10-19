@@ -73,12 +73,14 @@ namespace YARG.Core.Chart
 
         public static MoonSongLoader LoadMidi(ParseSettings settings, MidiFile midi)
         {
+            FullLoadObservation.MidiLoadEntered();
             var song = MidReader.ReadMidi(ref settings, midi);
             return new(song, settings);
         }
 
         public static MoonSongLoader LoadDotChart(ParseSettings settings, ReadOnlySpan<char> chartText)
         {
+            FullLoadObservation.DotChartLoadEntered();
             // Reading from a .chart *file* is handled in LoadSong, and checks the extension
             // This path reads from data already in-memory, which we know is '.chart', so this is hardcoded
             var song = ChartReader.ReadFromText(ref settings, chartText);
@@ -175,6 +177,7 @@ namespace YARG.Core.Chart
             CreateNoteDelegate<TNote> createNote, ProcessTextDelegate? processText = null)
             where TNote : Note<TNote>
         {
+            if (_loadingAuthoredDrums) FullLoadObservation.AuthoredNoteBatchEntered();
             var notes = new List<TNote>(moonChart.notes.Count);
 
             int moonPhraseIndex = 0;
@@ -217,6 +220,7 @@ namespace YARG.Core.Chart
                     continue;
                 }
 
+                if (_loadingAuthoredDrums) FullLoadObservation.AuthoredNoteConstructing();
                 var newNote = createNote(moonNote, currentPhrases, notes);
                 AddNoteToList(notes, newNote);
             }

@@ -85,6 +85,9 @@ namespace YARG.Core.Song
                 }
             }
 
+            CaptureNativeClassicDrums(ref parts, drumsType, nativeDrumDifficulties);
+            parts.NativeEliteDrums = parts.EliteDrums.Difficulties;
+
             // Generated Elite downcharts must not suppress a later native PART DRUMS track.
             parts.FourLaneDrums.Difficulties = nativeDrumDifficulties != DifficultyMask.None
                 ? nativeDrumDifficulties : parts.EliteDrumsDownchart.Difficulties;
@@ -102,6 +105,13 @@ namespace YARG.Core.Song
                 }
             }
             return midiFile.Resolution;
+        }
+
+        protected static void CaptureNativeClassicDrums(ref AvailableParts parts, DrumsType drumsType, DifficultyMask difficulties)
+        {
+            bool fiveLane = !drumsType.Has(DrumsType.FourLane) && !drumsType.Has(DrumsType.ProDrums);
+            parts.NativeFourLaneDrums = fiveLane ? DifficultyMask.None : difficulties;
+            parts.NativeFiveLaneDrums = fiveLane ? difficulties : DifficultyMask.None;
         }
 
         protected static void FinalizeDrums(ref AvailableParts parts, DrumsType drumsType)

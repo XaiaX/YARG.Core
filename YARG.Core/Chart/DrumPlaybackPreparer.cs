@@ -12,12 +12,66 @@ namespace YARG.Core.Chart
     {
         public InstrumentDifficulty<DrumNote>? Classic { get; }
         public InstrumentDifficulty<EliteDrumNote>? Elite { get; }
+        /// <summary>Available when prepared through PrepareForScore.</summary>
+        public DrumScoreIdentity? ScoreIdentity { get; internal set; }
         internal PreparedDrumPlayback(InstrumentDifficulty<DrumNote> classic) => Classic = classic;
         internal PreparedDrumPlayback(InstrumentDifficulty<EliteDrumNote> elite) => Elite = elite;
     }
 
     public static class DrumPlaybackPreparer
     {
+        /// <summary>
+        /// Prepares selected playback and compares it with extra kicks disabled on the same source
+        /// and tier. Transforms must be deterministic and mutate only the supplied notes: they run
+        /// once per variant, never against shared chart or profile state. Keep global setup outside.
+        /// The recorded EffectiveExtraContent and replay reconstruction state are not changed.
+        /// </summary>
+        public static PreparedDrumPlayback PrepareForScore(SongChart chart, ResolvedDrumPlayback playback,
+            Action<InstrumentDifficulty<DrumNote>>? pureClassicModifiers = null,
+            Action<InstrumentDifficulty<EliteDrumNote>>? pureEliteModifiers = null)
+        {
+            var selected = Prepare(chart, playback, pureClassicModifiers, pureEliteModifiers);
+            bool contributes = false;
+            if (playback.ExtraKickPolicy == DrumExtraKickPolicy.Include)
+            {
+                chart.AuthoredDrumSources.TryGetTier(playback.SourceFormat, playback.SourceDifficulty, out var source);
+                var disabled = new ResolvedDrumPlayback(playback.RequestedOutput, playback.SourceFormat,
+                    playback.BaseDifficulty, playback.SourceDifficulty, source!.Facts.KickPolicy(false),
+                    false, playback.ScoreCategory, playback.PolicyVersion);
+                var baseline = Prepare(chart, disabled, pureClassicModifiers, pureEliteModifiers);
+                contributes = CountScoringUnits(selected, kickOnly: true) > CountScoringUnits(baseline, kickOnly: true);
+            }
+            selected.ScoreIdentity = new DrumScoreIdentity(playback.BaseDifficulty, contributes, playback.ScoreCategory);
+            return selected;
+        }
+
+        /// <summary>Whether this prepared chart has any ordinary playable scoring obligations.</summary>
+        public static bool IsPlayable(PreparedDrumPlayback playback) => CountScoringUnits(playback) > 0;
+
+        // Contribution requires kick obligations in the final prepared chart. Beginner collapses
+        // kicks to neutral wildcards, whose added total score does not require playing a kick.
+        private static int CountScoringUnits(PreparedDrumPlayback playback, bool kickOnly = false)
+        {
+            if (playback is null) throw new ArgumentNullException(nameof(playback));
+            int units = 0;
+            if (playback.Elite is { } elite)
+            {
+                foreach (var parent in elite.Notes)
+                    foreach (var note in parent.AllNotes)
+                        if (!note.IsInvisibleTerminator && !note.IsBigRockEnding &&
+                            (!kickOnly || note.Pad == (int)EliteDrumPad.Kick))
+                            units += note.IsHandFlam ? 2 : 1;
+            }
+            else if (playback.Classic is { } classic)
+            {
+                foreach (var parent in classic.Notes)
+                    if (!parent.IsBigRockEnding)
+                        foreach (var note in parent.AllNotes)
+                            if (!kickOnly || note.Pad == (int)FourLaneDrumPad.Kick) units++;
+            }
+            return units;
+        }
+
         /// <summary>
         /// Applies recorded kick policy, converts locally, applies usual player modifiers, rebuilds
         /// controls and links, then derives Beginner. Use this order for both live and replay.
