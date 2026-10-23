@@ -43,7 +43,7 @@ namespace YARG.Core.Song
         protected AbridgedFileInfo? _updateDirectoryAndDtaLastWrite;
         protected DateTime? _updateMidiLastWrite;
         // Oldest to newest; empty preserves the legacy single-update path.
-        private protected (AbridgedFileInfo Root, DateTime? Midi)[] _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?)>();
+        private protected (AbridgedFileInfo Root, DateTime? Midi, string DtaPath)[] _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?, string)>();
         private protected RBProUpgrade? _upgrade;
 
         protected RBMetadata _rbMetadata = RBMetadata.Default;
@@ -125,11 +125,17 @@ namespace YARG.Core.Song
                 {
                     stream.Write(layer.Midi.Value.ToBinary(), Endianness.Little);
                 }
+                stream.Write(layer.DtaPath);
             }
         }
 
+        internal string NodeName => _nodeName;
+        internal string AssetSubName => _subName;
+        internal Func<bool>? SupplementalValidation;
+
         public override SongChart? LoadChart(IReadOnlyCollection<Instrument>? eliteDrumsDownchartOutputs = null)
         {
+            if (SupplementalValidation != null && !SupplementalValidation()) return null;
             MidiFile midi;
             var readingSettings = MidiSettingsLatin1.Instance; // RBCONs are always Latin-1
             // Read base MIDI
@@ -145,7 +151,7 @@ namespace YARG.Core.Song
             // Merge update MIDI layers in precedence order, after the base MIDI.
             foreach (var layer in _updateLayers)
             {
-                if (!AbridgedFileInfo.Validate(Path.Combine(layer.Root.FullName, SONGUPDATES_DTA), layer.Root.LastWriteTime))
+                if (!AbridgedFileInfo.Validate(layer.DtaPath, layer.Root.LastWriteTime))
                 {
                     return null;
                 }
@@ -231,6 +237,7 @@ namespace YARG.Core.Song
 
         public override StemMixer? LoadAudio(float speed, double volume, bool enableCensoring, params SongStem[] ignoreStems)
         {
+            if (SupplementalValidation != null && !SupplementalValidation()) return null;
             var stream = GetMoggStream();
             if (stream == null)
             {
@@ -337,7 +344,7 @@ namespace YARG.Core.Song
             _updateDirectoryAndDtaLastWrite = updateDirectory;
             _updateMidiLastWrite = updateMidi;
             _upgrade = upgrade;
-            _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?)>();
+            _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?, string)>();
         }
 
         internal void UpdateInfo(in AbridgedFileInfo? updateDirectory, in DateTime? updateMidi, RBProUpgrade? upgrade, CONUpdateLayer[]? layers)
@@ -350,13 +357,13 @@ namespace YARG.Core.Song
         {
             if (layers == null || layers.Length == 0)
             {
-                _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?)>();
+                _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?, string)>();
                 return;
             }
-            _updateLayers = new (AbridgedFileInfo Root, DateTime? Midi)[layers.Length];
+            _updateLayers = new (AbridgedFileInfo Root, DateTime? Midi, string DtaPath)[layers.Length];
             for (int i = 0; i < layers.Length; i++)
             {
-                _updateLayers[i] = (layers[i].Root, layers[i].Midi);
+                _updateLayers[i] = (layers[i].Root, layers[i].Midi, layers[i].DtaPath);
             }
         }
 
@@ -397,12 +404,12 @@ namespace YARG.Core.Song
             ReadAudio(ref _panning, ref stream);
 
             int count = stream.Read<int>(Endianness.Little);
-            _updateLayers = new (AbridgedFileInfo Root, DateTime? Midi)[count];
+            _updateLayers = new (AbridgedFileInfo Root, DateTime? Midi, string DtaPath)[count];
             for (int i = 0; i < count; i++)
             {
                 var root = new AbridgedFileInfo(ref stream);
                 DateTime? midi = stream.ReadBoolean() ? DateTime.FromBinary(stream.Read<long>(Endianness.Little)) : null;
-                _updateLayers[i] = (root, midi);
+                _updateLayers[i] = (root, midi, stream.ReadString());
             }
         }
 
@@ -634,7 +641,7 @@ namespace YARG.Core.Song
                 {
                     foreach (var layer in entry._updateLayers)
                     {
-                        if (!AbridgedFileInfo.Validate(Path.Combine(layer.Root.FullName, SONGUPDATES_DTA), layer.Root.LastWriteTime))
+                        if (!AbridgedFileInfo.Validate(layer.DtaPath, layer.Root.LastWriteTime))
                         {
                             return ScanResult.PossibleCorruption;
                         }
@@ -780,10 +787,11 @@ namespace YARG.Core.Song
 
         private string? FindUpdateAsset(params string[] relativePath)
         {
+            if (SupplementalValidation != null && !SupplementalValidation()) return null;
             for (int i = _updateLayers.Length - 1; i >= 0; i--)
             {
                 var layer = _updateLayers[i];
-                if (!AbridgedFileInfo.Validate(Path.Combine(layer.Root.FullName, SONGUPDATES_DTA), layer.Root.LastWriteTime))
+                if (!AbridgedFileInfo.Validate(layer.DtaPath, layer.Root.LastWriteTime))
                 {
                     return null;
                 }

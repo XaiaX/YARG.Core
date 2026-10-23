@@ -127,7 +127,7 @@ public sealed class AuthoredDrumScanTests
                 using (var old = File.OpenWrite(cache)) old.Write(version, Endianness.Little);
                 Assert.That(Run(true).DrumSourcePresence, Is.EqualTo(presence), "Old caches must trigger a rescan.");
                 using var current = new BinaryReader(File.OpenRead(cache));
-                Assert.That(current.ReadInt32(), Is.EqualTo(26_09_25_02));
+                Assert.That(current.ReadInt32(), Is.EqualTo(26_10_19_01));
             }
             AssertNoFullLoads(observation);
         });
@@ -157,7 +157,7 @@ public sealed class AuthoredDrumScanTests
             AddSong("first", "Original");
             Assert.That(Run(false), Has.Length.EqualTo(1));
             byte[] bytes = File.ReadAllBytes(cache);
-            Assert.That(BitConverter.ToInt32(bytes, 0), Is.EqualTo(26_09_25_02));
+            Assert.That(BitConverter.ToInt32(bytes, 0), Is.EqualTo(26_10_19_01));
             // The final section is the empty CON-group count, read after valid INI entries.
             Assert.That(BitConverter.ToInt32(bytes, bytes.Length - sizeof(int)), Is.Zero);
             if (truncate)

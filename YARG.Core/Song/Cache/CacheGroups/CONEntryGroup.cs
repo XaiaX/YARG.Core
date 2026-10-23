@@ -28,6 +28,18 @@ namespace YARG.Core.Song.Cache
         /// </summary>
         protected abstract CONEntryType Tag { get; }
 
+        internal CONEntryType Type => Tag;
+        internal void CopyEntriesTo(CONEntryGroup target, HashSet<string>? excluded = null)
+        {
+            foreach (var pair in _entries)
+                if (excluded == null || !excluded.Contains(pair.Key))
+                    foreach (var entry in pair.Value) target.AddEntry(pair.Key, entry.Index, entry.Entry);
+        }
+        internal IEnumerable<RBCONEntry> EffectiveEntries
+        {
+            get { foreach (var list in _entries.Values) foreach (var item in list) yield return item.Entry; }
+        }
+
         public AbridgedFileInfo Root => _root;
         public string DefaultPlaylist => _defaultPlaylist;
 

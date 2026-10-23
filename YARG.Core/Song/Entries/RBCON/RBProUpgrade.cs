@@ -47,20 +47,22 @@ namespace YARG.Core.Song
     {
         private readonly string _name;
         private readonly DateTime _lastWritetime;
+        private readonly string _dtaPath;
 
         public override DateTime LastWriteTime => _lastWritetime;
 
-        public UnpackedRBProUpgrade(string name, in DateTime lastWriteTime, in AbridgedFileInfo root)
+        public UnpackedRBProUpgrade(string name, in DateTime lastWriteTime, in AbridgedFileInfo root, string? dtaPath = null)
             : base(root)
         {
             _name = name;
             _lastWritetime = lastWriteTime;
+            _dtaPath = dtaPath ?? Path.Combine(root.FullName, UPGRADES_DTA);
         }
 
         public override FixedArray<byte>? LoadUpgradeMidi()
         {
             var data = default(FixedArray<byte>);
-            if (AbridgedFileInfo.Validate(Path.Combine(_root.FullName, UPGRADES_DTA), in _root.LastWriteTime))
+            if (AbridgedFileInfo.Validate(_dtaPath, in _root.LastWriteTime))
             {
                 string file = Path.Combine(_root.FullName, _name + UPGRADES_MIDI_EXT);
                 if (AbridgedFileInfo.Validate(file, in _lastWritetime))

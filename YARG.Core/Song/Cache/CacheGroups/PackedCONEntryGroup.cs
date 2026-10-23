@@ -13,6 +13,7 @@ namespace YARG.Core.Song.Cache
     internal class PackedCONEntryGroup : CONEntryGroup
     {
         private readonly List<CONFileListing> _listings;
+        internal List<CONFileListing> Listings => _listings;
         private FileStream _stream = null!;
 
         protected override CONEntryType Tag => CONEntryType.PackedCONEntry;
@@ -36,7 +37,7 @@ namespace YARG.Core.Song.Cache
 
         public override void Dispose()
         {
-            _stream.Dispose();
+            _stream?.Dispose();
             base.Dispose();
         }
 

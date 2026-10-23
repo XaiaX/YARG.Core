@@ -11,6 +11,16 @@ namespace YARG.Core.Song.Cache
         private readonly List<SngEntry> _packed = new();
 
         public string Directory => _directory;
+        internal IEnumerable<SongEntry> CachedEntries
+        {
+            get { foreach (var entry in _unpacked) yield return entry; foreach (var entry in _packed) yield return entry; }
+        }
+        internal void AddEntry(SongEntry entry)
+        {
+            if (entry is UnpackedIniEntry unpacked) AddEntry(unpacked);
+            else if (entry is SngEntry packed) AddEntry(packed);
+            else throw new System.ArgumentException("Not an ini or SNG entry", nameof(entry));
+        }
 
         public IniEntryGroup(string directory)
         {

@@ -57,7 +57,7 @@ namespace YARG.Core.Song
                         return new ScanUnexpected(moggResult);
                     }
                 }
-                else
+                else if (selectedUpdateMogg == null)
                 {
                     return new ScanUnexpected(ScanResult.MoggError);
                 }

@@ -84,18 +84,22 @@ namespace YARG.Core.Song.Cache
             _data?.Dispose();
         }
 
+        public string DtaPath { get; private set; } = string.Empty;
+
         private UnpackedCONUpgradeGroup() { }
 
-        public static bool Create(in FileCollection collection, FileInfo dtaInfo, out UnpackedCONUpgradeGroup group)
+        public static bool Create(in FileCollection collection, FileInfo dtaInfo, out UnpackedCONUpgradeGroup group, byte[]? sourceData = null)
         {
             group = new UnpackedCONUpgradeGroup()
             {
-                _root = new AbridgedFileInfo(collection.Directory, AbridgedFileInfo.NormalizedLastWrite(dtaInfo))
+                _root = new AbridgedFileInfo(collection.Directory, AbridgedFileInfo.NormalizedLastWrite(dtaInfo)),
+                DtaPath = dtaInfo.FullName
             };
 
             try
             {
-                using var data = FixedArray.LoadFile(dtaInfo.FullName);
+                using var data = sourceData == null ? FixedArray.LoadFile(dtaInfo.FullName) : FixedArray<byte>.Alloc(sourceData.Length);
+                if (sourceData != null) sourceData.AsSpan().CopyTo(data.Span);
 
                 var container = YARGDTAReader.Create(data);
                 while (YARGDTAReader.StartNode(ref container))
@@ -103,7 +107,7 @@ namespace YARG.Core.Song.Cache
                     string name = YARGDTAReader.GetNameOfNode(ref container, true);
                     if (collection.FindFile(name.ToLower() + RBProUpgrade.UPGRADES_MIDI_EXT, out var info))
                     {
-                        group._upgrades[name] = (container, new UnpackedRBProUpgrade(name, info.LastWriteTime, group._root));
+                        group._upgrades[name] = (container, new UnpackedRBProUpgrade(name, AbridgedFileInfo.NormalizedLastWrite(info), group._root, dtaInfo.FullName));
                     }
                     YARGDTAReader.EndNode(ref container);
                 }
@@ -118,6 +122,31 @@ namespace YARG.Core.Song.Cache
             }
         }
 
+        internal static UnpackedCONUpgradeGroup CreateExplicit(FileInfo dtaInfo, byte[] sourceData)
+        {
+            var group = new UnpackedCONUpgradeGroup
+            {
+                _root = new AbridgedFileInfo(dtaInfo.DirectoryName!, AbridgedFileInfo.NormalizedLastWrite(dtaInfo)),
+                DtaPath = dtaInfo.FullName,
+                _data = FixedArray<byte>.Alloc(sourceData.Length)
+            };
+            try
+            {
+                sourceData.AsSpan().CopyTo(group._data.Span);
+                var text = YARGDTAReader.Create(group._data);
+                while (YARGDTAReader.StartNode(ref text))
+                {
+                    string name = YARGDTAReader.GetNameOfNode(ref text, true);
+                    var midi = new FileInfo(Path.Combine(dtaInfo.DirectoryName!, name + RBProUpgrade.UPGRADES_MIDI_EXT));
+                    if (!midi.Exists) throw new FileNotFoundException("Upgrade MIDI missing: " + midi.FullName);
+                    group._upgrades[name] = (text, new UnpackedRBProUpgrade(name, AbridgedFileInfo.NormalizedLastWrite(midi), group._root, dtaInfo.FullName));
+                    YARGDTAReader.EndNode(ref text);
+                }
+                return group;
+            }
+            catch { group.Dispose(); throw; }
+        }
+
         public static void SerializeGroups(FileStream fileStream, List<UnpackedCONUpgradeGroup> groups)
         {
             using var groupStream = new MemoryStream();
@@ -126,6 +155,7 @@ namespace YARG.Core.Song.Cache
             {
                 groupStream.SetLength(0);
                 groups[i]._root.Serialize(groupStream);
+                groupStream.Write(groups[i].DtaPath);
                 groupStream.Write(groups[i]._upgrades.Count, Endianness.Little);
                 foreach (var node in groups[i]._upgrades)
                 {

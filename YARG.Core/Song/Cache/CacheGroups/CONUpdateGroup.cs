@@ -16,6 +16,8 @@ namespace YARG.Core.Song.Cache
         private FixedArray<byte> _data = null!;
 
         public AbridgedFileInfo Root => _root;
+        public string DtaPath { get; private set; } = string.Empty;
+        internal bool ExplicitSource;
 
         // The package containing songs_updates names the layer. Full paths break ties across roots.
         internal static int CompareLayers(AbridgedFileInfo left, AbridgedFileInfo right)
@@ -38,6 +40,7 @@ namespace YARG.Core.Song.Cache
         // Include file contents, not just timestamps: a full refresh must catch asset-only edits.
         internal string AssetSignature(string node)
         {
+            if (ExplicitSource) return string.Empty;
             string directory = Path.Combine(_root.FullName, node);
             if (!Directory.Exists(directory))
             {
@@ -71,16 +74,18 @@ namespace YARG.Core.Song.Cache
 
         private CONUpdateGroup() { }
 
-        public static bool Create(string directory, FileInfo dtaInfo, out CONUpdateGroup group)
+        public static bool Create(string directory, FileInfo dtaInfo, out CONUpdateGroup group, byte[]? sourceData = null)
         {
             try
             {
                 group = new CONUpdateGroup()
                 {
                     _root = new AbridgedFileInfo(directory, AbridgedFileInfo.NormalizedLastWrite(dtaInfo)),
+                    DtaPath = dtaInfo.FullName,
                 };
 
-                using var data = FixedArray.LoadFile(dtaInfo.FullName);
+                using var data = sourceData == null ? FixedArray.LoadFile(dtaInfo.FullName) : FixedArray<byte>.Alloc(sourceData.Length);
+                if (sourceData != null) sourceData.AsSpan().CopyTo(data.Span);
 
                 var container = YARGDTAReader.Create(data);
                 while (YARGDTAReader.StartNode(ref container))
@@ -118,6 +123,7 @@ namespace YARG.Core.Song.Cache
             {
                 groupStream.SetLength(0);
                 groups[i]._root.Serialize(groupStream);
+                groupStream.Write(groups[i].DtaPath);
                 groupStream.Write(groups[i]._updates.Count, Endianness.Little);
                 foreach (var node in groups[i]._updates)
                 {

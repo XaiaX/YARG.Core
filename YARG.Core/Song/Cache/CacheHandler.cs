@@ -27,7 +27,7 @@ namespace YARG.Core.Song.Cache
         public int BadSongCount;
     }
 
-    public class CacheHandler : IDisposable
+    public partial class CacheHandler : IDisposable
     {
         /// <summary>
         /// The date revision of the cache format, relative to UTC.
@@ -35,7 +35,7 @@ namespace YARG.Core.Song.Cache
         /// if multiple cache version changes happen in a single day).
         /// </summary>
         /// <remarks>Change whenever the song cache needs to be cleared and regenerated, e.g. when the new data is added to the cache.</remarks>
-        private const int CACHE_VERSION = 26_09_25_02;
+        private const int CACHE_VERSION = 26_10_19_01;
 
         public static ScanProgressTracker Progress => _progress;
         private static ScanProgressTracker _progress;
@@ -290,7 +290,7 @@ namespace YARG.Core.Song.Cache
                         {
                             mods.UpdateLayers.Clear();
                         }
-                        mods.UpdateLayers.Add(new CONUpdateLayer(group.Root, dta, node.Update));
+                        mods.UpdateLayers.Add(new CONUpdateLayer(group.Root, dta, node.Update, group.DtaPath));
                         mods.UpdateDirectoryAndDtaLastWrite = group.Root;
                         mods.UpdateDTA = dta;
                         mods.UpdateMidiLastWrite = node.Update;
@@ -345,11 +345,19 @@ namespace YARG.Core.Song.Cache
                 ScanDirectory(dirInfo, group, tracker);
             });
 
+            BuildCONEntries();
+        }
+
+        private void BuildCONEntries()
+        {
             Parallel.ForEach(conEntryGroups, group =>
             {
+                if (group is CachedCONEntryGroup) return;
+                RecordDescriptor(group);
                 group.InitScan();
                 Parallel.ForEach(group, node =>
                 {
+                    if (rebuildNodes != null && !rebuildNodes.Contains(node.Key)) return;
                     var mods = GetCONMod(node.Key);
                     var parameters = new RBScanParameters()
                     {
@@ -374,6 +382,8 @@ namespace YARG.Core.Song.Cache
                                 var result = group.CreateEntry(in parameters);
                                 if (!result)
                                 {
+                                    if (explicitSources != null && IsSupplementalError(result.Error))
+                                        throw new ExplicitEntryException($"Cannot rebuild {node.Key}: {result.Error}");
                                     AddToBadSongs(group.Root.FullName + " - " + node.Key, result.Error);
                                     continue;
                                 }
@@ -382,13 +392,15 @@ namespace YARG.Core.Song.Cache
                             }
                             catch (Exception e)
                             {
+                                if (e is ExplicitEntryException) throw;
+                                AddToBadSongs(group.Root.FullName + " - " + node.Key, ScanResult.DTAError);
                                 YargLogger.LogException(e);
                             }
                         }
                         else
                         {
                             entry.UpdateInfo(in parameters.UpdateDirectory, in parameters.UpdateMidi, parameters.Upgrade, parameters.UpdateLayers);
-                            AddEntry(entry);
+                            if (rebuildNodes == null) AddEntry(entry);
                         }
                     }
                 });
@@ -495,6 +507,10 @@ namespace YARG.Core.Song.Cache
         /// </summary>
         public void Dispose()
         {
+            foreach (var group in conEntryGroups)
+            {
+                group.Dispose();
+            }
             foreach (var group in updateGroups)
             {
                 group.Dispose();
@@ -643,15 +659,19 @@ namespace YARG.Core.Song.Cache
         {
             try
             {
+                ScanObservation?.Invoke("directory:" + directory.FullName);
                 if (!FindOrMarkDirectory(directory.FullName))
                 {
                     return;
                 }
 
+                if (explicitSources != null && IsSupplementDirectory(directory.FullName)) return;
+
                 switch (directory.Name)
                 {
                     case "songs_updates":
                     {
+                        if (explicitSources != null) return;
                         var dta = new FileInfo(Path.Combine(directory.FullName, RBCONEntry.SONGUPDATES_DTA));
                         if (dta.Exists && CONUpdateGroup.Create(directory.FullName, dta, out var updateGroup))
                         {
@@ -701,6 +721,7 @@ namespace YARG.Core.Song.Cache
 
                 if (directory.Name == "songs_upgrades")
                 {
+                    if (explicitSources != null) return;
                     if (collection.FindFile(RBProUpgrade.UPGRADES_DTA, out var dta)
                     && UnpackedCONUpgradeGroup.Create(collection, dta, out var upgradeGroup))
                     {
@@ -1063,6 +1084,7 @@ namespace YARG.Core.Song.Cache
         {
             string directory = stream.ReadString();
             var dtaLastWrite = DateTime.FromBinary(stream.Read<long>(Endianness.Little));
+            string dtaPath = stream.ReadString();
             int count = stream.Read<int>(Endianness.Little);
 
             // Functions as a "check base directory" call
@@ -1071,7 +1093,7 @@ namespace YARG.Core.Song.Cache
                 goto Invalidate;
             }
 
-            var dtaInfo = new FileInfo(Path.Combine(directory, RBCONEntry.SONGUPDATES_DTA));
+            var dtaInfo = new FileInfo(dtaPath);
             if (!dtaInfo.Exists)
             {
                 goto Invalidate;
@@ -1144,6 +1166,7 @@ namespace YARG.Core.Song.Cache
         private void QuickReadUpdateDirectory(FixedArrayStream stream)
         {
             var root = new AbridgedFileInfo(ref stream);
+            string dtaPath = stream.ReadString();
             int count = stream.Read<int>(Endianness.Little);
             for (int i = 0; i < count; i++)
             {
@@ -1158,9 +1181,9 @@ namespace YARG.Core.Song.Cache
                 var mods = GetQuickCONMods(name);
                 lock (mods)
                 {
-                    if (cumulativeUpdates)
+                    if (cumulativeUpdates || explicitSources != null)
                     {
-                        mods.UpdateLayers.Add(new CONUpdateLayer(root, DTAEntry.Empty, midiLastWrite));
+                        mods.UpdateLayers.Add(new CONUpdateLayer(root, DTAEntry.Empty, midiLastWrite, dtaPath));
                     }
                     if (!mods.UpdateDirectoryAndDtaLastWrite.HasValue || mods.UpdateDirectoryAndDtaLastWrite.Value.LastWriteTime < root.LastWriteTime)
                     {
@@ -1181,6 +1204,7 @@ namespace YARG.Core.Song.Cache
         {
             string directory = stream.ReadString();
             var dtaLastWritten = DateTime.FromBinary(stream.Read<long>(Endianness.Little));
+            string dtaPath = stream.ReadString();
             int count = stream.Read<int>(Endianness.Little);
 
             // Functions as a "check base directory" call
@@ -1196,7 +1220,8 @@ namespace YARG.Core.Song.Cache
             }
 
             var collection = new FileCollection(dirInfo);
-            if (!collection.FindFile(RBProUpgrade.UPGRADES_DTA, out var dta))
+            var dta = new FileInfo(dtaPath);
+            if (!dta.Exists)
             {
                 // We don't *mark* the directory to allow the "New Entries" process
                 // to access this collection
@@ -1267,6 +1292,7 @@ namespace YARG.Core.Song.Cache
         private void QuickReadUpgradeDirectory(FixedArrayStream stream)
         {
             var root = new AbridgedFileInfo(ref stream);
+            string dtaPath = stream.ReadString();
             int count = stream.Read<int>(Endianness.Little);
             for (int i = 0; i < count; i++)
             {
@@ -1277,7 +1303,7 @@ namespace YARG.Core.Song.Cache
                 {
                     if (mods.Upgrade == null || mods.Upgrade.LastWriteTime < midiLastWrite)
                     {
-                        mods.Upgrade = new UnpackedRBProUpgrade(name, midiLastWrite, in root);
+                        mods.Upgrade = new UnpackedRBProUpgrade(name, midiLastWrite, in root, dtaPath);
                     }
                 }
             }
@@ -1405,10 +1431,15 @@ namespace YARG.Core.Song.Cache
         private void QuickReadIniDirectory(FixedArrayStream stream, CacheReadStrings strings)
         {
             string directory = stream.ReadString();
+            void Retain(SongEntry entry)
+            {
+                AddEntry(entry);
+                if (explicitSources != null && GetBaseIniGroup(directory, out var group)) group.AddEntry(entry);
+            }
             unsafe
             {
-                Parallel.ForEach(new CacheLoopable(&stream), node => AddEntry(UnpackedIniEntry.ForceDeserialize(directory, ref node.Slice, strings)));
-                Parallel.ForEach(new CacheLoopable(&stream), node => AddEntry(SngEntry.ForceDeserialize(directory, ref node.Slice, strings)));
+                Parallel.ForEach(new CacheLoopable(&stream), node => Retain(UnpackedIniEntry.ForceDeserialize(directory, ref node.Slice, strings)));
+                Parallel.ForEach(new CacheLoopable(&stream), node => Retain(SngEntry.ForceDeserialize(directory, ref node.Slice, strings)));
             }
         }
 
@@ -1493,7 +1524,9 @@ namespace YARG.Core.Song.Cache
             var type = (CONEntryGroup.CONEntryType) stream.Read<int>(Endianness.Little);
             if (type == CONEntryGroup.CONEntryType.PackedCONEntry)
             {
-                listings = GetCacheCONListings(root.FullName);
+                listings = explicitSources != null && appliedInventory != null
+                    ? appliedInventory.Bases.Find(b => b.Root == root.FullName)?.Listings
+                    : GetCacheCONListings(root.FullName);
             }
 
             unsafe
@@ -1518,6 +1551,19 @@ namespace YARG.Core.Song.Cache
                             Array.Sort(layers, (a, b) => CONUpdateGroup.CompareLayers(a.Root, b.Root));
                         }
                         entry.UpdateInfo(mods.UpdateDirectoryAndDtaLastWrite, mods.UpdateMidi, mods.Upgrade, layers);
+                    }
+                    if (explicitSources != null)
+                    {
+                        lock (conEntryGroups)
+                        {
+                            var group = conEntryGroups.Find(g => g.Root.FullName == root.FullName);
+                            if (group == null)
+                            {
+                                group = new CachedCONEntryGroup(root, string.Empty, type);
+                                conEntryGroups.Add(group);
+                            }
+                            group.AddEntry(name, index, entry);
+                        }
                     }
                     AddEntry(entry);
                 });
@@ -1651,7 +1697,7 @@ namespace YARG.Core.Song.Cache
 
                     try
                     {
-                        if (PackedCONUpgradeGroup.Create(stream, listings, in abridged, out result.Upgrades))
+                        if (explicitSources == null && PackedCONUpgradeGroup.Create(stream, listings, in abridged, out result.Upgrades))
                         {
                             lock (packedUpgradeGroups)
                             {

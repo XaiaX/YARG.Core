@@ -9,12 +9,14 @@ namespace YARG.Core.Song
         public AbridgedFileInfo Root { get; }
         public DTAEntry Dta { get; }
         public DateTime? Midi { get; }
+        public string DtaPath { get; }
 
-        public CONUpdateLayer(AbridgedFileInfo root, DTAEntry dta, DateTime? midi)
+        public CONUpdateLayer(AbridgedFileInfo root, DTAEntry dta, DateTime? midi, string? dtaPath = null)
         {
             Root = root;
             Dta = dta;
             Midi = midi;
+            DtaPath = dtaPath ?? System.IO.Path.Combine(root.FullName, RBCONEntry.SONGUPDATES_DTA);
         }
     }
 
