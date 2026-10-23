@@ -10,8 +10,6 @@ using YARG.Core.Song.Cache;
 
 namespace YARG.Core.UnitTests.Scanning;
 
-[Explicit("Temporary diagnostic reproduction; run only when investigating library refresh behavior.")]
-[Category("ReviewRepro")]
 [NonParallelizable]
 public sealed class LibraryRefreshReviewReproTests
 {
@@ -20,6 +18,7 @@ public sealed class LibraryRefreshReviewReproTests
     private string _library = null!;
     private string _cachePath = null!;
     private string _badSongsPath = null!;
+    private bool _cumulativeUpdates;
 
     [SetUp]
     public void SetUp()
@@ -52,9 +51,12 @@ public sealed class LibraryRefreshReviewReproTests
         }
     }
 
-    [Test]
-    public void ChangedUpdateDta_IsSkippedOnFirstFullScanThenDiscoveredOnSecond()
+    // A changed update must apply on the first refresh in both default and layered modes.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ChangedUpdateDta_IsAppliedOnFirstFullScanAndRetainedOnSecond(bool cumulativeUpdates)
     {
+        _cumulativeUpdates = cumulativeUpdates;
         string updateDta = Path.Combine(_library, "package", "songs_updates", RBCONEntry.SONGUPDATES_DTA);
 
         var initial = ScanFull();
@@ -74,15 +76,15 @@ public sealed class LibraryRefreshReviewReproTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(firstFullScanName, Is.EqualTo("Base"),
-                "The first full scan after the timestamp/content change drops the cached update and returns base metadata.");
+            Assert.That(firstFullScanName, Is.EqualTo("After"),
+                "The first full scan after the timestamp/content change must use the changed update.");
             Assert.That(secondFullScanName, Is.EqualTo("After"),
-                "The following full scan discovers the changed update DTA.");
+                "The following full scan must retain the same changed update.");
         });
     }
 
     private SongCache ScanAll() => CacheHandler.RunScan(false, _cachePath, _badSongsPath,
-        false, new List<string> { _library }, true);
+        false, new List<string> { _library }, _cumulativeUpdates);
 
     private RBCONEntry ScanFull()
     {
