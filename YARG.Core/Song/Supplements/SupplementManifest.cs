@@ -14,16 +14,20 @@ namespace YARG.Core.Song.Supplements
         public string Path { get; }
         public string Sha256 { get; }
         public long Length { get; }
-        public MidiScanSummary? Summary { get; }
-        internal string Blob => "blobs/sha256/" + Sha256;
+        private readonly Lazy<MidiScanSummary?> _summary;
+        public MidiScanSummary? Summary => _summary.Value;
+        internal string Blob { get; }
         internal SupplementAsset(AssetRecord record)
         {
             Path = record.Path; Sha256 = record.Sha256; Length = record.Length;
-            if (record.Summary != null)
+            Blob = "blobs/sha256/" + Sha256;
+            string? encoded = record.Summary;
+            _summary = new Lazy<MidiScanSummary?>(() =>
             {
-                try { Summary = MidiScanSummary.Deserialize(Convert.FromBase64String(record.Summary)); }
-                catch (FormatException) { }
-            }
+                if (encoded == null) return null;
+                try { return MidiScanSummary.Deserialize(Convert.FromBase64String(encoded)); }
+                catch (FormatException) { return null; }
+            });
         }
     }
 

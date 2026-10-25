@@ -7,7 +7,6 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace YARG.Core.Song.Supplements
 {
@@ -20,19 +19,17 @@ namespace YARG.Core.Song.Supplements
         internal const long MAX_ASSET_BYTES = 1024L * 1024 * 1024;
         internal const int MAX_ENTRIES = 200000;
         private readonly ZipArchive _archive;
-        private readonly PackageManifest _manifest;
-        // Package logical names are portable across case-sensitive and insensitive hosts.
-        // Ambiguous case aliases are rejected before indexing; extraction retains original spelling.
-        private readonly Dictionary<string, SupplementAsset> _assets = new(StringComparer.OrdinalIgnoreCase);
-        private readonly byte[] _dta;
+        private readonly SupplementPackageIndex _index;
+        private IReadOnlyDictionary<string, SupplementAsset> _assets => _index.AssetMap;
+        private byte[] _dta => _index.Dta;
         private int _leases = 1;
         private bool _disposed;
-        public SupplementSourceKind Kind { get; }
-        public string ManifestHash { get; }
+        public SupplementSourceKind Kind => _index.Kind;
+        public string ManifestHash => _index.ManifestHash;
         public byte[] DtaBytes => (byte[])_dta.Clone();
-        public string DtaPath => _manifest.DtaPath;
-        public IReadOnlyList<string> Definitions { get; }
-        public IReadOnlyList<SupplementAsset> Assets { get; }
+        public string DtaPath => _index.DtaPath;
+        public IReadOnlyList<string> Definitions => _index.Definitions;
+        public IReadOnlyList<SupplementAsset> Assets => _index.Assets;
 
         private SupplementPackage(ZipArchive archive)
         {
@@ -45,42 +42,17 @@ namespace YARG.Core.Song.Supplements
                 if (!entryPaths.Add(entry.FullName)) throw new InvalidDataException("Duplicate package entry: " + entry.FullName);
             }
             byte[] manifestBytes = ReadBounded(Required("manifest.json"), MAX_MANIFEST_BYTES);
-            ManifestHash = Hash(manifestBytes);
-            using var jsonReader = new JsonTextReader(new StringReader(new UTF8Encoding(false, true).GetString(manifestBytes))) { MaxDepth = 32 };
-            var json = JObject.Load(jsonReader, new JsonLoadSettings { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error });
-            if (jsonReader.Read()) throw new InvalidDataException("Trailing package manifest data.");
-            foreach (string required in new[] { "Format", "Version", "Kind", "DtaPath", "DtaSha256", "DtaLength", "Definitions", "Assets" })
-                if (json[required] == null || json[required]!.Type == JTokenType.Null) throw new InvalidDataException("Missing package manifest field: " + required);
-            _manifest = json.ToObject<PackageManifest>() ?? throw new InvalidDataException("Missing manifest.");
-            if (_manifest.Format != "YARG supplementary source" || _manifest.Version != 1)
-                throw new InvalidDataException("Unsupported .yargup container version.");
-            Kind = _manifest.Kind == "updates" ? SupplementSourceKind.Updates : _manifest.Kind == "upgrades" ? SupplementSourceKind.Upgrades : throw new InvalidDataException("Unknown package source kind.");
-            SupplementPaths.Validate(_manifest.DtaPath);
-            SupplementPaths.ValidateDigest(_manifest.DtaSha256);
-            if (_manifest.DtaLength < 0 || _manifest.DtaLength > MAX_DTA_BYTES) throw new InvalidDataException("Invalid DTA length.");
-            _dta = ReadBounded(Required("sources/original.dta"), MAX_DTA_BYTES);
-            if (_dta.LongLength != _manifest.DtaLength || Hash(_dta) != _manifest.DtaSha256) throw new InvalidDataException("Package DTA digest mismatch.");
-            if (_manifest.Definitions == null || _manifest.Assets == null || _manifest.Definitions.Count > MAX_ENTRIES || _manifest.Assets.Count > MAX_ENTRIES)
-                throw new InvalidDataException("Invalid package index.");
-            var parsed = SupplementPackageBuilder.ReadDefinitions(_dta);
-            if (!parsed.Select(d => d.Node).SequenceEqual(_manifest.Definitions)) throw new InvalidDataException("Package definitions do not match original DTA.");
-            var logicalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _manifest.DtaPath };
-            foreach (var record in _manifest.Assets)
-            {
-                if (record == null) throw new InvalidDataException("Null package asset.");
-                SupplementPaths.Validate(record.Path); SupplementPaths.ValidateDigest(record.Sha256);
-                if (!logicalPaths.Add(record.Path)) throw new InvalidDataException("Duplicate logical asset: " + record.Path);
-                if (record.Length < 0 || record.Length > MAX_ASSET_BYTES) throw new InvalidDataException("Invalid asset length.");
-                if (record.Summary != null && record.Summary.Length > 24 * 1024 * 1024) throw new InvalidDataException("Summary too large.");
-                var asset = new SupplementAsset(record);
-                if (Required(asset.Blob).Length != asset.Length) throw new InvalidDataException("Asset length differs from manifest: " + asset.Path);
-                _assets.Add(asset.Path, asset);
-            }
-            if (Kind == SupplementSourceKind.Upgrades)
-                foreach (string node in _manifest.Definitions)
-                    if (!_assets.ContainsKey(node + "_plus.mid")) throw new InvalidDataException("Upgrade MIDI missing: " + node);
-            Definitions = _manifest.Definitions.AsReadOnly();
-            Assets = _assets.Values.ToList().AsReadOnly();
+            string manifestHash = Hash(manifestBytes);
+            byte[] currentDta = ReadBounded(Required("sources/original.dta"), MAX_DTA_BYTES);
+            _index = SupplementPackageIndexCache.Get(manifestHash, () =>
+                SupplementPackageIndex.Parse(manifestBytes, manifestHash, currentDta));
+            // A cache hit proves the manifest, not this archive's current contents. Check
+            // the DTA and referenced blob lengths on every open, even if timestamps match.
+            if (currentDta.LongLength != _dta.LongLength || Hash(currentDta) != _index.DtaSha256)
+                throw new InvalidDataException("Package DTA digest mismatch.");
+            foreach (var asset in Assets)
+                if (Required(asset.Blob).Length != asset.Length)
+                    throw new InvalidDataException("Asset length differs from manifest: " + asset.Path);
         }
 
         public static SupplementPackage Open(string path)
@@ -145,7 +117,7 @@ namespace YARG.Core.Song.Supplements
             Directory.CreateDirectory(staging);
             try
             {
-                WriteNew(staging, _manifest.DtaPath, _dta);
+                WriteNew(staging, DtaPath, _dta);
                 foreach (var asset in Assets)
                 {
                     string destination = Path.Combine(staging, asset.Path.Replace('/', Path.DirectorySeparatorChar));

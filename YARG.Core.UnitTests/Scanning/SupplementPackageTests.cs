@@ -21,6 +21,75 @@ public class SupplementPackageTests
         var file = new MidiFile(new TrackChunk(new SequenceTrackNameEvent("SYNC")), new TrackChunk(new SequenceTrackNameEvent("PART DRUMS"), new NoteOnEvent((Melanchall.DryWetMidi.Common.SevenBitNumber) 96, (Melanchall.DryWetMidi.Common.SevenBitNumber) 100), new NoteOffEvent((Melanchall.DryWetMidi.Common.SevenBitNumber) 96, (Melanchall.DryWetMidi.Common.SevenBitNumber) 0) { DeltaTime = 120 }));
         using var stream = new MemoryStream(); file.Write(stream); return stream.ToArray();
     }
+    [Test] public void ReopenedPackagesReuseIndexButOwnIndependentStreams()
+    {
+        var dta = Dta("(song (name reuse))"); var original = Midi(); Write("song/song_update.mid", original);
+        string output = Path.Combine(_root, "reuse.yargup"); SupplementPackageBuilder.Pack(dta, SupplementSourceKind.Updates, output);
+        SupplementAsset indexed;
+        using (var first = SupplementPackage.Open(output)) indexed = first.Assets.Single();
+        using var second = SupplementPackage.Open(output);
+        Assert.That(second.Assets.Single(), Is.SameAs(indexed), "The validated index must survive closing a caller.");
+        System.Threading.Tasks.Parallel.For(0, 8, _ =>
+        {
+            using var reader = SupplementPackage.Open(output);
+            Assert.That(reader.Assets.Single(), Is.SameAs(indexed));
+            Assert.That(reader.ReadAsset(indexed.Path), Is.EqualTo(original));
+        });
+        using var stream = second.OpenAsset(indexed.Path);
+        second.Dispose();
+        using var bytes = new MemoryStream(); stream.CopyTo(bytes);
+        Assert.That(bytes.ToArray(), Is.EqualTo(original));
+    }
+
+    [Test] public void IndexReuseIsBoundedAndEvictionDoesNotInvalidateOpenReaders()
+    {
+        Write("song/song_update.mid", Midi());
+        var outputs = new List<string>();
+        for (int i = 0; i < 3; i++)
+        {
+            var dta = Dta($"(song (name \"Bounded {i}\"))");
+            string output = Path.Combine(_root, $"bounded-{i}.yargup");
+            SupplementPackageBuilder.Pack(dta, SupplementSourceKind.Updates, output);
+            outputs.Add(output);
+        }
+        using var first = SupplementPackage.Open(outputs[0]);
+        var indexed = first.Assets.Single();
+        using (var second = SupplementPackage.Open(outputs[1])) { }
+        using (var third = SupplementPackage.Open(outputs[2])) { }
+        using var reopened = SupplementPackage.Open(outputs[0]);
+        Assert.That(reopened.Assets.Single(), Is.Not.SameAs(indexed));
+        Assert.That(first.ReadAsset(indexed.Path), Is.EqualTo(reopened.ReadAsset(indexed.Path)));
+    }
+
+    [Test] public void ReusedIndexStillValidatesCurrentDtaBytes()
+    {
+        var dta = Dta("(song (name before))"); string output = Path.Combine(_root, "changed-dta.yargup");
+        SupplementPackageBuilder.Pack(dta, SupplementSourceKind.Updates, output);
+        using (var first = SupplementPackage.Open(output)) { }
+        using (var zip = ZipFile.Open(output, ZipArchiveMode.Update))
+        {
+            zip.GetEntry("sources/original.dta")!.Delete();
+            using var writer = new StreamWriter(zip.CreateEntry("sources/original.dta").Open());
+            writer.Write("(song (name after!))");
+        }
+        Assert.Throws<InvalidDataException>(() => SupplementPackage.Open(output));
+    }
+
+    [Test] public void ReplacementWithPreservedTimestampCannotReuseOldIndex()
+    {
+        var dta = Dta("(song (name before))"); Write("song/song_update.mid", Midi());
+        string output = Path.Combine(_root, "replace.yargup");
+        SupplementPackageBuilder.Pack(dta, SupplementSourceKind.Updates, output);
+        var stamp = File.GetLastWriteTimeUtc(output);
+        SupplementAsset original;
+        using (var first = SupplementPackage.Open(output)) original = first.Assets.Single();
+        RewriteManifest(output, json => json["Assets"]![0]!["Summary"] = null);
+        File.SetLastWriteTimeUtc(output, stamp);
+        using var replacement = SupplementPackage.Open(output);
+        Assert.That(replacement.Assets.Single(), Is.Not.SameAs(original));
+        Assert.That(replacement.Assets.Single().Summary, Is.Null);
+    }
+
     [Test] public void RoundTripPreservesDefinitionsAssetsAndSummary()
     {
         var dta = Dta("(song (name \"First\"))\n(song (name \"Second\"))\n(metadata (name \"Only\"))");
