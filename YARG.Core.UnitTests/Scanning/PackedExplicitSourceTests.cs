@@ -46,6 +46,21 @@ public sealed class PackedExplicitSourceTests
         if (Directory.Exists(_root)) Directory.Delete(_root, true);
     }
 
+    [TestCase(" \t\r\n; leading comment\n")]
+    [TestCase("\uFEFF\r\n")]
+    [TestCase("; leading comment\r")]
+    public void PackedBaseDtaAcceptsLeadingWhitespaceAndBom(string prefix)
+    {
+        WritePackage(_package, new Dictionary<string, byte[]>
+        {
+            ["songs/songs.dta"] = Encoding.UTF8.GetBytes(prefix + Dta("Packed base")),
+            [$"songs/{NODE}/{NODE}.mid"] = Midi("PART BASS", 96),
+            [$"songs/{NODE}/{NODE}.mogg"] = BitConverter.GetBytes(RBCONEntry.UNENCRYPTED_MOGG)
+        });
+        foreach (bool quick in new[] { false, true })
+            Assert.That(Scan(quick: quick).Name.ToString(), Is.EqualTo("Packed base"));
+    }
+
     [Test]
     public void ExplicitEmptySourcesRetainPackedBaseButSuppressEmbeddedUpgrade()
     {
@@ -98,8 +113,12 @@ public sealed class PackedExplicitSourceTests
         AssertComposition(Scan(update: update, upgrade: upgrade, quick: true));
     }
 
-    [Test]
-    public void YargupSourcesMatchLooseEntriesAndHashesThroughQuickAndScopedScans()
+    [TestCase("", "\n")]
+    [TestCase(" \t\r\n; leading comment\r\n", " \t\r\n; between entries\r\n")]
+    [TestCase("\uFEFF", "\n")]
+    [TestCase("\uFEFF \t\n", "\n")]
+    [TestCase("; leading comment\r", "; between entries\r")]
+    public void YargupSourcesMatchLooseEntriesAndHashesThroughQuickAndScopedScans(string prefix, string separator)
     {
         string updates = Path.Combine(_root, "updates");
         string upgrades = Path.Combine(_root, "upgrades");
@@ -107,11 +126,13 @@ public sealed class PackedExplicitSourceTests
         Directory.CreateDirectory(upgrades);
         string update = Path.Combine(updates, "songs_updates.dta");
         string upgrade = Path.Combine(upgrades, "upgrades.dta");
-        File.WriteAllText(update, Dta("Selected update"));
+        File.WriteAllText(update, prefix + Dta("Selected update") + separator + "(unmatched (name \"Other\"))");
         File.WriteAllBytes(Path.Combine(updates, NODE, NODE + "_update.mid"), Midi("PART GUITAR", 96));
-        File.WriteAllText(upgrade, Dta("Selected upgrade"));
+        File.WriteAllText(upgrade, prefix + Dta("Selected upgrade") + separator + "(unmatched (name \"Other\"))");
         File.WriteAllBytes(Path.Combine(upgrades, NODE + "_plus.mid"), Midi("PART ELITE_DRUMS", 75));
+        File.WriteAllBytes(Path.Combine(upgrades, "unmatched_plus.mid"), Midi("PART ELITE_DRUMS", 75));
         var loose = Scan(update: update, upgrade: upgrade);
+        AssertComposition(loose);
         string packageUpdate = Path.Combine(_root, "updates.yargup");
         string packageUpgrade = Path.Combine(_root, "upgrades.yargup");
         YARG.Core.Song.Supplements.SupplementPackageBuilder.Pack(update, YARG.Core.Song.Supplements.SupplementSourceKind.Updates, packageUpdate);

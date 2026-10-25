@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Functional Core
+using System;
 using System.Collections.Generic;
 using System.Text;
 using YARG.Core.Extensions;
@@ -23,6 +24,7 @@ namespace YARG.Core.IO
                 container.Position += 3;
                 container.Encoding = Encoding.UTF8;
             }
+            SkipWhitespace(ref container);
             return container;
         }
 
@@ -40,7 +42,7 @@ namespace YARG.Core.IO
                 if (ch == ';')
                 {
                     // In comment
-                    while (!container.IsAtEnd() && ch != '\n')
+                    while (!container.IsAtEnd() && ch != '\n' && ch != '\r')
                     {
                         ch = container.Get();
                         ++container.Position;
@@ -388,7 +390,7 @@ namespace YARG.Core.IO
                 ++container.Position;
                 if (textState == TextScopeState.Comment)
                 {
-                    if (curr == '\n')
+                    if (curr == '\n' || curr == '\r')
                     {
                         textState = TextScopeState.None;
                     }

@@ -175,8 +175,8 @@ namespace YARG.Core.Song.Cache
                 throw new IOException("Applied package changed. Scan its source again.");
             snapshot.Report("Reading source definitions...", path);
             snapshot.Data = applied?.Data ?? package?.DtaBytes ?? File.ReadAllBytes(path);
-            string definition = System.Text.Encoding.UTF8.GetString(snapshot.Data);
-            string uncommented = string.Join("\n", definition.Split('\n').Select(line => line.Split(';')[0]));
+            string definition = System.Text.Encoding.UTF8.GetString(snapshot.Data).TrimStart('\uFEFF');
+            string uncommented = string.Join("\n", definition.Replace('\r', '\n').Split('\n').Select(line => line.Split(';')[0]));
             if (string.IsNullOrWhiteSpace(uncommented)) return snapshot;
             if (!uncommented.TrimStart().StartsWith("(", StringComparison.Ordinal)) throw new IOException("Invalid DTA definition: " + path);
             ValidateDefinition(definition, path);

@@ -66,6 +66,29 @@ public sealed class ExplicitDefinitionCountTests
         });
     }
 
+    [TestCase(" \t\r\n; leading\n", " \t\n; between\n")]
+    [TestCase("\uFEFF", "\n")]
+    [TestCase("\uFEFF\n", "\n")]
+    [TestCase("; leading\r", "; between\r")]
+    public void WhitespaceAndBomSourcesCountBothDefinitions(string prefix, string separator)
+    {
+        string text = prefix + "(missing)" + separator + "(other)";
+        string updates = Source("updates", text);
+        string upgrades = Source("upgrades", text, true);
+        using var full = Scan(SongScanScope.All, updates, upgrades);
+        Counts(full, 2, 2);
+        string updatePackage = Path.Combine(_root, "updates.yargup");
+        string upgradePackage = Path.Combine(_root, "upgrades.yargup");
+        YARG.Core.Song.Supplements.SupplementPackageBuilder.Pack(updates,
+            YARG.Core.Song.Supplements.SupplementSourceKind.Updates, updatePackage);
+        YARG.Core.Song.Supplements.SupplementPackageBuilder.Pack(upgrades,
+            YARG.Core.Song.Supplements.SupplementSourceKind.Upgrades, upgradePackage);
+        using var packaged = Scan(SongScanScope.All, updatePackage, upgradePackage);
+        Counts(packaged, 2, 2);
+        using var quick = Scan(SongScanScope.All, updatePackage, upgradePackage, quick: true);
+        Counts(quick, 2, 2);
+    }
+
     [Test]
     public void FullAndQuickCountEveryUnmatchedDefinitionIncludingRepeatedNodes()
     {
@@ -101,6 +124,8 @@ public sealed class ExplicitDefinitionCountTests
 
     [TestCase("")]
     [TestCase("; valid empty source\n  \n")]
+    [TestCase("\uFEFF")]
+    [TestCase("\uFEFF; empty source\r \t")]
     public void EmptyAndClearedSourcesReportZeroThroughFullPartialAndQuick(string contents)
     {
         string updates = Source("updates", contents);
