@@ -7,7 +7,7 @@ namespace YARG.Core.Chart
     /// <summary>
     /// One native Elite Drums authored pad-lane phrase, identified by its position in the loaded
     /// difficulty's phrase list. Membership refers to authored gems, not inferred pad flags.
-    /// The interval is half-open; slicing retains the original phrase identity.
+    /// Endpoints are inclusive unless a same-pad successor starts there; practice slices remain half-open.
     /// </summary>
     public sealed class EliteDrumNativeAuthoredLaneRecord
     {
@@ -18,10 +18,11 @@ namespace YARG.Core.Chart
         public EliteDrumNote.EliteDrumPad AuthoredPad { get; }
         public uint StartTick { get; }
         public uint EndTick { get; }
+        public bool EndInclusive { get; }
         public IReadOnlyList<EliteDrumSourceDefinition> MemberSources => _memberSources;
 
         public EliteDrumNativeAuthoredLaneRecord(int phraseOrdinal, PhraseType laneType,
-            uint startTick, uint endTick, IEnumerable<EliteDrumSourceDefinition> memberSources)
+            uint startTick, uint endTick, IEnumerable<EliteDrumSourceDefinition> memberSources, bool endInclusive = true)
         {
             if (phraseOrdinal < 0) throw new ArgumentOutOfRangeException(nameof(phraseOrdinal));
             if (!TryGetNativePad(laneType, out var pad))
@@ -32,9 +33,16 @@ namespace YARG.Core.Chart
             AuthoredPad = pad;
             StartTick = startTick;
             EndTick = endTick;
+            EndInclusive = endInclusive;
             _memberSources = Array.AsReadOnly((memberSources ?? throw new ArgumentNullException(nameof(memberSources)))
                 .Distinct().ToArray());
         }
+
+        public bool ContainsTick(uint tick) => tick >= StartTick &&
+            (tick < EndTick || EndInclusive && tick == EndTick);
+
+        public static bool IncludesEnd(Phrase phrase, IReadOnlyList<Phrase> phrases) =>
+            !phrases.Any(next => next.Type == phrase.Type && next.Tick == phrase.TickEnd && next.Tick > phrase.Tick);
 
         public static bool TryGetNativePad(PhraseType type, out EliteDrumNote.EliteDrumPad pad)
         {
@@ -61,8 +69,11 @@ namespace YARG.Core.Chart
             if (endTick < startTick) throw new ArgumentOutOfRangeException(nameof(endTick));
             uint start = Math.Max(StartTick, startTick);
             uint end = Math.Min(EndTick, endTick);
-            return start < end ? new EliteDrumNativeAuthoredLaneRecord(PhraseOrdinal, LaneType,
-                start, end, _memberSources.Where(source => source.StartTick >= start && source.StartTick < end)) : null;
+            bool inclusive = EndInclusive && end == EndTick && end < endTick;
+            var members = _memberSources.Where(source => source.StartTick >= start &&
+                (source.StartTick < end || inclusive && source.StartTick == end)).ToArray();
+            return (start < end || start == end && inclusive) && members.Length > 0
+                ? new EliteDrumNativeAuthoredLaneRecord(PhraseOrdinal, LaneType, start, end, members, inclusive) : null;
         }
     }
 }

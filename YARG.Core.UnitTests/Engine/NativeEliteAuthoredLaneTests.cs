@@ -40,20 +40,21 @@ public sealed class NativeEliteAuthoredLaneTests
         engine.Update(time);
     }
 
-    [Test]
-    public void SparseFrameResolvesOnlyAtScheduledCadence()
+    [TestCase(EliteDrumNote.EliteDrumPad.Snare)]
+    [TestCase(EliteDrumNote.EliteDrumPad.Kick)]
+    public void SparseFrameResolvesOnlyAtScheduledCadence(EliteDrumNote.EliteDrumPad pad)
     {
-        var first = Member(EliteDrumNote.EliteDrumPad.Snare, 1, 0);
-        var second = Member(EliteDrumNote.EliteDrumPad.Snare, 1.04, 1);
-        var third = Member(EliteDrumNote.EliteDrumPad.Snare, 1.5, 2);
+        var first = Member(pad, 1, 0);
+        var second = Member(pad, 1.04, 1);
+        var third = Member(pad, 1.5, 2);
         var chart = new InstrumentDifficulty<EliteDrumNote>(Instrument.EliteDrums, Difficulty.Expert,
             new([first.note, second.note, third.note]), new(), new());
         chart.SetEliteDrumNativeAuthoredLaneRecords([
-            new EliteDrumNativeAuthoredLaneRecord(0, PhraseType.EliteDrums_SnareLane,
+            new EliteDrumNativeAuthoredLaneRecord(0, pad == EliteDrumNote.EliteDrumPad.Kick ? PhraseType.EliteDrums_KickLane : PhraseType.EliteDrums_SnareLane,
                 960, 2000, [first.source, second.source, third.source])
         ]);
         var engine = Engine(chart);
-        Strike(engine, 1, EliteDrumsAction.EliteSnare);
+        Strike(engine, 1, pad == EliteDrumNote.EliteDrumPad.Kick ? EliteDrumsAction.Kick : EliteDrumsAction.EliteSnare);
         engine.Update(2);
         Assert.Multiple(() =>
         {
@@ -95,22 +96,23 @@ public sealed class NativeEliteAuthoredLaneTests
         Assert.That(third.note.WasMissed, Is.True);
     }
 
-    [Test]
-    public void ConfiguredLaneAutohitWindowControlsNativeContinuation()
+    [TestCase(EliteDrumNote.EliteDrumPad.Snare)]
+    [TestCase(EliteDrumNote.EliteDrumPad.Kick)]
+    public void ConfiguredLaneAutohitWindowControlsNativeContinuation(EliteDrumNote.EliteDrumPad pad)
     {
         foreach (double window in new[] { 0.16, 0.06, 0.0 })
         {
-            var first = Member(EliteDrumNote.EliteDrumPad.Snare, 1, 0);
-            var second = Member(EliteDrumNote.EliteDrumPad.Snare, 1.12, 1);
-            var third = Member(EliteDrumNote.EliteDrumPad.Snare, 1.5, 2);
+            var first = Member(pad, 1, 0);
+            var second = Member(pad, 1.12, 1);
+            var third = Member(pad, 1.5, 2);
             var chart = new InstrumentDifficulty<EliteDrumNote>(Instrument.EliteDrums, Difficulty.Expert,
                 new([first.note, second.note, third.note]), new(), new());
             chart.SetEliteDrumNativeAuthoredLaneRecords([
-                new EliteDrumNativeAuthoredLaneRecord(0, PhraseType.EliteDrums_SnareLane,
+                new EliteDrumNativeAuthoredLaneRecord(0, pad == EliteDrumNote.EliteDrumPad.Kick ? PhraseType.EliteDrums_KickLane : PhraseType.EliteDrums_SnareLane,
                     960, 2000, [first.source, second.source, third.source])
             ]);
             var engine = Engine(chart, laneAutohitWindow: window);
-            Strike(engine, 1, EliteDrumsAction.EliteSnare);
+            Strike(engine, 1, pad == EliteDrumNote.EliteDrumPad.Kick ? EliteDrumsAction.Kick : EliteDrumsAction.EliteSnare);
             engine.Update(2);
             Assert.Multiple(() =>
             {
@@ -222,21 +224,22 @@ public sealed class NativeEliteAuthoredLaneTests
         });
     }
 
-    [Test]
-    public void AutomaticSkipDoesNotRefreshLaneFromUnrelatedStrike()
+    [TestCase(EliteDrumNote.EliteDrumPad.Snare)]
+    [TestCase(EliteDrumNote.EliteDrumPad.Kick)]
+    public void AutomaticSkipDoesNotRefreshLaneFromUnrelatedStrike(EliteDrumNote.EliteDrumPad pad)
     {
-        var first = Member(EliteDrumNote.EliteDrumPad.Snare, 1, 0);
-        var second = Member(EliteDrumNote.EliteDrumPad.Snare, 1.04, 1);
-        var third = Member(EliteDrumNote.EliteDrumPad.Snare, 1.19, 2);
+        var first = Member(pad, 1, 0);
+        var second = Member(pad, 1.04, 1);
+        var third = Member(pad, 1.25, 2);
         var ride = Member(EliteDrumNote.EliteDrumPad.Ride, 1.08, 3);
         var chart = new InstrumentDifficulty<EliteDrumNote>(Instrument.EliteDrums, Difficulty.Expert,
             new([first.note, second.note, ride.note, third.note]), new(), new());
         chart.SetEliteDrumNativeAuthoredLaneRecords([
-            new EliteDrumNativeAuthoredLaneRecord(0, PhraseType.EliteDrums_SnareLane,
+            new EliteDrumNativeAuthoredLaneRecord(0, pad == EliteDrumNote.EliteDrumPad.Kick ? PhraseType.EliteDrums_KickLane : PhraseType.EliteDrums_SnareLane,
                 960, 2000, [first.source, second.source, third.source])
         ]);
         var engine = Engine(chart);
-        Strike(engine, 1, EliteDrumsAction.EliteSnare);
+        Strike(engine, 1, pad == EliteDrumNote.EliteDrumPad.Kick ? EliteDrumsAction.Kick : EliteDrumsAction.EliteSnare);
         Strike(engine, 1.08, EliteDrumsAction.EliteRide);
         engine.Update(2);
         Assert.Multiple(() =>

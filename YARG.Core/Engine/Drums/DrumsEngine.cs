@@ -746,7 +746,7 @@ namespace YARG.Core.Engine.Drums
             };
         }
 
-        protected override void SubmitLaneNote(int newNote)
+        protected override void SubmitLaneNote(int newNote, double? inputTime = null)
         {
             if (NoteIndex >= Notes.Count)
             {
@@ -782,7 +782,7 @@ namespace YARG.Core.Engine.Drums
             }
             else
             {
-                base.SubmitLaneNote(newNote);
+                base.SubmitLaneNote(newNote, inputTime);
             }
         }
 

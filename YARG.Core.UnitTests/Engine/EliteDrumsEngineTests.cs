@@ -167,7 +167,15 @@ public class EliteDrumsEngineTests
         var end = source.Clone();
         foreach (var note in end.Notes) note.Tick = 1920;
         DrumPlaybackPreparer.NormalizeEliteFlams(end);
-        foreach (var note in end.Notes) Assert.That(note.IsFlam && note.IsFlatFlam, Is.True);
+        foreach (var note in end.Notes)
+        {
+            Assert.That(note.IsFlam || note.IsFlatFlam, Is.False);
+            Assert.That(note.IsAuthoredFlam, Is.True);
+        }
+        var afterEnd = source.Clone();
+        foreach (var note in afterEnd.Notes) note.Tick = 1921;
+        DrumPlaybackPreparer.NormalizeEliteFlams(afterEnd);
+        foreach (var note in afterEnd.Notes) Assert.That(note.IsFlam && note.IsFlatFlam, Is.True);
         source.Phrases.Clear();
         source.Phrases.Add(new Phrase(PhraseType.DrumFill, 1, 1, 960, 960));
         DrumPlaybackPreparer.NormalizeEliteFlams(source);

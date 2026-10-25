@@ -218,11 +218,12 @@ namespace YARG.Core.Chart
             {
                 bool inLane = difficulty.EliteDrumNativeAuthoredLaneRecords.Count > 0
                     ? difficulty.EliteDrumNativeAuthoredLaneRecords.Any(r =>
-                        (int) r.AuthoredPad == note.Pad && note.Tick >= r.StartTick && note.Tick < r.EndTick &&
+                        (int) r.AuthoredPad == note.Pad && r.ContainsTick(note.Tick) &&
                         note.SourceDefinition is not null && r.MemberSources.Contains(note.SourceDefinition))
                     : difficulty.Phrases.Any(p =>
                         EliteDrumNativeAuthoredLaneRecord.TryGetNativePad(p.Type, out var pad) &&
-                        (int) pad == note.Pad && note.Tick >= p.Tick && note.Tick < p.TickEnd);
+                        (int) pad == note.Pad && note.Tick >= p.Tick && (note.Tick < p.TickEnd || note.Tick == p.TickEnd &&
+                            EliteDrumNativeAuthoredLaneRecord.IncludesEnd(p, difficulty.Phrases)));
                 if (inLane) { note.IsFlam = false; note.IsFlatFlam = false; }
             }
         }
@@ -265,7 +266,7 @@ namespace YARG.Core.Chart
                 {
                     var members = survivors.Where(n => record.MemberSources.Contains(n.SourceDefinition!)).ToList();
                     records.Add(new EliteDrumNativeAuthoredLaneRecord(record.PhraseOrdinal, record.LaneType,
-                        record.StartTick, record.EndTick, members.Select(n => n.SourceDefinition!)));
+                        record.StartTick, record.EndTick, members.Select(n => n.SourceDefinition!), record.EndInclusive));
                     if (members.Count >= 2)
                     {
                         foreach (var member in members) member.ActivateFlag(NoteFlags.Tremolo);

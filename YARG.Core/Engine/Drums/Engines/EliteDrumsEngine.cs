@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using YARG.Core.Chart;
@@ -56,7 +57,12 @@ namespace YARG.Core.Engine.Drums.Engines
             : base(chart, syncTrack, engineParameters, true, isBot)
         {
             _autoHiHatPedal = autoHiHatPedal;
-            _authoredLanes = new NativeEliteAuthoredLaneMap(chart, engineParameters.HitWindow.LaneAutohitWindow);
+            _authoredLanes = new NativeEliteAuthoredLaneMap(chart, engineParameters.HitWindow.LaneAutohitWindow,
+                engineParameters.HitWindow.LaneProximityProtectionWindow, note =>
+                {
+                    double window = EngineParameters.HitWindow.CalculateHitWindow(GetAverageNoteDistance(note));
+                    return (EngineParameters.HitWindow.GetFrontEnd(window), EngineParameters.HitWindow.GetBackEnd(window));
+                });
             EngineStats.OptionalPedalAccuracyEnabled = autoHiHatPedal;
             // Invisible pedal terminators are chart control events, not playable notes.
             foreach (var parent in Notes)
@@ -110,11 +116,18 @@ namespace YARG.Core.Engine.Drums.Engines
                 foreach (var note in parent.AllNotes)
                 {
                     if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator) continue;
-                    var deadline = _authoredLanes.NextContinuationDeadline(note);
+                    var deadline = AuthoredContinuationDeadline(note);
                     if (deadline is { } when && when > CurrentTime && when < nextTime)
                         QueueUpdateTime(when, "native authored-lane cadence");
                 }
             }
+        }
+
+        private double? AuthoredContinuationDeadline(EliteDrumNote note)
+        {
+            double window = EngineParameters.HitWindow.CalculateHitWindow(GetAverageNoteDistance(note));
+            return _authoredLanes.NextContinuationDeadline(note,
+                MathUtil.BitIncrement(note.Time + EngineParameters.HitWindow.GetBackEnd(window)));
         }
 
         private bool _faultInInputGroup;
@@ -155,7 +168,7 @@ namespace YARG.Core.Engine.Drums.Engines
                     if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator ||
                         (IsBot && note.Time <= time && IsNoteInWindow(note, time)) ||
                         (_autoHiHatPedal && IsPlayablePedal(note)) ||
-                        _authoredLanes.NextContinuationDeadline(note) is not { } cadence ||
+                        AuthoredContinuationDeadline(note) is not { } cadence ||
                         (physicalAction is { } action && Matches(action, note) &&
                             IsNoteInWindow(note, time)) ||
                         time < cadence || !_authoredLanes.CanContinue(note, time)) continue;
@@ -271,6 +284,7 @@ namespace YARG.Core.Engine.Drums.Engines
             if (buttonPress || (input.Integer != 1 && input.Axis > 0 && !float.IsInfinity(input.Axis)))
             {
                 _action = action;
+                if (TryAuthoredPad(action, out int pad)) _authoredLanes.Input(pad, input.Time);
                 _velocity = buttonPress ? 1f : input.Axis;
             }
         }

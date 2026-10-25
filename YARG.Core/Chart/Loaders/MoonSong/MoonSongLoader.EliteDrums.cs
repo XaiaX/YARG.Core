@@ -48,11 +48,12 @@ namespace YARG.Core.Chart
             {
                 var phrase = chart.Phrases[index];
                 if (!EliteDrumNativeAuthoredLaneRecord.TryGetNativePad(phrase.Type, out var pad)) continue;
+                bool inclusive = EliteDrumNativeAuthoredLaneRecord.IncludesEnd(phrase, chart.Phrases);
                 var sources = chart.Notes.SelectMany(note => note.ChildNotes.Prepend(note))
-                    .Where(note => note.Pad == (int) pad && note.Tick >= phrase.Tick && note.Tick < phrase.TickEnd)
+                    .Where(note => note.Pad == (int) pad && note.Tick >= phrase.Tick && (note.Tick < phrase.TickEnd || inclusive && note.Tick == phrase.TickEnd))
                     .Select(note => note.SourceDefinition).OfType<EliteDrumSourceDefinition>();
                 records.Add(new EliteDrumNativeAuthoredLaneRecord(index, phrase.Type,
-                    phrase.Tick, phrase.TickEnd, sources));
+                    phrase.Tick, phrase.TickEnd, sources, inclusive));
             }
             chart.SetEliteDrumNativeAuthoredLaneRecords(records);
             return chart;

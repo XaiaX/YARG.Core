@@ -633,7 +633,7 @@ namespace YARG.Core.Engine
             }
         }
 
-        protected virtual void SubmitLaneNote(int newNote)
+        protected virtual void SubmitLaneNote(int newNote, double? inputTime = null)
         {
             if (!IsLaneActive || NoteIndex >= Notes.Count)
             {
@@ -666,7 +666,7 @@ namespace YARG.Core.Engine
                 }
 
 
-                UpdateLaneAutohitExpireTime();
+                UpdateLaneAutohitExpireTime(inputTime);
                 TraceNativeDrumLane($"input-refresh time={CurrentTime:F6} pad={newNote} expiry={LaneAutohitExpireTime:F6} index={NoteIndex}");
 
                 // Update next required note for trills to ensure alternating inputs
@@ -730,9 +730,9 @@ namespace YARG.Core.Engine
             );
         }
 
-        protected void UpdateLaneAutohitExpireTime()
+        protected void UpdateLaneAutohitExpireTime(double? inputTime = null)
         {
-            LaneAutohitExpireTime = CurrentTime + EngineParameters.HitWindow.LaneAutohitWindow;
+            LaneAutohitExpireTime = (inputTime ?? CurrentTime) + EngineParameters.HitWindow.LaneAutohitWindow;
             YargLogger.LogFormatTrace("LaneExpireTime extended to {0}. LaneAutohitWindow {1}. Increment {2}.", LaneAutohitExpireTime, EngineParameters.HitWindow.LaneAutohitWindow, LaneAutohitExpireTime - CurrentTime);
         }
 

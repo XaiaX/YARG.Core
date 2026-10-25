@@ -83,6 +83,53 @@ public sealed class NativeEliteConcurrentLaneTests
         Enumerable.Range(0, (int) Math.Round((end - start) * 4) + 1)
             .Select(index => start + index / 4.0).ToArray();
 
+    [TestCase(2)]
+    [TestCase(3)]
+    public void DoubleStrokesAcrossInterleavedHandLanesNeverOverhit(int count)
+    {
+        var pads = new[] { EliteDrumPad.RightCrash, EliteDrumPad.LeftCrash, EliteDrumPad.Tom1 };
+        var actions = new[] { EliteDrumsAction.EliteRightCrash, EliteDrumsAction.EliteLeftCrash, EliteDrumsAction.EliteTom1 };
+        var chart = Load(moon =>
+        {
+            for (int pad = 0; pad < count; pad++)
+                AuthorLane(moon, pads[pad], Enumerable.Range(0, 16).Select(i => 2.0 + (i * count + pad) * 0.1).ToArray());
+            moon.Insert(new MoonNote(TICKS(14), (int) EliteDrumPad.Snare));
+        });
+        var engine = Create(chart);
+        var overhitTimes = new List<double>();
+        engine.OnOverhit += () => overhitTimes.Add(engine.CurrentTime);
+        var strikes = new List<(double, EliteDrumsAction)>();
+        foreach (var note in AllMembers(chart).Where(n => n.Pad != (int) EliteDrumPad.Snare))
+        {
+            var action = actions[Array.IndexOf(pads, (EliteDrumPad) note.Pad)];
+            strikes.Add((note.Time, action));
+            strikes.Add((note.Time + 0.02, action));
+        }
+        Play(engine, strikes.ToArray());
+        Assert.That(engine.EngineStats.Overhits, Is.Zero, "Overhits at: " + string.Join(", ", overhitTimes) + "; " + Outcomes(chart));
+        Assert.That(AllMembers(chart).Where(n => n.Pad != (int) EliteDrumPad.Snare).All(n => n.WasHit), Is.True, Outcomes(chart));
+    }
+
+    [TestCase(.9, EliteDrumsAction.EliteLeftCrash, 0)]
+    [TestCase(2.4, EliteDrumsAction.EliteLeftCrash, 0)]
+    [TestCase(3.0, EliteDrumsAction.EliteLeftCrash, 1)]
+    [TestCase(.9, EliteDrumsAction.EliteRightCrash, 1)]
+    public void MissedLaneMemberDoesNotTurnLaterInLaneStrikesIntoOverhits(
+        double time, EliteDrumsAction action, int expectedOverhits)
+    {
+        var chart = Load(moon =>
+        {
+            AuthorLane(moon, EliteDrumPad.LeftCrash, 0, 1, 3, 5);
+            moon.Insert(new MoonNote(TICKS(12), (int) EliteDrumPad.Snare));
+        });
+        var engine = Create(chart);
+        Play(engine, (0, EliteDrumsAction.EliteLeftCrash), (time, action));
+        Assert.That(Members(chart, EliteDrumPad.LeftCrash).Skip(1).Where(n => n.Time < time).All(n => n.WasMissed), Is.True,
+            "Resumed physical input must not retroactively repair already missed members.");
+        Assert.That(engine.EngineStats.Overhits, Is.EqualTo(expectedOverhits),
+            "A missed member can break combo, but the physical lane still protects later in-lane inputs.");
+    }
+
     [TestCase(0.0, 8.0, TestName = "BothCrashes_TwoMeasuresAligned_WithNonLaneKicks")]
     [TestCase(0.125, 8.125, TestName = "BothCrashes_TwoMeasuresOffsetByThirtySecond_WithNonLaneKicks")]
     [TestCase(1.0, 7.0, TestName = "BothCrashes_NestedAcrossMeasures_WithNonLaneKicks")]
@@ -180,14 +227,21 @@ public sealed class NativeEliteConcurrentLaneTests
             .Concat(kicks.Select(note => (note.Time, EliteDrumsAction.Kick))).ToArray();
         var engine = Create(chart);
         Play(engine, strikes);
+        double expiry = double.NegativeInfinity;
+        EliteDrumsAction? previous = null;
+        foreach (var (time, action) in strikes.Where(s => s.Item2 != EliteDrumsAction.Kick).OrderBy(s => s.Item1))
+        {
+            if (action == previous) continue;
+            expiry = time + EnginePreset.Default.Drums.HitWindow.LaneAutohitWindow;
+            previous = action;
+        }
         Assert.Multiple(() =>
         {
-            Assert.That(left.Take(35).All(note => note.WasHit), Is.True, Outcomes(chart));
-            Assert.That(right.Take(35).All(note => note.WasHit), Is.True, Outcomes(chart));
-            Assert.That(left.Skip(35).All(note => note.WasMissed), Is.True, Outcomes(chart));
-            Assert.That(right.Skip(35).All(note => note.WasMissed), Is.True, Outcomes(chart));
+            foreach (var note in left.Concat(right))
+                Assert.That(note.WasHit, Is.EqualTo(note.Time <= expiry), Outcomes(chart));
             Assert.That(kicks.All(note => note.WasHit), Is.True, Outcomes(chart));
-            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(35 * 2 + kicks.Length));
+            Assert.That(engine.EngineStats.NotesHit,
+                Is.EqualTo(left.Concat(right).Count(n => n.Time <= expiry) + kicks.Length));
             Assert.That(engine.EngineStats.Overhits, Is.Zero);
         });
     }
@@ -309,10 +363,10 @@ public sealed class NativeEliteConcurrentLaneTests
         {
             Assert.That(kicks.Where(note => note.IsDoubleKick == strikeTwoX).All(note => note.WasHit), Is.True);
             Assert.That(engine.EngineStats.TotalNotes, Is.EqualTo(kicks.Length));
-            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(
-                kicks.Count(note => note.IsDoubleKick == strikeTwoX)));
-            Assert.That(kicks.Where(note => note.IsDoubleKick != strikeTwoX).All(note => note.WasMissed),
-                Is.True, "Unplayed kick members must not be fabricated by lane continuation.");
+            int expectedHits = strikeTwoX ? kicks.Count(note => note.IsDoubleKick) : kicks.Length;
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(expectedHits));
+            Assert.That(kicks.Count(note => note.WasMissed), Is.EqualTo(kicks.Length - expectedHits),
+                "Entered kick lanes sustain nearby 2x notes; skipping the entry cannot start continuation.");
             Assert.That(engine.EngineStats.Overhits, Is.Zero);
         });
     }
@@ -343,7 +397,7 @@ public sealed class NativeEliteConcurrentLaneTests
     }
 
     [Test]
-    public void BonhamTripletTwoTomsAndKickLanesRunTogether()
+    public void SimultaneousTwoTomsAndKickLanesRunTogether()
     {
         var chart = Load(moon =>
         {

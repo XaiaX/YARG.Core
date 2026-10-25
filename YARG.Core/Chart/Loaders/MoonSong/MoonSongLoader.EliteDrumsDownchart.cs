@@ -272,6 +272,7 @@ namespace YARG.Core.Chart
             {
                 if (!EliteDrumAuthoredLanePhraseTypes.IsAuthoredHandLane(phrase.Type)) continue;
 
+                bool inclusive = EliteDrumNativeAuthoredLaneRecord.IncludesEnd(phrase, eliteDrumsDifficulty.Phrases);
                 var members = new List<EliteDrumSourceDefinition>();
                 var authoredPad = (int) EliteDrumAuthoredLanePhraseTypes.ToAuthoredPad(phrase.Type);
                 foreach (var chord in eliteDrumsDifficulty.Notes)
@@ -282,14 +283,14 @@ namespace YARG.Core.Chart
                         if (source is null) continue;
                         if (source.Pad != authoredPad) continue;
 
-                        // Half-open authored interval: start included, end excluded, so a
-                        // gem on the boundary tick belongs to a touching subsequent phrase.
-                        if (source.StartTick < phrase.Tick || source.StartTick >= phrase.TickEnd) continue;
+                        // Only a touching same-pad successor takes ownership of the endpoint.
+                        if (source.StartTick < phrase.Tick || source.StartTick > phrase.TickEnd ||
+                            source.StartTick == phrase.TickEnd && !inclusive) continue;
                         members.Add(source);
                     }
                 }
 
-                authored.Add(new(phrase.Type, phrase.Tick, phrase.TickEnd, members));
+                authored.Add(new(phrase.Type, phrase.Tick, phrase.TickEnd, members, inclusive));
             }
 
             return authored;

@@ -126,7 +126,7 @@ namespace YARG.Core.UnitTests.Chart
         }
 
         [Test]
-        public void AuthoredLanePhraseMembershipIsHalfOpenAndSourceKeyed()
+        public void AuthoredLanePhraseMembershipSupportsInclusiveAndExclusiveEndsAndIsSourceKeyed()
         {
             var insideStart = Source("start", 0, 10);
             var insideMiddle = Source("middle", 1, 15);
@@ -138,7 +138,10 @@ namespace YARG.Core.UnitTests.Chart
             {
                 Assert.That(phrase.Contains(10), Is.True);
                 Assert.That(phrase.Contains(19), Is.True);
-                Assert.That(phrase.Contains(20), Is.False);
+                Assert.That(phrase.Contains(20), Is.True);
+                var touching = new EliteDrumAuthoredLanePhrase(PhraseType.EliteDrums_SnareLane, 10, 20,
+                    new[] { insideStart, insideMiddle }, endInclusive: false);
+                Assert.That(touching.Contains(20), Is.False);
 
                 Assert.That(phrase.ContainsOrigin(new EliteDrumConversionOrigin(insideStart)), Is.True);
                 // Flam expansions of a member source match the same membership.

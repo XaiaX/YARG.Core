@@ -40,7 +40,7 @@ namespace YARG.Core.Engine.Drums.Engines
 
                 if (PadHit != null)
                 {
-                    SubmitLaneNote((int) PadHit);
+                    SubmitLaneNote((int) PadHit, gameInput.Time);
                 }
             }
         }
@@ -229,6 +229,7 @@ namespace YARG.Core.Engine.Drums.Engines
             TraceEliteLane($"update time={time:F6} tick={CurrentTick} input={(PadHit.HasValue ? "yes" : "no")} " +
                 $"action={Action?.ToString() ?? "none"} pad={PadHit?.ToString() ?? "none"} bot={IsBot} " +
                 $"barrier={runtime.BarrierPhase(time)} pending={runtime.PendingCount} terminal={runtime.TerminalCount}");
+            if (PadHit is { } cadencePad) runtime.RecordHandInput(cadencePad, time);
             CommitEliteFill(runtime.ResolveCadence(time), "cadence");
             CommitEliteFill(ExpireEliteFill(time), "expiry");
 

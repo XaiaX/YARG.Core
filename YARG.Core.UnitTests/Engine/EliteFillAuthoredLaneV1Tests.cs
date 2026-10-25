@@ -36,6 +36,21 @@ public sealed class EliteFillAuthoredLaneV1Tests
         => new(lanes);
 
     [Test]
+    public void NarrowOrdinaryWindowKeepsDeadlineClassificationOrdered()
+    {
+        var start = Note(1, FourLaneDrumPad.GreenDrum, laneStart: true);
+        var end = Note(1.2, FourLaneDrumPad.GreenDrum, laneEnd: true);
+        var middle1 = Note(1.05, FourLaneDrumPad.GreenDrum);
+        var middle2 = Note(1.1, FourLaneDrumPad.GreenDrum);
+        var members = new[] { start, middle1, middle2, end };
+        var scheduler = new EliteFillRuntimeScheduler(members, EliteFillPolicyV1.Default,
+            _ => (-.02, .02), Map(Lane("green", members)));
+        var deadline = scheduler.DeadlineAt(start);
+        Assert.That(deadline.EntryUntil, Is.LessThanOrEqualTo(deadline.GraceUntil));
+        Assert.That(deadline.Classify(1.03), Is.EqualTo(EliteFillWindow.Outside));
+    }
+
+    [Test]
     public void LateInputRefresh_DoesNotEraseCoverageForEarlierUnresolvedMember()
     {
         var start = Note(1.0, FourLaneDrumPad.GreenDrum, laneStart: true);

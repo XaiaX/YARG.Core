@@ -1,5 +1,7 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using YARG.Core.Chart;
 
 namespace YARG.Core.Engine.Drums
@@ -25,11 +27,18 @@ namespace YARG.Core.Engine.Drums
         private readonly Dictionary<EliteDrumNote, List<Lane>> _members = new();
         private readonly List<Lane> _lanes = new();
         private readonly double _laneAutohitWindow;
+        private readonly double _laneProximityProtectionWindow;
         private EliteFillBarrierWindow? _barrier;
-        public NativeEliteAuthoredLaneMap(InstrumentDifficulty<EliteDrumNote> chart, double laneAutohitWindow)
+        private readonly AuthoredHandCadence _handCadence;
+        public NativeEliteAuthoredLaneMap(InstrumentDifficulty<EliteDrumNote> chart, double laneAutohitWindow,
+            double laneProximityProtectionWindow,
+            Func<EliteDrumNote, (double FrontEnd, double BackEnd)> ordinaryWindow)
         {
             if (double.IsNaN(laneAutohitWindow) || double.IsInfinity(laneAutohitWindow) || laneAutohitWindow < 0)
                 throw new ArgumentOutOfRangeException(nameof(laneAutohitWindow));
+            if (double.IsNaN(laneProximityProtectionWindow) || double.IsInfinity(laneProximityProtectionWindow) || laneProximityProtectionWindow < 0)
+                throw new ArgumentOutOfRangeException(nameof(laneProximityProtectionWindow));
+            _laneProximityProtectionWindow = laneProximityProtectionWindow;
             _laneAutohitWindow = laneAutohitWindow;
             var sourceNotes = new Dictionary<EliteDrumSourceDefinition, EliteDrumNote>();
             foreach (var parent in chart.Notes)
@@ -46,7 +55,7 @@ namespace YARG.Core.Engine.Drums
                 foreach (var source in record.MemberSources)
                 {
                     if (source is null || source.Pad != (int) record.AuthoredPad ||
-                        source.StartTick < record.StartTick || source.StartTick >= record.EndTick)
+                        !record.ContainsTick(source.StartTick))
                     {
                         malformed = true;
                         break;
@@ -70,6 +79,10 @@ namespace YARG.Core.Engine.Drums
                     lanes.Add(lane);
                 }
             }
+            _handCadence = new AuthoredHandCadence(_lanes.Where(l => IsHand(l.Pad))
+                .Select(l => new AuthoredHandCadence.Lane(l.Pad, l.Members.Select(n => n.Time).ToArray(),
+                    l.Members[0].Time + ordinaryWindow(l.Members[0]).FrontEnd,
+                    l.Members[^1].Time + ordinaryWindow(l.Members[^1]).BackEnd)));
         }
 
         public void Reset()
@@ -81,6 +94,15 @@ namespace YARG.Core.Engine.Drums
                 lane.EntryTime = double.NegativeInfinity;
             }
             _barrier = null;
+            _handCadence.Reset();
+        }
+
+        private static bool IsHand(int pad) => pad != (int)EliteDrumNote.EliteDrumPad.Kick &&
+            pad != (int)EliteDrumNote.EliteDrumPad.HatPedal;
+
+        public void Input(int pad, double time)
+        {
+            if (IsHand(pad)) _handCadence.Input(pad, time, _laneAutohitWindow);
         }
 
         public void LatchBarrier(double time)
@@ -110,15 +132,25 @@ namespace YARG.Core.Engine.Drums
                 // An active lane accepts any strike on its physical pad, regardless of
                 // articulation or the continuation timer. Neither a prior off-pad fault
                 // nor a lapsed timer turns an in-lane strike into an overhit.
-                if (!lane.Entered || lane.Pad != pad || lane.Members[^1].WasMissed ||
-                    time < lane.EntryTime ||
-                    time > EliteFillPolicyV1.Default.DeadlineAt(lane.Members[^1].Time).GraceUntil ||
-                    (lane.Members[^1].WasHit && time > lane.Members[^1].Time))
+                // Miss() invalidates scoring continuation, not the protection established
+                // at entry. EntryTime persists until Reset(); protection is still bounded
+                // by the final member deadline, even when that member was missed.
+                if (double.IsNegativeInfinity(lane.EntryTime) || lane.Pad != pad ||
+                    time < lane.EntryTime)
+                    continue;
+                if (lane.Members[^1].WasHit && time > lane.Members[^1].Time)
+                {
+                    // Match classic drums' post-lane leniency without refreshing
+                    // scoring cadence or admitting inputs on unrelated pads.
+                    protectedStrike |= time - lane.Members[^1].Time < _laneProximityProtectionWindow;
+                    continue;
+                }
+                if (time > EliteFillPolicyV1.Default.DeadlineAt(lane.Members[^1].Time).GraceUntil)
                     continue;
                 // Fault barriers still prevent old lanes from auto-hitting notes;
                 // protection from overhits is independent of automatic scoring.
-                if (_barrier is not { } barrier || barrier.At(time) == EliteFillBarrierPhase.Clear ||
-                    lane.EntryTime >= barrier.TriggerTimestamp)
+                if (lane.Entered && (_barrier is not { } barrier || barrier.At(time) == EliteFillBarrierPhase.Clear ||
+                    lane.EntryTime >= barrier.TriggerTimestamp))
                     lane.LastRefresh = time;
                 protectedStrike = true;
             }
@@ -130,17 +162,14 @@ namespace YARG.Core.Engine.Drums
             if (!_members.TryGetValue(note, out var lanes)) return;
             foreach (var lane in lanes)
             {
-                lane.Entered = false;
+                // A miss breaks combo, but subsequent physical inputs can recover cadence.
                 lane.LastRefresh = double.NegativeInfinity;
             }
         }
 
         public bool CanContinue(EliteDrumNote note, double judgmentTime)
         {
-            // Authored kick membership protects real pedal strikes; it never
-            // manufactures a kick (including an unplayed Expert+ 2x gem).
-            if (note.Pad == (int) EliteDrumNote.EliteDrumPad.Kick ||
-                !_members.TryGetValue(note, out var lanes)) return false;
+            if (!_members.TryGetValue(note, out var lanes)) return false;
             foreach (var lane in lanes)
             {
                 if (ReferenceEquals(lane.Members[0], note) || !lane.Entered ||
@@ -148,23 +177,34 @@ namespace YARG.Core.Engine.Drums
                 if (_barrier is { } barrier && barrier.At(judgmentTime) != EliteFillBarrierPhase.Clear &&
                     lane.EntryTime < barrier.TriggerTimestamp) continue;
                 double expiry = lane.LastRefresh + _laneAutohitWindow;
-                if (_laneAutohitWindow > 0 && note.Time <= expiry && judgmentTime <= expiry)
+                if (_laneAutohitWindow > 0 && (IsHand(lane.Pad)
+                    ? _handCadence.Covers(lane.Pad, note.Time)
+                    : note.Time <= expiry && (lane.Pad == (int) EliteDrumNote.EliteDrumPad.Kick ||
+                        judgmentTime <= expiry)))
                     return true;
             }
             return false;
         }
 
-        public double? NextContinuationDeadline(EliteDrumNote note)
+        public double? NextContinuationDeadline(EliteDrumNote note, double handDeadline)
         {
-            if (note.Pad == (int) EliteDrumNote.EliteDrumPad.Kick ||
-                !_members.TryGetValue(note, out var lanes)) return null;
+            if (!_members.TryGetValue(note, out var lanes)) return null;
             double? earliest = null;
             foreach (var lane in lanes)
             {
                 if (ReferenceEquals(lane.Members[0], note) || !lane.Entered ||
                     lane.Members[^1].WasHit || lane.Members[^1].WasMissed) continue;
+                if (IsHand(lane.Pad))
+                {
+                    if (_handCadence.Covers(lane.Pad, note.Time)) return handDeadline;
+                    continue;
+                }
                 double expiry = lane.LastRefresh + _laneAutohitWindow;
                 if (_laneAutohitWindow <= 0 || note.Time > expiry) continue;
+                // Kicks are an independent single-pad tremolo. Judge coverage at the
+                // note timestamp, after allowing its ordinary physical hit window.
+                // Only real kick strikes refresh this lane's clock; hands cannot.
+                if (lane.Pad == (int) EliteDrumNote.EliteDrumPad.Kick) return handDeadline;
                 double deadline = Math.Min(note.Time + EliteFillPolicyV1.Default.Parameters.CadenceStepSeconds,
                     expiry);
                 if (earliest is null || deadline < earliest) earliest = deadline;

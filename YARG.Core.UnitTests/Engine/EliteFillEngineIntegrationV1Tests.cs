@@ -531,11 +531,11 @@ public sealed class EliteFillEngineIntegrationV1Tests
     }
 
     [Test]
-    public void OverlappingLanes_GB_EntryOnlyInputs_ThenSilence_MissesAllLaterMembers()
+    public void OverlappingLanes_GB_EntryOnlyInputs_ThenSilence_ExpiresAfterSharedCoverage()
     {
         // Both authored lane entries are hit with real input, then complete silence
-        // across every remaining frozen deadline. Authored lane cadence must not
-        // adjudicate any later member: they expire as misses with no unprompted score.
+        // after entry. The shared window covers the next green member, then
+        // expires; assisted hits must not extend it again.
         var (engine, notes) = Build(new[]
         {
             NoteSpec.Lane(1.0, FourLaneDrumPad.GreenDrum, start: true),
@@ -556,13 +556,13 @@ public sealed class EliteFillEngineIntegrationV1Tests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(overhits, Is.Zero);
-            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(2),
-                "only the two really input entries score");
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(3),
+                "two entries and one member covered by the shared window score");
             Assert.That(new[] { notes.Notes[0], notes.Notes[1] }.All(note => note.WasHit), Is.True);
-            Assert.That(notes.Notes.Skip(2).All(note => !note.WasHit), Is.True,
-                "no later member is auto-hit by lane cadence coverage");
-            Assert.That(notes.Notes.Skip(2).All(note => note.WasMissed), Is.True,
-                "every later member misses at its frozen deadline");
+            Assert.That(notes.Notes.Skip(3).All(note => !note.WasHit), Is.True,
+                "no member beyond shared coverage is auto-hit");
+            Assert.That(notes.Notes.Skip(3).All(note => note.WasMissed), Is.True,
+                "every member beyond shared coverage misses at its frozen deadline");
         }
     }
 
@@ -1094,6 +1094,25 @@ public sealed class EliteFillEngineIntegrationV1Tests
     }
 
     [Test]
+    public void ThreeAuthoredLanesDoubleStrokesRetainCombo()
+    {
+        var pads = new[] { FourLaneDrumPad.GreenDrum, FourLaneDrumPad.BlueDrum, FourLaneDrumPad.YellowDrum };
+        var actions = new[] { DrumsAction.GreenDrum, DrumsAction.BlueDrum, DrumsAction.YellowDrum };
+        var specs = Enumerable.Range(0, 48).Select(i => NoteSpec.Lane(1 + i * 0.05,
+            pads[i % 3], start: i < 3, end: i >= 45)).ToList();
+        specs.Add(NoteSpec.At(7, FourLaneDrumPad.RedDrum));
+        var (engine, notes) = Build(specs, authoredLanes: Enumerable.Range(0, 3)
+            .Select(pad => Enumerable.Range(0, 16).Select(i => i * 3 + pad).ToArray()).ToArray());
+        for (int i = 0; i < 48; i++)
+        {
+            Hit(engine, 1 + i * 0.05, actions[i % 3]);
+            Hit(engine, 1 + i * 0.05 + 0.02, actions[i % 3]);
+        }
+        Assert.That(engine.EngineStats.Overhits, Is.Zero);
+        Assert.That(notes.Notes.Take(48).All(n => n.WasHit), Is.True);
+    }
+
+    [Test]
     public void ThreeAuthoredLanes_GBY_GBYRepeating_FastNonliteralSchedule()
     {
         // Literal GBGY-repeating chart (G B G Y / B G Y G / B Y by pad cycles), one
@@ -1194,9 +1213,10 @@ public sealed class EliteFillEngineIntegrationV1Tests
         using (Assert.EnterMultipleScope())
         {
             Assert.That(silentOverhits, Is.Zero);
-            Assert.That(silent.Engine.EngineStats.NotesHit, Is.EqualTo(4),
-                "no unprompted scoring: only the four real entries hit");
-            Assert.That(silent.Notes.Notes.Skip(4).All(note => note.WasMissed), Is.True);
+            Assert.That(silent.Engine.EngineStats.NotesHit, Is.EqualTo(6),
+                "last input at 1.24 covers chart times through 1.40; silence cannot refresh that expiry");
+            Assert.That(silent.Notes.Notes.Take(6).All(note => note.WasHit), Is.True);
+            Assert.That(silent.Notes.Notes.Skip(6).All(note => note.WasMissed), Is.True);
         }
 
         // Control 2: nominal GRBY repeating schedule — every note hit exactly, in order.

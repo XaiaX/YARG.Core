@@ -201,21 +201,23 @@ namespace YARG.Core.Chart
         public PhraseType LaneType { get; }
         public uint StartTick { get; }
         public uint EndTick { get; }
+        public bool EndInclusive { get; }
         /// <summary>Authored gems inside the phrase interval; every conversion expansion matches.</summary>
         public IReadOnlyList<EliteDrumSourceDefinition> MemberSources => _memberSources;
 
         public EliteDrumAuthoredLanePhrase(PhraseType laneType, uint startTick, uint endTick,
-            IEnumerable<EliteDrumSourceDefinition> memberSources)
+            IEnumerable<EliteDrumSourceDefinition> memberSources, bool endInclusive = true)
         {
             if (endTick < startTick) throw new ArgumentOutOfRangeException(nameof(endTick));
             LaneType = laneType;
             StartTick = startTick;
             EndTick = endTick;
+            EndInclusive = endInclusive;
             _memberSources = (memberSources ?? throw new ArgumentNullException(nameof(memberSources))).Distinct().ToArray();
         }
 
-        /// <summary>The phrase interval is half-open: start included, end excluded.</summary>
-        public bool Contains(uint tick) => StartTick <= tick && tick < EndTick;
+        /// <summary>A touching same-pad successor owns the shared endpoint; otherwise the end is included.</summary>
+        public bool Contains(uint tick) => StartTick <= tick && (tick < EndTick || EndInclusive && tick == EndTick);
 
         /// <summary>Whether an emitted conversion occurrence belongs to this authored phrase instance.</summary>
         public bool ContainsOrigin(EliteDrumConversionOrigin? origin) =>

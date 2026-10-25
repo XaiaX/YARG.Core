@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -31,6 +32,8 @@ namespace YARG.Core.Engine.Drums
         private readonly bool[] _committed;
         private readonly bool[] _outcomes;
         private readonly EliteFillPolicyV1 _policy;
+        private readonly AuthoredHandCadence _handCadence;
+        private readonly bool _useOrdinaryLaneDeadlines;
 
         // Authored lane identity (nullable: present only for converted Elite charts).
         // _noteLanes[i] lists every authored lane that owns _physicalNotes[i]; coverage
@@ -160,6 +163,27 @@ namespace YARG.Core.Engine.Drums
             _outcomes = new bool[physical.Count];
 
             BuildAuthoredLanes(authoredLaneMap, out _noteLanes, out _authoredLanes, out _authoredMembership);
+
+            _useOrdinaryLaneDeadlines = ordinaryWindow is not null;
+            if (ordinaryWindow is not null)
+            {
+                for (int i = 0; i < physical.Count; i++)
+                {
+                    var note = physical[i];
+                    if (!_authoredMembership[i] || note.Pad == (int)FourLaneDrumPad.Kick) continue;
+                    var deadline = _deadlines[i];
+                    double end = note.Time + ordinaryWindow(note).BackEnd;
+                    _deadlines[i] = new EliteFillDeadline(deadline.AnchorTimestamp, Math.Min(deadline.EntryUntil, end),
+                        end, end + _policy.Parameters.PendingCommitDelaySeconds);
+                }
+            }
+
+            _handCadence = new AuthoredHandCadence(_authoredLanes
+                .SelectMany(l => l.Members.GroupBy(n => n.Pad))
+                .Where(g => g.Key != (int)FourLaneDrumPad.Kick && g.Count() >= 2)
+                .Select(g => new AuthoredHandCadence.Lane(g.Key, g.Select(n => n.Time).OrderBy(t => t).ToArray(),
+                    g.Min(n => n.Time + (ordinaryWindow?.Invoke(n).FrontEnd ?? 0)),
+                    g.Max(n => n.Time + (ordinaryWindow?.Invoke(n).BackEnd ?? 0)))));
 
             // Precompute per-lane protection metadata: the distinct member pads and the
             // frozen grace deadline of the lane's final member (the lane's temporal
@@ -301,6 +325,12 @@ namespace YARG.Core.Engine.Drums
             }
         }
 
+        public void RecordHandInput(int pad, double timestamp)
+        {
+            if (pad != (int)FourLaneDrumPad.Kick)
+                _handCadence.Input(pad, timestamp, _laneAutohitWindowSeconds);
+        }
+
         public bool IsCadenceCovered(DrumNote note)
         {
             if (note is null || !_ordinals.TryGetValue(note, out var ordinal)) return false;
@@ -317,7 +347,8 @@ namespace YARG.Core.Engine.Drums
                     if (!_laneHasInput[laneId] || !IsEnteredLane(laneId)
                         || !AutomaticContinuationAllowed(note, _laneLastInput[laneId])) continue;
                     var expiry = _laneLastInput[laneId] + _laneAutohitWindowSeconds;
-                    if (note != _authoredLanes[laneId].StartNote && note.Time <= expiry)
+                    if (note != _authoredLanes[laneId].StartNote &&
+                        (note.Pad == (int)FourLaneDrumPad.Kick ? note.Time <= expiry : _handCadence.Covers(note.Pad, note.Time)))
                         return true;
                 }
                 return false;
@@ -353,7 +384,9 @@ namespace YARG.Core.Engine.Drums
             foreach (var note in _physicalNotes)
             {
                 if (!AutomaticContinuationAllowed(note, timestamp) || !IsCadenceCovered(note)
-                    || timestamp < note.Time + _policy.Parameters.CadenceStepSeconds)
+                    || (_useOrdinaryLaneDeadlines && note.Pad != (int)FourLaneDrumPad.Kick && _authoredMembership[_ordinals[note]]
+                        ? timestamp <= _deadlines[_ordinals[note]].GraceUntil
+                        : timestamp < note.Time + _policy.Parameters.CadenceStepSeconds))
                     continue;
 
                 if (TryAdjudicate(note, true, timestamp, out var noteCommits))
@@ -431,6 +464,7 @@ namespace YARG.Core.Engine.Drums
         {
             EliteFillParameterValidation.RequireTimestamp(timestamp);
             if (hitNote is null || !_ordinals.TryGetValue(hitNote, out var ordinal)) return;
+            RecordHandInput(hitNote.Pad, timestamp);
 
             foreach (var laneId in _noteLanes[ordinal])
             {
@@ -456,6 +490,7 @@ namespace YARG.Core.Engine.Drums
         public void RecordAuthoredLanePadInput(int pad, double timestamp)
         {
             EliteFillParameterValidation.RequireTimestamp(timestamp);
+            RecordHandInput(pad, timestamp);
             for (var laneId = 0; laneId < _authoredLanes.Length; laneId++)
             {
                 if (!_lanePads[laneId].Contains(pad) || !IsEnteredLaneActive(laneId, timestamp)) continue;
@@ -552,6 +587,7 @@ namespace YARG.Core.Engine.Drums
             TerminalCount = 0;
             CommittedCount = 0;
             _nextCommit = 0;
+            _handCadence.Reset();
             Array.Clear(_laneLastInput, 0, _laneLastInput.Length);
             Array.Clear(_laneHasInput, 0, _laneHasInput.Length);
             Array.Clear(_laneEntryTime, 0, _laneEntryTime.Length);
