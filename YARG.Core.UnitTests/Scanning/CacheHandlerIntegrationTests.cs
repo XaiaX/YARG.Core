@@ -459,7 +459,7 @@ public sealed class CacheHandlerIntegrationTests
     }
 
     [Test]
-    public void SourceFingerprintsDetectContentChanges()
+    public void ExplicitScanDetectsContentChangesWhileQuickStartupRetainsSnapshot()
     {
         string root = AddUpdate("selected", "Selected", "PART GUITAR", true);
         string path = Path.Combine(root, RBCONEntry.SONGUPDATES_DTA);
@@ -469,9 +469,157 @@ public sealed class CacheHandlerIntegrationTests
         File.Delete(midi);
         WriteMidi(midi, "PART GUITAR", false);
         File.SetLastWriteTimeUtc(midi, time);
-        var after = SuccessfulEntry(Explicit(SongScanScope.All, path, quick: true));
+        var cached = SuccessfulEntry(Explicit(SongScanScope.All, path, quick: true));
+        Assert.That(cached.Hash, Is.EqualTo(before.Hash));
+        var after = SuccessfulEntry(Explicit(SongScanScope.All, path));
         Assert.That(after[Instrument.FiveFretGuitar].IsActive(), Is.False);
         Assert.That(after.Hash, Is.Not.EqualTo(before.Hash));
+    }
+
+    [Test]
+    public void DiscardedCandidateDoesNotPublishNewHashAssociations()
+    {
+        SuccessfulEntry(Explicit(SongScanScope.All));
+        string root = AddUpdate("selected", "Selected", "PART GUITAR", true);
+        string path = Path.Combine(root, RBCONEntry.SONGUPDATES_DTA);
+        var observed = new List<string>();
+        CacheHandler.ScanObservation = observed.Add;
+        try
+        {
+            using (var candidate = Explicit(SongScanScope.Updates, path, deferred: true))
+            {
+                SuccessfulEntry(candidate);
+                Assert.That(observed.Count(x => x.StartsWith("legacy-hash:")), Is.EqualTo(1));
+            }
+            observed.Clear();
+            SuccessfulEntry(Explicit(SongScanScope.Updates, path));
+            Assert.That(observed.Count(x => x.StartsWith("legacy-hash:")), Is.EqualTo(1),
+                "The uncommitted candidate must not seed the next scan's identity cache.");
+        }
+        finally { CacheHandler.ScanObservation = null; }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void MissingOrDamagedHashSnapshotDoesNotInvalidateExistingLibrary(bool damaged)
+    {
+        var original = SuccessfulEntry(Explicit(SongScanScope.All));
+        byte[] payload;
+        string marker;
+        int version;
+        Newtonsoft.Json.Linq.JObject inventory;
+        using (var reader = new BinaryReader(File.OpenRead(_cachePath)))
+        {
+            marker = reader.ReadString(); version = reader.ReadInt32();
+            inventory = Newtonsoft.Json.Linq.JObject.Parse(reader.ReadString());
+            payload = reader.ReadBytes(reader.ReadInt32());
+        }
+        if (damaged) inventory["LegacySongHashes"] = "invalid cache snapshot";
+        else inventory.Remove("LegacySongHashes");
+        using (var writer = new BinaryWriter(File.Create(_cachePath)))
+        {
+            writer.Write(marker); writer.Write(version); writer.Write(inventory.ToString());
+            writer.Write(payload.Length); writer.Write(payload);
+        }
+        Assert.That(SuccessfulEntry(Explicit(SongScanScope.All, quick: true)).Hash, Is.EqualTo(original.Hash));
+        var observed = new List<string>();
+        CacheHandler.ScanObservation = observed.Add;
+        try
+        {
+            Assert.That(SuccessfulEntry(Explicit(SongScanScope.All)).Hash, Is.EqualTo(original.Hash));
+            Assert.That(observed.Count(x => x.StartsWith("legacy-hash:")), Is.EqualTo(1));
+        }
+        finally { CacheHandler.ScanObservation = null; }
+    }
+
+    [Test]
+    public void MetadataOnlyRebuildReusesPersistedLegacyHashButMidiChangeRehashes()
+    {
+        string root = AddUpdate("selected", "Selected", "PART GUITAR", true);
+        string path = Path.Combine(root, RBCONEntry.SONGUPDATES_DTA);
+        var observed = new List<string>();
+        CacheHandler.ScanObservation = observed.Add;
+        try
+        {
+            var original = SuccessfulEntry(Explicit(SongScanScope.All, path));
+            Assert.That(observed.Count(x => x.StartsWith("legacy-hash:")), Is.EqualTo(1));
+            observed.Clear();
+            File.WriteAllText(path, Dta("Renamed"));
+            var renamed = SuccessfulEntry(Explicit(SongScanScope.Updates, path));
+            Assert.That(renamed.Name.ToString(), Is.EqualTo("Renamed"));
+            Assert.That(renamed.Hash, Is.EqualTo(original.Hash));
+            Assert.That(observed.Any(x => x.StartsWith("legacy-hash:")), Is.False);
+            observed.Clear();
+            string midi = Path.Combine(root, NODE, NODE + "_update.mid");
+            long originalLength = new FileInfo(midi).Length;
+            var originalTimestamp = File.GetLastWriteTimeUtc(midi);
+            var midiFile = MidiFile.Read(midi);
+            midiFile.Chunks.OfType<TrackChunk>().SelectMany(track => track.Events).OfType<NoteOnEvent>()
+                .Single().Velocity = (Melanchall.DryWetMidi.Common.SevenBitNumber) 99;
+            File.Delete(midi);
+            midiFile.Write(midi);
+            File.SetLastWriteTimeUtc(midi, originalTimestamp);
+            Assert.That(new FileInfo(midi).Length, Is.EqualTo(originalLength));
+            var changed = SuccessfulEntry(Explicit(SongScanScope.Updates, path));
+            Assert.That(changed.Hash, Is.Not.EqualTo(original.Hash));
+            Assert.That(observed.Count(x => x.StartsWith("legacy-hash:")), Is.EqualTo(1));
+        }
+        finally { CacheHandler.ScanObservation = null; }
+    }
+
+    [Test]
+    public void UpdateMidiIsValidatedOnceBeforeFinalVerification()
+    {
+        string root = AddUpdate("selected", "Selected", "PART GUITAR", true);
+        string midi = Path.Combine(root, NODE, NODE + "_update.mid");
+        int validations = 0;
+        CacheHandler.ScanObservation = operation =>
+        {
+            var progress = CacheHandler.SourceValidation;
+            if (progress?.File == midi && progress.Phase.Contains("Validating source assets") && progress.Completed == 0)
+                validations++;
+        };
+        try
+        {
+            SuccessfulEntry(Explicit(SongScanScope.All, Path.Combine(root, RBCONEntry.SONGUPDATES_DTA)));
+            Assert.That(validations, Is.EqualTo(1));
+        }
+        finally { CacheHandler.ScanObservation = null; }
+    }
+
+    [Test]
+    public void QuickCacheDoesNotRoundTripPayloadThroughTemporaryFile()
+    {
+        SuccessfulEntry(Explicit(SongScanScope.All));
+        int temporaryFiles = 0;
+        CacheHandler.BeforeTemporaryDelete = _ => temporaryFiles++;
+        try
+        {
+            SuccessfulEntry(Explicit(SongScanScope.All, quick: true));
+            Assert.That(temporaryFiles, Is.Zero);
+        }
+        finally { CacheHandler.BeforeTemporaryDelete = null; }
+    }
+
+    [Test]
+    public void CachedSongRejectsSameLengthMidiEditBeforePlayback()
+    {
+        string root = AddUpdate("selected", "Selected", "PART GUITAR", true);
+        string path = Path.Combine(root, RBCONEntry.SONGUPDATES_DTA);
+        SuccessfulEntry(Explicit(SongScanScope.All, path));
+        string midi = Path.Combine(root, NODE, NODE + "_update.mid");
+        var time = File.GetLastWriteTimeUtc(midi);
+        byte[] bytes = File.ReadAllBytes(midi);
+        int note = Array.FindIndex(bytes, value => value == 0x90);
+        Assert.That(note, Is.GreaterThan(0));
+        bytes[note + 2] = 99; // Same-size velocity edit, preserving the file timestamp.
+        File.WriteAllBytes(midi, bytes);
+        File.SetLastWriteTimeUtc(midi, time);
+        var cached = SuccessfulEntry(Explicit(SongScanScope.All, path, quick: true));
+        Assert.That(cached.SupplementalValidation!(), Is.False);
+        Assert.That(cached.LoadChart(), Is.Null);
+        var refreshed = SuccessfulEntry(Explicit(SongScanScope.All, path));
+        Assert.That(refreshed.SupplementalValidation!(), Is.True);
     }
 
     [Test]
@@ -726,6 +874,35 @@ public sealed class CacheHandlerIntegrationTests
             result?.Dispose();
             foreach (string path in Directory.GetFiles(_root, "*.tmp")) File.Delete(path);
         }
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void LibraryScanUsesSummaryOrFallbackAndHashesOriginalBytes(bool unsupportedMetadata)
+    {
+        string updateRoot = AddUpdate("selected", "Selected", "PART GUITAR", true);
+        string updatePath = Path.Combine(updateRoot, NODE, NODE + "_update.mid");
+        byte[] updateBytes = File.ReadAllBytes(updatePath);
+        if (unsupportedMetadata)
+        {
+            using var midi = MidiScanCompositionTests.Midi();
+            updateBytes = midi.ReadOnlySpan.ToArray();
+            updateBytes[24] = 0x7f; // Valid sequencer-specific metadata, outside summary eligibility.
+            File.WriteAllBytes(updatePath, updateBytes);
+        }
+        byte[] baseBytes = File.ReadAllBytes(Path.Combine(_library, "songs", NODE, NODE + ".mid"));
+        var expectedHash = HashWrapper.Hash(baseBytes.Concat(updateBytes).ToArray());
+        var observed = new List<string>();
+        CacheHandler.ScanObservation = observed.Add;
+        try
+        {
+            var entry = SuccessfulEntry(Explicit(SongScanScope.All, Path.Combine(updateRoot, RBCONEntry.SONGUPDATES_DTA)));
+            Assert.That(entry.Hash, Is.EqualTo(expectedHash));
+            Assert.That(entry[Instrument.FiveFretGuitar].IsActive(), Is.True);
+            Assert.That(observed, Does.Contain((unsupportedMetadata ? "scan-fallback:" : "scan-summary:") + NODE));
+            Assert.That(observed, Does.Not.Contain((unsupportedMetadata ? "scan-summary:" : "scan-fallback:") + NODE));
+        }
+        finally { CacheHandler.ScanObservation = null; }
     }
 
     private SongCache ScanAll(bool quick, bool cumulative) => CacheHandler.RunScan(quick, _cachePath,

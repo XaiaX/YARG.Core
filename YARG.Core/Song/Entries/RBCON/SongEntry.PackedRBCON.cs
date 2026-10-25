@@ -1,4 +1,5 @@
-﻿using System;
+// pattern: Mixed (needs refactoring)
+using System;
 using System.Collections.Generic;
 using System.IO;
 using YARG.Core.Extensions;
@@ -202,7 +203,8 @@ namespace YARG.Core.Song
                 {
                     _updateDirectoryAndDtaLastWrite = parameters.UpdateDirectory,
                     _updateMidiLastWrite = parameters.UpdateMidi,
-                    _upgrade = parameters.Upgrade
+                    _upgrade = parameters.Upgrade,
+                    ScanPackages = parameters.ScanPackages
                 };
                 entry.SetUpdateLayers(parameters.UpdateLayers);
                 entry._metadata.Playlist = parameters.DefaultPlaylist;
@@ -247,7 +249,7 @@ namespace YARG.Core.Song
                     mainMidi = CONFileStream.LoadFile(stream, entry._midiListing);
                 }
 
-                var result = ScanMidis(entry, mainMidi);
+                var result = ScanMidis(entry, mainMidi, parameters.HashCache);
                 mainMidi.Dispose();
                 if (result != ScanResult.Success)
                 {
@@ -263,6 +265,7 @@ namespace YARG.Core.Song
                 entry.SetSortStrings();
                 return entry;
             }
+            catch (YARG.Core.Song.Supplements.SupplementalPackageException) { throw; }
             catch (Exception e)
             {
                 YargLogger.LogException(e);

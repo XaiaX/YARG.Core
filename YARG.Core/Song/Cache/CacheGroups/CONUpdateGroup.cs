@@ -1,4 +1,5 @@
-﻿using System;
+// pattern: Imperative Shell
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
@@ -6,6 +7,7 @@ using System.Text;
 using YARG.Core.Extensions;
 using YARG.Core.IO;
 using YARG.Core.Logging;
+using YARG.Core.Song.Supplements;
 
 namespace YARG.Core.Song.Cache
 {
@@ -74,7 +76,7 @@ namespace YARG.Core.Song.Cache
 
         private CONUpdateGroup() { }
 
-        public static bool Create(string directory, FileInfo dtaInfo, out CONUpdateGroup group, byte[]? sourceData = null)
+        public static bool Create(string directory, FileInfo dtaInfo, out CONUpdateGroup group, byte[]? sourceData = null, SupplementPackage? package = null)
         {
             try
             {
@@ -95,10 +97,12 @@ namespace YARG.Core.Song.Cache
                     {
                         DateTime? lastWriteTime = null;
                         var info = new FileInfo(Path.Combine(group._root.FullName, name, name + "_update.mid"));
-                        if (info.Exists)
+                        if (package != null)
                         {
-                            lastWriteTime = AbridgedFileInfo.NormalizedLastWrite(info);
+                            if (package.ContainsAsset(name + "/" + name + "_update.mid"))
+                                lastWriteTime = group._root.LastWriteTime;
                         }
+                        else if (info.Exists) lastWriteTime = AbridgedFileInfo.NormalizedLastWrite(info);
                         group._updates.Add(name, node = (new List<YARGTextContainer<byte>>(), lastWriteTime));
                     }
                     node.Containers.Add(container);

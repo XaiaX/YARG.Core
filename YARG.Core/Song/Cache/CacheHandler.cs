@@ -1,4 +1,5 @@
-﻿using System;
+// pattern: Mixed (needs refactoring)
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -27,6 +28,22 @@ namespace YARG.Core.Song.Cache
         public int BadSongCount;
     }
 
+    public sealed class SourceValidationProgress
+    {
+        public string Phase { get; }
+        public string File { get; }
+        public int Completed { get; }
+        public int Total { get; }
+
+        internal SourceValidationProgress(string phase, string file, int completed, int total)
+        {
+            Phase = phase;
+            File = file;
+            Completed = completed;
+            Total = total;
+        }
+    }
+
     public partial class CacheHandler : IDisposable
     {
         /// <summary>
@@ -39,6 +56,17 @@ namespace YARG.Core.Song.Cache
 
         public static ScanProgressTracker Progress => _progress;
         private static ScanProgressTracker _progress;
+        private static SourceValidationProgress? _sourceValidation;
+        // Publish one immutable snapshot so UI readers cannot mix fields from different files.
+        public static SourceValidationProgress? SourceValidation => Volatile.Read(ref _sourceValidation);
+
+        private static void ReportSourceValidation(string phase, string file, int completed = 0, int total = 0)
+        {
+            Volatile.Write(ref _sourceValidation, new SourceValidationProgress(phase, file, completed, total));
+            ScanObservation?.Invoke("source-validation:" + file);
+        }
+
+        private static void ClearSourceValidation() => Volatile.Write(ref _sourceValidation, null);
 
         public static SongCache RunScan(bool tryQuickScan, string cacheLocation, string badSongsLocation, bool fullDirectoryPlaylists, List<string> baseDirectories, bool cumulativeUpdates = false)
         {
@@ -361,6 +389,8 @@ namespace YARG.Core.Song.Cache
                     var mods = GetCONMod(node.Key);
                     var parameters = new RBScanParameters()
                     {
+                        HashCache = legacySongHashes,
+                        ScanPackages = scanPackages,
                         UpdateDta = mods.UpdateDTA,
                         UpgradeDta = mods.UpgradeDTA,
                         Root = group.Root,
@@ -392,7 +422,7 @@ namespace YARG.Core.Song.Cache
                             }
                             catch (Exception e)
                             {
-                                if (e is ExplicitEntryException) throw;
+                                if (e is ExplicitEntryException || e is YARG.Core.Song.Supplements.SupplementalPackageException) throw;
                                 AddToBadSongs(group.Root.FullName + " - " + node.Key, ScanResult.DTAError);
                                 YargLogger.LogException(e);
                             }
@@ -507,6 +537,8 @@ namespace YARG.Core.Song.Cache
         /// </summary>
         public void Dispose()
         {
+            foreach (var package in scanPackages.Values) package.Dispose();
+            scanPackages.Clear();
             foreach (var group in conEntryGroups)
             {
                 group.Dispose();
@@ -966,6 +998,18 @@ namespace YARG.Core.Song.Cache
             }
 
             using var stream = new FileStream(cacheLocation, FileMode.Open, FileAccess.Read);
+            return LoadCacheToMemory(stream, fullDirectoryPlaylists, cumulativeUpdates);
+        }
+
+        private static FixedArray<byte>? LoadCacheToMemory(byte[] payload, bool fullDirectoryPlaylists, bool cumulativeUpdates)
+        {
+            using var stream = new MemoryStream(payload, writable: false);
+            return LoadCacheToMemory(stream, fullDirectoryPlaylists, cumulativeUpdates);
+        }
+
+        private static FixedArray<byte>? LoadCacheToMemory(Stream stream, bool fullDirectoryPlaylists, bool cumulativeUpdates)
+        {
+            if (stream.Length < MIN_CACHEFILESIZE) return null;
             if (stream.Read<int>(Endianness.Little) != CACHE_VERSION)
             {
                 YargLogger.LogDebug($"Cache outdated");

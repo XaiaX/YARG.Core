@@ -1,5 +1,8 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Diagnostics;
+using Newtonsoft.Json.Linq;
 using Melanchall.DryWetMidi.Core;
 using NUnit.Framework;
 using YARG.Core.Song.Cache;
@@ -160,4 +163,72 @@ public sealed class ExplicitDefinitionCountTests
         using var quick = Scan(SongScanScope.All, updates, quick: true);
         Counts(quick, 1, 0);
     }
+    [Test]
+    public void QuickStartupUsesSnapshotWithoutOpeningChangedSupplementalFiles()
+    {
+        string upgrades = Source("upgrades", "(missing)", true);
+        using (var full = Scan(SongScanScope.All, upgrades: upgrades)) Counts(full, 0, 1);
+        byte[] cache = File.ReadAllBytes(_cache);
+        File.WriteAllText(upgrades, "not a valid DTA");
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(upgrades)!, "missing_plus.mid"), "not MIDI");
+        using (var quick = Scan(SongScanScope.All, upgrades: upgrades, quick: true)) Counts(quick, 0, 1);
+        Assert.That(File.ReadAllBytes(_cache), Is.EqualTo(cache));
+        using var explicitScan = Scan(SongScanScope.All, upgrades: upgrades);
+        Assert.That(explicitScan.Status, Is.EqualTo(SongScanStatus.SourceError));
+        Assert.That(File.ReadAllBytes(_cache), Is.EqualTo(cache));
+    }
+
+    [Test]
+    public void ExplicitScanReportsSourceValidationBeforeReadingMidi()
+    {
+        string upgrades = Source("upgrades", "(missing)", true);
+        bool reported = false;
+        CacheHandler.ScanObservation = operation =>
+        {
+            if (operation == "source-validation:" + Path.Combine(Path.GetDirectoryName(upgrades)!, "missing_plus.mid"))
+            {
+                reported = true;
+                var progress = CacheHandler.SourceValidation;
+                Assert.That(progress, Is.Not.Null);
+                Assert.That(progress!.File, Is.EqualTo(Path.Combine(Path.GetDirectoryName(upgrades)!, "missing_plus.mid")));
+                Assert.That(progress.Total, Is.GreaterThan(0));
+                Assert.That(progress.Completed, Is.InRange(0, progress.Total));
+            }
+        };
+        try
+        {
+            using var scan = Scan(SongScanScope.All, upgrades: upgrades);
+            Counts(scan, 0, 1);
+            Assert.That(reported, Is.True, "MIDI validation must expose progress before doing file work.");
+            Assert.That(CacheHandler.SourceValidation, Is.Null, "Completed scans must clear validation feedback.");
+        }
+        finally { CacheHandler.ScanObservation = null; }
+    }
+
+    [Test]
+    public void LocalStartupCacheBenchmark()
+    {
+        string? path = Environment.GetEnvironmentVariable("YARG_STARTUP_CACHE");
+        if (string.IsNullOrEmpty(path)) Assert.Ignore("Set YARG_STARTUP_CACHE to benchmark a copy of a local cache.");
+        File.Copy(path!, _cache);
+        using var reader = new BinaryReader(File.OpenRead(_cache));
+        Assert.That(reader.ReadString(), Is.EqualTo("YARG explicit sources"));
+        reader.ReadInt32();
+        var inventory = JObject.Parse(reader.ReadString());
+        var sources = new SongSourceConfiguration(inventory["Roots"]!.Values<string>().Select(root => root!),
+            (string?)inventory["Updates"]!["Path"], (string?)inventory["Upgrades"]!["Path"]);
+        reader.Close();
+        CacheHandler.ScanObservation = operation => Assert.Fail("Startup performed scan work: " + operation);
+        try
+        {
+            var timer = Stopwatch.StartNew();
+            using var result = CacheHandler.RunScan(SongScanScope.All, sources, true, _cache,
+                Path.Combine(_root, "bad.txt"), (bool)inventory["FullPlaylists"]!);
+            Assert.That(result.Status, Is.EqualTo(SongScanStatus.Success), result.Message);
+            TestContext.Out.WriteLine($"Startup cache: {timer.Elapsed.TotalSeconds:F3}s, " +
+                $"{result.Cache!.Entries.Values.Sum(entries => entries.Count)} songs; no source validation or discovery.");
+        }
+        finally { CacheHandler.ScanObservation = null; }
+    }
+
 }

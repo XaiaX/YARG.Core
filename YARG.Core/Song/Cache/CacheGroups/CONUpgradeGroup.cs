@@ -1,9 +1,11 @@
+// pattern: Imperative Shell
 using System;
 using System.Collections.Generic;
 using System.IO;
 using YARG.Core.Extensions;
 using YARG.Core.IO;
 using YARG.Core.Logging;
+using YARG.Core.Song.Supplements;
 
 namespace YARG.Core.Song.Cache
 {
@@ -122,7 +124,7 @@ namespace YARG.Core.Song.Cache
             }
         }
 
-        internal static UnpackedCONUpgradeGroup CreateExplicit(FileInfo dtaInfo, byte[] sourceData)
+        internal static UnpackedCONUpgradeGroup CreateExplicit(FileInfo dtaInfo, byte[] sourceData, SupplementPackage? package = null)
         {
             var group = new UnpackedCONUpgradeGroup
             {
@@ -138,8 +140,10 @@ namespace YARG.Core.Song.Cache
                 {
                     string name = YARGDTAReader.GetNameOfNode(ref text, true);
                     var midi = new FileInfo(Path.Combine(dtaInfo.DirectoryName!, name + RBProUpgrade.UPGRADES_MIDI_EXT));
-                    if (!midi.Exists) throw new FileNotFoundException("Upgrade MIDI missing: " + midi.FullName);
-                    group._upgrades[name] = (text, new UnpackedRBProUpgrade(name, AbridgedFileInfo.NormalizedLastWrite(midi), group._root, dtaInfo.FullName));
+                    if (package == null ? !midi.Exists : !package.ContainsAsset(name + RBProUpgrade.UPGRADES_MIDI_EXT))
+                        throw new FileNotFoundException("Upgrade MIDI missing: " + midi.FullName);
+                    group._upgrades[name] = (text, new UnpackedRBProUpgrade(name, package == null ? AbridgedFileInfo.NormalizedLastWrite(midi) : group._root.LastWriteTime, group._root, dtaInfo.FullName)
+                    { ExpectedPackageManifest = package?.ManifestHash });
                     YARGDTAReader.EndNode(ref text);
                 }
                 return group;

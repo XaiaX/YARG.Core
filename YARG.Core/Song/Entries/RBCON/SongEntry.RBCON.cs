@@ -1,10 +1,12 @@
-﻿using System;
+// pattern: Mixed (needs refactoring)
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using YARG.Core.Chart;
 using YARG.Core.Song.Cache;
 using YARG.Core.IO;
+using YARG.Core.Song.Supplements;
 using Melanchall.DryWetMidi.Core;
 using YARG.Core.Extensions;
 using YARG.Core.Audio;
@@ -26,10 +28,12 @@ namespace YARG.Core.Song
         public RBProUpgrade? Upgrade;
         public string DefaultPlaylist;
         public DTAEntry BaseDta;
+        public LegacySongHashCache? HashCache;
+        public IReadOnlyDictionary<string, SupplementPackage>? ScanPackages;
 
     }
 
-    public abstract class RBCONEntry : SongEntry
+    public abstract partial class RBCONEntry : SongEntry
     {
         private const long NOTE_SNAP_THRESHOLD = 10;
         public const int UNENCRYPTED_MOGG = 0xA;
@@ -45,6 +49,38 @@ namespace YARG.Core.Song
         // Oldest to newest; empty preserves the legacy single-update path.
         private protected (AbridgedFileInfo Root, DateTime? Midi, string DtaPath)[] _updateLayers = Array.Empty<(AbridgedFileInfo, DateTime?, string)>();
         private protected RBProUpgrade? _upgrade;
+        internal RBProUpgrade? UpgradeSource => _upgrade;
+        internal Dictionary<string, string> PackageManifests = new(SongSourceConfiguration.PathComparer);
+        internal IReadOnlyDictionary<string, SupplementPackage>? ScanPackages;
+
+        private sealed class PackageLease : IDisposable
+        {
+            internal SupplementPackage Package { get; }
+            private readonly bool _owned;
+            internal PackageLease(SupplementPackage package, bool owned) { Package = package; _owned = owned; }
+            public void Dispose() { if (_owned) Package.Dispose(); }
+        }
+
+        private PackageLease OpenSupplementPackage(string path)
+        {
+            if (ScanPackages != null && ScanPackages.TryGetValue(path, out var shared))
+                return new PackageLease(shared, false);
+            lock (PackageManifests)
+            {
+                PackageManifests.TryGetValue(path, out var expected);
+                var package = SupplementalAssetSource.OpenPackage(path, expected);
+                PackageManifests[path] = package.ManifestHash;
+                return new PackageLease(package, true);
+            }
+        }
+
+        private FixedArray<byte> LoadSupplementAsset(string path, string relativePath)
+        {
+            if (!SupplementalAssetSource.IsPackage(path))
+                return SupplementalAssetSource.Load(path, relativePath);
+            using var package = OpenSupplementPackage(path);
+            return SupplementalAssetSource.Read(package.Package, relativePath.Replace('\\', '/'));
+        }
 
         protected RBMetadata _rbMetadata = RBMetadata.Default;
         protected RBIntensities _rbIntensities = RBIntensities.Default;
@@ -161,11 +197,11 @@ namespace YARG.Core.Song
                 }
 
                 string filename = Path.Combine(layer.Root.FullName, _nodeName, _nodeName + "_update.mid");
-                if (!AbridgedFileInfo.Validate(filename, layer.Midi.Value))
+                if (!SupplementalAssetSource.IsPackage(layer.DtaPath) && !AbridgedFileInfo.Validate(filename, layer.Midi.Value))
                 {
                     return null;
                 }
-                using var layerMidi = FixedArray.LoadFile(filename);
+                using var layerMidi = LoadSupplementAsset(layer.DtaPath, Path.Combine(_nodeName, _nodeName + "_update.mid"));
                 midi.Merge(MidiFile.Read(layerMidi.ToReferenceStream(), readingSettings), false);
             }
 
@@ -621,8 +657,11 @@ namespace YARG.Core.Song
             return location;
         }
 
-        private protected static ScanResult ScanMidis(RBCONEntry entry, FixedArray<byte> mainMidi)
+        private protected static ScanResult ScanMidis(RBCONEntry entry, FixedArray<byte> mainMidi, LegacySongHashCache? hashCache)
         {
+            if (entry._updateLayers.Any(layer => SupplementalAssetSource.IsPackage(layer.DtaPath)) ||
+                entry._upgrade is UnpackedRBProUpgrade unpacked && SupplementalAssetSource.IsPackage(unpacked.DtaPath))
+                return ScanPackagedMidis(entry, mainMidi, hashCache);
             var updateMidi = default(FixedArray<byte>);
             var layeredMidis = new List<FixedArray<byte>>();
             var upgradeMidi = default(FixedArray<byte>);
@@ -648,11 +687,11 @@ namespace YARG.Core.Song
                         if (layer.Midi.HasValue)
                         {
                             string filename = Path.Combine(layer.Root.FullName, entry._nodeName, entry._nodeName + "_update.mid");
-                            if (!AbridgedFileInfo.Validate(filename, layer.Midi.Value))
+                            if (!SupplementalAssetSource.IsPackage(layer.DtaPath) && !AbridgedFileInfo.Validate(filename, layer.Midi.Value))
                             {
                                 return ScanResult.PossibleCorruption;
                             }
-                            layeredMidis.Add(FixedArray.LoadFile(filename));
+                            layeredMidis.Add(entry.LoadSupplementAsset(layer.DtaPath, Path.Combine(entry._nodeName, entry._nodeName + "_update.mid")));
                         }
                     }
                 }
@@ -662,75 +701,13 @@ namespace YARG.Core.Song
                     updateMidi = FixedArray.LoadFile(updateFile);
                 }
 
-                // Validate each source separately to keep its specific scan error even when a
-                // later MIDI replaces its tracks in the effective chart.
-                var sourceParts = AvailableParts.Default;
-                var sourceDrumsType = DrumsType.ProDrums;
-                int bufLength = mainMidi.Length;
-                if (updateMidi != null)
-                {
-                    var updateResult = ParseMidi(updateMidi, ref sourceParts, ref sourceDrumsType);
-                    switch (updateResult.Error)
-                    {
-                        case ScanResult.InvalidResolution:      return ScanResult.InvalidResolution_Update;
-                        case ScanResult.MultipleMidiTrackNames: return ScanResult.MultipleMidiTrackNames_Update;
-                    }
-                    bufLength += updateMidi.Length;
-                }
-                foreach (var layerMidi in layeredMidis)
-                {
-                    var result = ParseMidi(layerMidi, ref sourceParts, ref sourceDrumsType);
-                    switch (result.Error)
-                    {
-                        case ScanResult.InvalidResolution:      return ScanResult.InvalidResolution_Update;
-                        case ScanResult.MultipleMidiTrackNames: return ScanResult.MultipleMidiTrackNames_Update;
-                    }
-                    bufLength += layerMidi.Length;
-                }
-
-                if (upgradeMidi != null)
-                {
-                    var upgradeResult = ParseMidi(upgradeMidi, ref sourceParts, ref sourceDrumsType);
-                    switch (upgradeResult.Error)
-                    {
-                        case ScanResult.InvalidResolution:      return ScanResult.InvalidResolution_Upgrade;
-                        case ScanResult.MultipleMidiTrackNames: return ScanResult.MultipleMidiTrackNames_Upgrade;
-                    }
-                    bufLength += upgradeMidi.Length;
-                }
-
-                var resolution = ParseMidi(mainMidi, ref sourceParts, ref sourceDrumsType);
-                if (!resolution)
-                {
-                    return resolution.Error;
-                }
-
-                // LoadChart merges named tracks by replacement (base, updates, upgrade).
-                // Parse the same effective track set rather than retaining the first active
-                // part encountered in the separate source files.
-                var effectiveMidi = MidiFile.Read(mainMidi.ToReferenceStream(), MidiSettingsLatin1.Instance);
-                if (updateMidi != null)
-                {
-                    effectiveMidi.Merge(MidiFile.Read(updateMidi.ToReferenceStream(), MidiSettingsLatin1.Instance), false);
-                }
-                foreach (var layerMidi in layeredMidis)
-                {
-                    effectiveMidi.Merge(MidiFile.Read(layerMidi.ToReferenceStream(), MidiSettingsLatin1.Instance), false);
-                }
-                if (upgradeMidi != null)
-                {
-                    effectiveMidi.Merge(MidiFile.Read(upgradeMidi.ToReferenceStream(), MidiSettingsLatin1.Instance), false);
-                }
-                using var effectiveStream = new MemoryStream();
-                effectiveMidi.Write(effectiveStream);
-                using var effectiveBytes = FixedArray<byte>.Alloc((int) effectiveStream.Length);
-                effectiveStream.GetBuffer().AsSpan(0, (int) effectiveStream.Length).CopyTo(effectiveBytes.Span);
-                var drumsType = DrumsType.ProDrums;
-                var effectiveResult = ParseMidi(effectiveBytes, ref entry._parts, ref drumsType);
-                if (!effectiveResult)
-                {
-                    return effectiveResult.Error;
-                }
+                var scanUpdates = new List<FixedArray<byte>>();
+                if (updateMidi != null) scanUpdates.Add(updateMidi);
+                scanUpdates.AddRange(layeredMidis);
+                var resolution = MidiScanComposition.Scan(mainMidi, scanUpdates, upgradeMidi,
+                    ref entry._parts, out bool usedSummaries);
+                CacheHandler.ScanObservation?.Invoke((usedSummaries ? "scan-summary:" : "scan-fallback:") + entry._nodeName);
+                if (!resolution) return resolution.Error;
 
                 if (!IsValid(in entry._parts))
                 {
@@ -744,31 +721,32 @@ namespace YARG.Core.Song
                     entry._settings.HopoThreshold = entry._settings.SustainCutoffThreshold;
                 }
 
-                using var buffer = FixedArray<byte>.Alloc(bufLength);
-                unsafe
+                var originals = new List<FixedArray<byte>> { mainMidi };
+                if (updateMidi != null) originals.Add(updateMidi);
+                originals.AddRange(layeredMidis);
+                if (upgradeMidi != null) originals.Add(upgradeMidi);
+                HashWrapper ComputeOriginalHash()
                 {
-                    System.Runtime.CompilerServices.Unsafe.CopyBlock(buffer.Ptr, mainMidi.Ptr, (uint) mainMidi.Length);
-
-                    long offset = mainMidi.Length;
-                    if (updateMidi != null)
-                    {
-                        System.Runtime.CompilerServices.Unsafe.CopyBlock(buffer.Ptr + offset, updateMidi.Ptr, (uint) updateMidi.Length);
-                        offset += updateMidi.Length;
-                    }
-                    foreach (var layerMidi in layeredMidis)
-                    {
-                        System.Runtime.CompilerServices.Unsafe.CopyBlock(buffer.Ptr + offset, layerMidi.Ptr, (uint) layerMidi.Length);
-                        offset += layerMidi.Length;
-                    }
-
-                    if (upgradeMidi != null)
-                    {
-                        System.Runtime.CompilerServices.Unsafe.CopyBlock(buffer.Ptr + offset, upgradeMidi.Ptr, (uint) upgradeMidi.Length);
-                    }
+                    CacheHandler.ScanObservation?.Invoke("legacy-hash:" + entry._nodeName);
+                    return LegacySongHashCache.HashOriginalInputs(originals);
                 }
-                entry._hash = HashWrapper.Hash(buffer.ReadOnlySpan);
+                if (hashCache == null)
+                {
+                    entry._hash = ComputeOriginalHash();
+                }
+                else
+                {
+                    var updateFingerprints = new List<MidiContentFingerprint>();
+                    if (updateMidi != null) updateFingerprints.Add(MidiContentFingerprint.Compute(updateMidi.ReadOnlySpan));
+                    foreach (var layerMidi in layeredMidis)
+                        updateFingerprints.Add(MidiContentFingerprint.Compute(layerMidi.ReadOnlySpan));
+                    var vector = new MidiInputVector(MidiContentFingerprint.Compute(mainMidi.ReadOnlySpan),
+                        updateFingerprints, upgradeMidi == null ? null : MidiContentFingerprint.Compute(upgradeMidi.ReadOnlySpan));
+                    entry._hash = hashCache.GetOrAdd(vector, ComputeOriginalHash);
+                }
                 return ScanResult.Success;
             }
+            catch (SupplementalPackageException) { throw; }
             catch (Exception ex)
             {
                 YargLogger.LogException(ex);
@@ -785,7 +763,7 @@ namespace YARG.Core.Song
             }
         }
 
-        private string? FindUpdateAsset(params string[] relativePath)
+        private Stream? OpenUpdateAsset(params string[] relativePath)
         {
             if (SupplementalValidation != null && !SupplementalValidation()) return null;
             for (int i = _updateLayers.Length - 1; i >= 0; i--)
@@ -795,13 +773,26 @@ namespace YARG.Core.Song
                 {
                     return null;
                 }
-                string filename = Path.Combine(layer.Root.FullName, Path.Combine(relativePath));
-                if (File.Exists(filename))
+                if (SupplementalAssetSource.IsPackage(layer.DtaPath))
                 {
-                    return filename;
+                    using var package = OpenSupplementPackage(layer.DtaPath);
+                    string relative = string.Join("/", relativePath);
+                    if (package.Package.ContainsAsset(relative)) return SupplementalAssetSource.Open(package.Package, relative);
+                }
+                else
+                {
+                    string filename = Path.Combine(layer.Root.FullName, Path.Combine(relativePath));
+                    if (File.Exists(filename)) return File.OpenRead(filename);
                 }
             }
             return null;
+        }
+
+        private static FixedArray<byte> ReadSupplementStream(Stream stream)
+        {
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            return SupplementalAssetSource.ToFixedArray(buffer.ToArray());
         }
 
         private protected ScanResult ValidateUpdateMogg()
@@ -819,8 +810,7 @@ namespace YARG.Core.Song
         {
             if (_updateLayers.Length > 0)
             {
-                string? filename = FindUpdateAsset(_subName, _subName + "_update.mogg");
-                return filename == null ? null : File.OpenRead(filename);
+                return OpenUpdateAsset(_subName, _subName + "_update.mogg");
             }
             Stream? stream = null;
             if (_updateDirectoryAndDtaLastWrite.HasValue)
@@ -838,8 +828,10 @@ namespace YARG.Core.Song
         {
             if (_updateLayers.Length > 0)
             {
-                string? filename = FindUpdateAsset(_subName, "gen", _subName + "_keep.png_xbox");
-                return filename == null ? null : YARGImage.LoadDXT(filename);
+                using var stream = OpenUpdateAsset(_subName, "gen", _subName + "_keep.png_xbox");
+                if (stream == null) return null;
+                using var bytes = ReadSupplementStream(stream);
+                return YARGImage.TransferDXT(bytes);
             }
             var image = default(YARGImage);
             if (_updateDirectoryAndDtaLastWrite.HasValue)
@@ -857,8 +849,8 @@ namespace YARG.Core.Song
         {
             if (_updateLayers.Length > 0)
             {
-                string? filename = FindUpdateAsset(_subName, "gen", _subName + ".milo_xbox");
-                return filename == null ? null : FixedArray.LoadFile(filename);
+                using var stream = OpenUpdateAsset(_subName, "gen", _subName + ".milo_xbox");
+                return stream == null ? null : ReadSupplementStream(stream);
             }
             var data = default(FixedArray<byte>);
             if (_updateDirectoryAndDtaLastWrite.HasValue)
@@ -876,8 +868,8 @@ namespace YARG.Core.Song
         {
             if (_updateLayers.Length > 0)
             {
-                string? filename = FindUpdateAsset(_subName, _subName + ".voc");
-                return filename == null ? null : FixedArray.LoadFile(filename);
+                using var stream = OpenUpdateAsset(_subName, _subName + ".voc");
+                return stream == null ? null : ReadSupplementStream(stream);
             }
             var data = default(FixedArray<byte>);
             if (_updateDirectoryAndDtaLastWrite.HasValue)

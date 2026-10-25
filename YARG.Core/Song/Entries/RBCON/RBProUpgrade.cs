@@ -1,6 +1,8 @@
-﻿using System;
+// pattern: Imperative Shell
+using System;
 using System.IO;
 using YARG.Core.IO;
+using YARG.Core.Song.Supplements;
 
 namespace YARG.Core.Song
 {
@@ -48,6 +50,9 @@ namespace YARG.Core.Song
         private readonly string _name;
         private readonly DateTime _lastWritetime;
         private readonly string _dtaPath;
+        internal string DtaPath => _dtaPath;
+        internal string RelativePath => _name + UPGRADES_MIDI_EXT;
+        internal string? ExpectedPackageManifest { get; set; }
 
         public override DateTime LastWriteTime => _lastWritetime;
 
@@ -62,6 +67,8 @@ namespace YARG.Core.Song
         public override FixedArray<byte>? LoadUpgradeMidi()
         {
             var data = default(FixedArray<byte>);
+            if (SupplementalAssetSource.IsPackage(_dtaPath))
+                return SupplementalAssetSource.Load(_dtaPath, RelativePath, ExpectedPackageManifest);
             if (AbridgedFileInfo.Validate(_dtaPath, in _root.LastWriteTime))
             {
                 string file = Path.Combine(_root.FullName, _name + UPGRADES_MIDI_EXT);
