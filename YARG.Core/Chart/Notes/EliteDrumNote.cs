@@ -2,6 +2,7 @@
 
 namespace YARG.Core.Chart
 {
+    // pattern: Functional Core
     public class EliteDrumNote : Note<EliteDrumNote>
     {
         private DrumNoteFlags _drumFlags;
@@ -100,6 +101,12 @@ namespace YARG.Core.Chart
         {
             _drumFlags |= drumNoteFlag;
             DrumFlags |= drumNoteFlag;
+        }
+
+        public void ClearFlag(DrumNoteFlags drumNoteFlag)
+        {
+            _drumFlags &= ~drumNoteFlag;
+            DrumFlags &= ~drumNoteFlag;
         }
 
         protected override void CopyFlags(EliteDrumNote other)

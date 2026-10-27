@@ -112,6 +112,40 @@ public sealed class EliteDrumNativeModifierTests
         Assert.Throws<System.InvalidOperationException>(() => profile.ApplyModifiers(difficulty, new SyncTrack(480)));
     }
 
+    [Test]
+    public void ChangingEliteActivationModeClearsOldFlagsAcrossNoteReset()
+    {
+        var tom = MakeNote(EliteDrumNote.EliteDrumPad.Tom3, DrumNoteType.Neutral, 2);
+        var cymbal = MakeNote(EliteDrumNote.EliteDrumPad.LeftCrash, DrumNoteType.Neutral, 2);
+        tom.AddChildNote(cymbal);
+        var difficulty = CreateEliteDifficulty(tom);
+        difficulty.Phrases.Add(new Phrase(PhraseType.DrumFill, 0, 2, 0, 960));
+        difficulty.SetDrumActivationFlags(StarPowerActivationType.AllNotes);
+        difficulty.SetDrumActivationFlags(StarPowerActivationType.RightmostNote);
+        tom.ResetNoteState();
+        cymbal.ResetNoteState();
+        Assert.That(tom.IsStarPowerActivator, Is.False);
+        Assert.That(cymbal.IsStarPowerActivator, Is.True);
+    }
+
+    [TestCase(EliteDrumNote.EliteDrumPad.HiHat)]
+    [TestCase(EliteDrumNote.EliteDrumPad.LeftCrash)]
+    [TestCase(EliteDrumNote.EliteDrumPad.Ride)]
+    [TestCase(EliteDrumNote.EliteDrumPad.RightCrash)]
+    public void EliteRightmostActivationPrefersCymbalToAnyKitDrum(EliteDrumNote.EliteDrumPad pad)
+    {
+        var cymbal = MakeNote(pad, DrumNoteType.Neutral, 2);
+        var tom = MakeNote(EliteDrumNote.EliteDrumPad.Tom3, DrumNoteType.Neutral, 2);
+        tom.AddChildNote(cymbal);
+        var difficulty = CreateEliteDifficulty(tom);
+        difficulty.Phrases.Add(new Phrase(PhraseType.DrumFill, 0, 2, 0, 960));
+
+        difficulty.SetDrumActivationFlags(StarPowerActivationType.RightmostNote);
+
+        Assert.That(cymbal.IsStarPowerActivator, Is.True);
+        Assert.That(tom.IsStarPowerActivator, Is.False);
+    }
+
     [TestCase(StarPowerActivationType.RightmostNote)]
     [TestCase(StarPowerActivationType.AllNotes)]
     public void EliteActivationDoesNotFlagInvisibleTerminator(StarPowerActivationType activationType)

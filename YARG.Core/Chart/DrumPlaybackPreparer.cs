@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -238,7 +239,7 @@ namespace YARG.Core.Chart
                     note.NextNote = i + 1 < difficulty.Notes.Count ? difficulty.Notes[i + 1] : null;
                     if (note is DrumNote drum) drum.ClearFlag(DrumNoteFlags.StarPowerActivator | DrumNoteFlags.KickLaneStart | DrumNoteFlags.KickLaneEnd);
                     if (note is EliteDrumNote eliteDrum)
-                        eliteDrum.DrumFlags &= ~(DrumNoteFlags.StarPowerActivator | DrumNoteFlags.KickLaneStart | DrumNoteFlags.KickLaneEnd);
+                        eliteDrum.ClearFlag(DrumNoteFlags.StarPowerActivator | DrumNoteFlags.KickLaneStart | DrumNoteFlags.KickLaneEnd);
                     note.ClearFlag(NoteFlags.StarPower | NoteFlags.StarPowerStart | NoteFlags.StarPowerEnd |
                         NoteFlags.Solo | NoteFlags.SoloStart | NoteFlags.SoloEnd | NoteFlags.BigRockEnding |
                         NoteFlags.LaneStart | NoteFlags.LaneEnd);
@@ -319,7 +320,9 @@ namespace YARG.Core.Chart
                 {
                     var activator = chords[chords.Count - 1].ChildNotes.Prepend(chords[chords.Count - 1]).Last();
                     if (activator is DrumNote classic) classic.ActivateFlag(DrumNoteFlags.StarPowerActivator);
-                    if (activator is EliteDrumNote elite) elite.ActivateFlag(DrumNoteFlags.StarPowerActivator);
+                    // Native Elite activation is selected at/after the fill boundary
+                    // by SetDrumActivationFlags using the player's setting. Marking
+                    // an interior note here creates an additional, premature trigger.
                 }
             }
         }

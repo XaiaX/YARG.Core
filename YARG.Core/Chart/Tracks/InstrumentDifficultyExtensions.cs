@@ -1,3 +1,4 @@
+// pattern: Mixed (needs refactoring)
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -972,6 +973,11 @@ namespace YARG.Core.Chart
             StarPowerActivationType activationType)
         {
             var notes = difficulty.Notes;
+            // Re-selection must also clear the reset baseline: changing settings or
+            // rebuilding playback must not resurrect the previous activation targets.
+            foreach (var chord in notes)
+                foreach (var note in chord.AllNotes)
+                    note.ClearFlag(DrumNoteFlags.StarPowerActivator);
             int checkpoint = 0;
 
             foreach (var phrase in difficulty.Phrases)
@@ -997,7 +1003,7 @@ namespace YARG.Core.Chart
                     foreach (var member in activationNote.AllNotes)
                     {
                         if (member.IsInvisibleTerminator) continue;
-                        if (rightmostNote == null || member.Pad > rightmostNote.Pad)
+                        if (rightmostNote == null || GetEliteActivationOrder(member) > GetEliteActivationOrder(rightmostNote))
                             rightmostNote = member;
                         if (activationType == StarPowerActivationType.AllNotes)
                             member.ActivateFlag(DrumNoteFlags.StarPowerActivator);
@@ -1009,6 +1015,18 @@ namespace YARG.Core.Chart
                 }
             }
         }
+
+        // Kit pieces precede cymbals conceptually, independently of enum values
+        // and lefty presentation. Preserve left-to-right order within each group.
+        private static int GetEliteActivationOrder(EliteDrumNote note) =>
+            (EliteDrumNote.EliteDrumPad) note.Pad switch
+            {
+                EliteDrumNote.EliteDrumPad.HiHat => 11,
+                EliteDrumNote.EliteDrumPad.LeftCrash => 12,
+                EliteDrumNote.EliteDrumPad.Ride => 13,
+                EliteDrumNote.EliteDrumPad.RightCrash => 14,
+                _ => note.Pad
+            };
 
         public static void RemoveDynamics(this InstrumentDifficulty<DrumNote> difficulty)
         {
