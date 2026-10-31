@@ -80,6 +80,152 @@ public sealed class ElitePlaybackActivationTests
         }
     }
 
+    [TestCase(StarPowerActivationType.RightmostNote, false)]
+    [TestCase(StarPowerActivationType.RightmostNote, true)]
+    [TestCase(StarPowerActivationType.AllNotes, false)]
+    [TestCase(StarPowerActivationType.AllNotes, true)]
+    public void SkippingEligibleActivationPreservesScoreWithoutDeploying(
+        StarPowerActivationType activation, bool partialChord)
+    {
+        var chart = Source();
+        var notes = Prepare(chart);
+        notes.SetDrumActivationFlags(activation);
+        var parameters = EnginePreset.Default.Drums.Create([1f, 2f, 3f, 4f, 5f, 6f],
+            [1f, 2f, 3f, 4f, 5f, 6f], DrumsEngineParameters.DrumMode.Elite);
+        var engine = new EliteDrumsEngine(notes, chart.SyncTrack, parameters, false, true);
+        int hits = 0, misses = 0, pads = 0;
+        engine.OnNoteHit += (_, _) => hits++;
+        engine.OnNoteMissed += (_, _) => misses++;
+        engine.OnPadHit += (_, _, _, _, _, _) => pads++;
+
+        for (int play = 0; play < 2; play++)
+        {
+            engine.Reset();
+            hits = misses = pads = 0;
+            Strike(engine, 1, EliteDrumsAction.EliteSnare);
+            Strike(engine, 2, EliteDrumsAction.EliteSnare);
+            var amount = engine.EngineStats.StarPowerTickAmount;
+            Assert.That(engine.CanStarPowerActivate, Is.True);
+            // Rightmost still requires the ordinary tom. All Notes can skip either
+            // the entire activation chord or just the cymbal after playing the tom.
+            bool playTom = partialChord || activation == StarPowerActivationType.RightmostNote;
+            if (playTom) Strike(engine, 3, EliteDrumsAction.EliteTom1);
+            engine.Update(3.5);
+            Assert.Multiple(() =>
+            {
+                Assert.That(notes.Notes[2].WasFullyHit(), Is.True);
+                Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(4));
+                Assert.That(engine.EngineStats.Combo, Is.EqualTo(4));
+                Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(200));
+                Assert.That(engine.EngineStats.CommittedScore, Is.EqualTo(200));
+                Assert.That(engine.EngineStats.StarPowerTickAmount, Is.EqualTo(amount));
+                Assert.That(engine.EngineStats.IsStarPowerActive, Is.False);
+                Assert.That(engine.CanStarPowerActivate, Is.True);
+                Assert.That(engine.NoteIndex, Is.EqualTo(3));
+                Assert.That(misses, Is.Zero);
+                Assert.That(hits, Is.EqualTo(playTom ? 3 : 2));
+                Assert.That(pads, Is.EqualTo(playTom ? 3 : 2));
+            });
+        }
+    }
+
+    [TestCase(StarPowerActivationType.RightmostNote, false)]
+    [TestCase(StarPowerActivationType.RightmostNote, true)]
+    [TestCase(StarPowerActivationType.AllNotes, false)]
+    [TestCase(StarPowerActivationType.AllNotes, true)]
+    public void SkippingActivationWithoutEnoughStarPowerStillMisses(
+        StarPowerActivationType activation, bool singleNote)
+    {
+        var chart = Source();
+        var notes = Prepare(chart);
+        if (singleNote) notes.Notes[2].ChildNotes.Clear();
+        notes.SetDrumActivationFlags(activation);
+        var parameters = EnginePreset.Default.Drums.Create([1f, 2f, 3f, 4f, 5f, 6f],
+            [1f, 2f, 3f, 4f, 5f, 6f], DrumsEngineParameters.DrumMode.Elite);
+        var engine = new EliteDrumsEngine(notes, chart.SyncTrack, parameters, false, true);
+        Strike(engine, 1, EliteDrumsAction.EliteSnare);
+        engine.Update(3.5);
+        Assert.Multiple(() =>
+        {
+            Assert.That(engine.CanStarPowerActivate, Is.False);
+            Assert.That(notes.Notes[2].WasMissed, Is.True);
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(1));
+            Assert.That(engine.EngineStats.Combo, Is.Zero);
+            Assert.That(engine.EngineStats.IsStarPowerActive, Is.False);
+        });
+    }
+
+    [TestCase(StarPowerActivationType.RightmostNote)]
+    [TestCase(StarPowerActivationType.AllNotes)]
+    public void SkippingSingleActivationDoesNotForgiveOrdinaryNote(StarPowerActivationType activation)
+    {
+        var chart = Source();
+        var notes = Prepare(chart);
+        notes.Notes[2].ChildNotes.Clear();
+        notes.Notes.Add(Note(EliteDrumPad.Snare, 4));
+        notes.SetDrumActivationFlags(activation);
+        var parameters = EnginePreset.Default.Drums.Create([1f, 2f, 3f, 4f, 5f, 6f],
+            [1f, 2f, 3f, 4f, 5f, 6f], DrumsEngineParameters.DrumMode.Elite);
+        var engine = new EliteDrumsEngine(notes, chart.SyncTrack, parameters, false, true);
+        Strike(engine, 1, EliteDrumsAction.EliteSnare);
+        Strike(engine, 2, EliteDrumsAction.EliteSnare);
+        engine.Update(3.5);
+        Assert.That(notes.Notes[2].WasHit, Is.True);
+        Assert.That(engine.EngineStats.Combo, Is.EqualTo(3));
+        engine.Update(4.5);
+        Assert.Multiple(() =>
+        {
+            Assert.That(notes.Notes[3].WasMissed, Is.True);
+            Assert.That(engine.EngineStats.Combo, Is.Zero);
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(3));
+            Assert.That(engine.EngineStats.IsStarPowerActive, Is.False);
+        });
+    }
+
+    [Test]
+    public void RightmostSkipDoesNotForgiveUnflaggedChordMember()
+    {
+        var chart = Source();
+        var notes = Prepare(chart);
+        notes.SetDrumActivationFlags(StarPowerActivationType.RightmostNote);
+        var parameters = EnginePreset.Default.Drums.Create([1f, 2f, 3f, 4f, 5f, 6f],
+            [1f, 2f, 3f, 4f, 5f, 6f], DrumsEngineParameters.DrumMode.Elite);
+        var engine = new EliteDrumsEngine(notes, chart.SyncTrack, parameters, false, true);
+        Strike(engine, 1, EliteDrumsAction.EliteSnare);
+        Strike(engine, 2, EliteDrumsAction.EliteSnare);
+        engine.Update(3.5);
+        Assert.Multiple(() =>
+        {
+            Assert.That(notes.Notes[2].WasMissed, Is.True, "The unflagged tom remains required.");
+            Assert.That(notes.Notes[2].ChildNotes[0].WasHit, Is.True, "Only the activation cymbal is optional.");
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(3));
+            Assert.That(engine.EngineStats.IsStarPowerActive, Is.False);
+        });
+    }
+
+    [TestCase(StarPowerActivationType.RightmostNote)]
+    [TestCase(StarPowerActivationType.AllNotes)]
+    public void BotStillDeploysAtActivationChordAfterReset(StarPowerActivationType activation)
+    {
+        var chart = Source();
+        var notes = Prepare(chart);
+        notes.SetDrumActivationFlags(activation);
+        var parameters = EnginePreset.Default.Drums.Create([1f, 2f, 3f, 4f, 5f, 6f],
+            [1f, 2f, 3f, 4f, 5f, 6f], DrumsEngineParameters.DrumMode.Elite);
+        var engine = new EliteDrumsEngine(notes, chart.SyncTrack, parameters, true, true);
+        for (int play = 0; play < 2; play++)
+        {
+            engine.Reset();
+            engine.Update(1);
+            engine.Update(2);
+            Assert.That(engine.CanStarPowerActivate, Is.True);
+            Assert.That(engine.EngineStats.IsStarPowerActive, Is.False);
+            engine.Update(3);
+            Assert.That(engine.EngineStats.IsStarPowerActive, Is.True);
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(4));
+        }
+    }
+
     [Test]
     public void RebuildClearsObsoleteEliteDrumFlagsFromResetAndCloneState()
     {

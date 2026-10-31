@@ -512,7 +512,9 @@ namespace YARG.Core.Engine.Drums.Engines
             OnOverhit?.Invoke();
         }
 
-        protected override void HitNote(EliteDrumNote note)
+        protected override void HitNote(EliteDrumNote note) => HitNote(note, false);
+
+        private void HitNote(EliteDrumNote note, bool activationAutoHit)
         {
             if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator) return;
             note.SetHitState(true, false);
@@ -533,9 +535,9 @@ namespace YARG.Core.Engine.Drums.Engines
                 AwardStarPower(note);
                 EngineStats.StarPowerPhrasesHit++;
             }
-            if (_action.HasValue && !_resolvingAuthoredContinuation)
+            if (!activationAutoHit && _action.HasValue && !_resolvingAuthoredContinuation)
                 _authoredLanes.Refresh(note, CurrentTime);
-            if (note.IsStarPowerActivator && CanStarPowerActivate)
+            if (!activationAutoHit && note.IsStarPowerActivator && CanStarPowerActivate)
             {
                 bool complete = true;
                 foreach (var sibling in note.ParentOrSelf.AllNotes)
@@ -551,13 +553,13 @@ namespace YARG.Core.Engine.Drums.Engines
                 EngineStats.IncrementNotesHit(note, CurrentTime);
             UpdateMultiplier();
             AddScore(note);
-            if (note.IsHandFlam && !IsBot && !_resolvingAuthoredContinuation)
+            if (!activationAutoHit && note.IsHandFlam && !IsBot && !_resolvingAuthoredContinuation)
             {
                 double window = EngineParameters.HitWindow.CalculateHitWindow(GetAverageNoteDistance(note));
                 _pendingFlams[note.Pad] = (note, note.Time + EngineParameters.HitWindow.GetFrontEnd(window),
                     note.Time + EngineParameters.HitWindow.GetBackEnd(window));
             }
-            OnNoteHit?.Invoke(NoteIndex, note);
+            if (!activationAutoHit) OnNoteHit?.Invoke(NoteIndex, note);
             base.HitNote(note);
         }
 
@@ -583,6 +585,13 @@ namespace YARG.Core.Engine.Drums.Engines
             {
                 note.SetHitState(true, true);
                 base.HitNote(note);
+                return;
+            }
+            // Like classic drums, an eligible activation gem is optional. Account
+            // for its score/combo without deploying SP or simulating a physical hit.
+            if (note.IsStarPowerActivator && CanStarPowerActivate)
+            {
+                HitNote(note, true);
                 return;
             }
             note.SetMissState(true, false);
