@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Mixed (needs refactoring)
+using System;
 using System.IO;
 using YARG.Core.Extensions;
 using YARG.Core.Game;
@@ -42,7 +43,8 @@ namespace YARG.Core.Replays
         /// Replays written by the YOLO line at its forked versions 15-17 are not readable;
         /// they are rejected by deserialization validation rather than a version gate.
         /// </remarks>
-        public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 21);
+        public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 22);
+        public const int HI_HAT_CLOSURE_MIN = 22;
         /// <summary>Replay version in which Elite drum fill parameters were appended to drum frames.</summary>
         public const int ELITE_FILL_MIN = 20;
         /// <summary>Replay version in which optional pedal stats were appended to drum frames and metadata.</summary>
@@ -51,11 +53,9 @@ namespace YARG.Core.Replays
         /// Increase this whenever the engine is functionally changed in any way,
         /// to where a replay may no longer simulate accurately what was originally performed.
         /// </remarks>
-        // Resolved source/tier/kick policy is recorded in profile v16, and the Elite
-        // Drums layout identity + resolved content snapshot in profile v17; the
-        // container remains v21 and the engine version is unchanged — layout is
-        // presentation/lane-mapping state, not engine or score behavior.
-        private const int ENGINE_VERSION = 6;
+        // v22 freezes experimental hi-hat closure judging in the drum parameter
+        // payload. Older recordings default to ordinary, zero-delay judging.
+        private const int ENGINE_VERSION = 7;
 
         public static (ReplayReadResult Result, ReplayInfo Info, ReplayData Data) TryDeserialize(string path, ReplayReadOptions replayOptions)
         {

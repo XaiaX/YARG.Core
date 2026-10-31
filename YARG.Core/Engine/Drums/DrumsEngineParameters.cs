@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Imperative Shell
+using System;
 using System.IO;
 using YARG.Core.Extensions;
 using YARG.Core.IO;
@@ -11,6 +12,11 @@ namespace YARG.Core.Engine.Drums
         public const byte LEGACY_ELITE_FILL_RULESET = 0;
         public const byte ELITE_FILL_RULESET_V1 = 1;
         public const float DEFAULT_ENTRY_GRACE_MULTIPLIER = 2f;
+        public const double DEFAULT_HI_HAT_CLOSURE_WINDOW = .030;
+
+        public readonly bool HiHatClosureSuppression;
+        /// <summary>Physical seconds, before song-speed conversion.</summary>
+        public readonly double HiHatClosureWindow;
 
         public enum DrumMode : byte
         {
@@ -42,7 +48,8 @@ namespace YARG.Core.Engine.Drums
 
         public DrumsEngineParameters(HitWindowSettings hitWindow, int maxMultiplier, float[] starMultiplierThresholds, float[] soloBonusStarMultiplierThresholds,
             DrumMode mode, bool noStarPowerOverlap, bool enableLanes, byte eliteFillRuleset = 0,
-            float entryGraceMultiplier = DEFAULT_ENTRY_GRACE_MULTIPLIER)
+            float entryGraceMultiplier = DEFAULT_ENTRY_GRACE_MULTIPLIER,
+            bool hiHatClosureSuppression = false, double hiHatClosureWindow = DEFAULT_HI_HAT_CLOSURE_WINDOW)
             : base(hitWindow, maxMultiplier, 0, 0, starMultiplierThresholds, soloBonusStarMultiplierThresholds, enableLanes)
         {
             Mode = mode;
@@ -51,7 +58,10 @@ namespace YARG.Core.Engine.Drums
             NoStarPowerOverlap = noStarPowerOverlap;
             EliteFillRuleset = eliteFillRuleset;
             EntryGraceMultiplier = entryGraceMultiplier;
+            HiHatClosureSuppression = hiHatClosureSuppression;
+            HiHatClosureWindow = hiHatClosureWindow;
             ValidateEliteFillParameters();
+            ValidateHiHatClosureWindow();
         }
 
         public DrumsEngineParameters(ref FixedArrayStream stream, int version)
@@ -77,6 +87,17 @@ namespace YARG.Core.Engine.Drums
                 EliteFillRuleset = LEGACY_ELITE_FILL_RULESET;
                 EntryGraceMultiplier = DEFAULT_ENTRY_GRACE_MULTIPLIER;
             }
+            if (version >= ReplayIO.HI_HAT_CLOSURE_MIN)
+            {
+                HiHatClosureSuppression = stream.ReadBoolean();
+                HiHatClosureWindow = stream.Read<double>(Endianness.Little);
+                ValidateHiHatClosureWindow();
+            }
+            else
+            {
+                HiHatClosureSuppression = false;
+                HiHatClosureWindow = DEFAULT_HI_HAT_CLOSURE_WINDOW;
+            }
         }
 
         public override void Serialize(BinaryWriter writer)
@@ -89,6 +110,15 @@ namespace YARG.Core.Engine.Drums
             writer.Write(NoStarPowerOverlap);
             writer.Write(EliteFillRuleset);
             writer.Write(EntryGraceMultiplier);
+            writer.Write(HiHatClosureSuppression);
+            writer.Write(HiHatClosureWindow);
+        }
+
+        private void ValidateHiHatClosureWindow()
+        {
+            if (double.IsNaN(HiHatClosureWindow) || double.IsInfinity(HiHatClosureWindow) ||
+                HiHatClosureWindow <= 0 || HiHatClosureWindow > .1)
+                throw new InvalidDataException($"Invalid hi-hat closure window: {HiHatClosureWindow}");
         }
 
         private void ValidateEliteFillParameters()

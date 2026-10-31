@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using YARG.Core.Chart;
@@ -195,6 +196,9 @@ namespace YARG.Core.Engine
 
         public void Update(double time)
         {
+            double inputDelay = InputProcessingDelay;
+            if (inputDelay > 0)
+                time = Math.Max(CurrentTime, time - inputDelay);
             YargLogger.LogFormatTrace("---- Starting update loop with time {0} ----", time);
 
             if (!IsBot)
@@ -203,7 +207,7 @@ namespace YARG.Core.Engine
             }
 
             // Update to the given time
-            if (InputQueue.Count > 0)
+            if (InputQueue.Count > 0 && inputDelay == 0)
             {
                 YargLogger.LogWarning("Input queue was not fully cleared!");
             }
@@ -227,6 +231,9 @@ namespace YARG.Core.Engine
         /// <summary>Native instruments may opt into draining every input at the frame timestamp.</summary>
         protected virtual bool DrainSameTimestampInputs => false;
 
+        /// <summary>Lookahead in song seconds; retained inputs keep their original judging times.</summary>
+        public virtual double InputProcessingDelay => 0;
+
         private void ProcessInputs(double time)
         {
             while (InputQueue.TryPeek(out var input))
@@ -234,8 +241,9 @@ namespace YARG.Core.Engine
                 // Stop here if the inputs are in the future
                 if (input.Time > time)
                 {
-                    YargLogger.LogFormatWarning(
-                        "Queued input is in the future! Time being updated to: {0}, input time: {1}", time, input.Time);
+                    if (InputProcessingDelay == 0)
+                        YargLogger.LogFormatWarning(
+                            "Queued input is in the future! Time being updated to: {0}, input time: {1}", time, input.Time);
                     break;
                 }
 
@@ -269,7 +277,7 @@ namespace YARG.Core.Engine
                 if (input.Time == time &&
                     (!DrainSameTimestampInputs || !InputQueue.TryPeek(out var pendingInput) || pendingInput.Time > time))
                 {
-                    if (InputQueue.Count > 0)
+                    if (InputQueue.Count > 0 && InputProcessingDelay == 0)
                     {
                         YargLogger.LogWarning(
                             "Input queue was not fully cleared! Remaining inputs are possibly in the future");

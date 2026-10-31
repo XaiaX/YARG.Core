@@ -8,7 +8,7 @@ using YARG.Core.Utility;
 namespace YARG.Core.Engine.Drums.Engines
 {
     /// <summary>Scores native Elite drum notes without converting them to four- or five-lane notes.</summary>
-    public class EliteDrumsEngine : BaseEngine<EliteDrumNote, DrumsEngineParameters, DrumsStats>
+    public partial class EliteDrumsEngine : BaseEngine<EliteDrumNote, DrumsEngineParameters, DrumsStats>
     {
         public delegate void PadHitEvent(EliteDrumsAction action, bool noteWasHit, bool wereBonusPointsAwarded,
             bool wasOverhitInLane, DrumNoteType type, float velocity);
@@ -102,6 +102,7 @@ namespace YARG.Core.Engine.Drums.Engines
             _resolvingAuthoredContinuation = false;
             _authoredLanes?.Reset();
             _pendingFlams?.Clear();
+            ResetHiHatClosures();
             base.Reset(keepCurrentButtons);
         }
 
@@ -276,6 +277,12 @@ namespace YARG.Core.Engine.Drums.Engines
             ResolveAuthoredCadenceBefore(input.Time);
             _processingPhysicalInput = true;
             var action = input.GetAction<EliteDrumsAction>();
+            _closureDecision = ResolveHiHatClosure(input);
+            if (_closureDecision == ClosureDecision.Ignore)
+            {
+                _ignoredClosureInput = input;
+                return;
+            }
             if (!IsStrikeAction(action)) return;
             // Pedals are buttons, but historical callers also send positive axes.
             // GameInput is an untagged union: use the action's declared value type.
@@ -292,7 +299,15 @@ namespace YARG.Core.Engine.Drums.Engines
         protected override void UpdateHitLogic(double time)
         {
             UpdateBot(time);
-            if (NoteIndex < Notes.Count)
+            if (_ignoredClosureInput is { } ignored)
+                OnPadHit?.Invoke(ignored.GetAction<EliteDrumsAction>(), false, false, true,
+                    DrumNoteType.Neutral, ignored.Integer == 1 ? 1f : ignored.Axis);
+            if (IsHiHatClosurePedalOverhit && _action is { } fault)
+            {
+                OnPadHit?.Invoke(fault, false, false, false, DrumNoteType.Neutral, _velocity.GetValueOrDefault());
+                Overhit();
+            }
+            else if (NoteIndex < Notes.Count)
             {
                 CheckForNoteHit();
             }
@@ -304,6 +319,8 @@ namespace YARG.Core.Engine.Drums.Engines
             }
             _action = null;
             _velocity = null;
+            _ignoredClosureInput = null;
+            _closureDecision = ClosureDecision.Normal;
             // Scheduled updates run hit logic, not AfterFrameUpdate. A cadence
             // checkpoint therefore resolves here, but never while a physical
             // input is still being adjudicated at the same timestamp.

@@ -1,3 +1,4 @@
+// pattern: Mixed (needs refactoring)
 using System;
 using YARG.Core.Engine;
 using YARG.Core.Engine.Drums;
@@ -195,7 +196,8 @@ namespace YARG.Core.Game
                 };
             }
 
-            public DrumsEngineParameters Create(float[] starMultiplierThresholds, float[] soloBonusStarMultiplierThresholds, DrumsEngineParameters.DrumMode mode)
+            public DrumsEngineParameters Create(float[] starMultiplierThresholds, float[] soloBonusStarMultiplierThresholds,
+                DrumsEngineParameters.DrumMode mode, bool hiHatClosureSuppression = false)
             {
                 var hitWindow = HitWindow.Create();
                 return new DrumsEngineParameters(
@@ -205,7 +207,8 @@ namespace YARG.Core.Game
                     soloBonusStarMultiplierThresholds,
                     mode,
                     NoStarPowerOverlap,
-                    EnableLanes);
+                    EnableLanes,
+                    hiHatClosureSuppression: hiHatClosureSuppression);
             }
         }
 
