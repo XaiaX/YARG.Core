@@ -73,19 +73,44 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         // Multi-mic state owned directly by the coordinator (was hoisted into
         // YargFreeVocalsEngine in Phase 3 so the subclass could see them).
+        protected override bool BatchSameTimestampInputs => true;
+
+        private readonly List<(uint Start, uint End)> _phraseIntervals = new();
+        private readonly HashSet<int> _reservedParts = new();
+        private readonly List<YargFreeVocalsEngine.CreditCandidate> _coverageScratch = new();
+        private readonly YargFreeVocalsEngine.CreditCandidate?[] _retainedCandidates;
+        private readonly bool[] _newSamples;
+        private int[] _selectedParts;
+        private VocalNote?[] _selectedNotes;
+        private sealed class PhraseAllocation
+        {
+            public int[] SelectedParts = Array.Empty<int>();
+            public VocalNote?[] SelectedNotes = Array.Empty<VocalNote?>();
+            public uint[] Totals = Array.Empty<uint>();
+            public double[] Credited = Array.Empty<double>();
+            public List<YargFreeVocalsEngine.CreditCandidate>[] Coverage = Array.Empty<List<YargFreeVocalsEngine.CreditCandidate>>();
+            public uint Total;
+            public double Hit;
+        }
+        private readonly Dictionary<int, PhraseAllocation> _phraseAllocations = new();
+        private int _allocationPhraseIndex;
+        private readonly ulong[] _consumedSequences;
+        private readonly double[] _lastSampleTimes;
+        private List<YargFreeVocalsEngine.CreditCandidate>[] _selectedCoverage;
+
         private readonly int _micCount;
         private readonly VocalsPart[] _allParts;
         private readonly bool[] _partHasContent;
         private readonly double[] _canonicalMeters;
-        private readonly uint[] _phraseTicksTotalPerPart;
+        private uint[] _phraseTicksTotalPerPart;
         private readonly double[,] _micPartHits;
         private readonly double[,] _lastWindowSnapshot;
-        private readonly double[] _cumulativeAssignedTicks;
+        private double[] _cumulativeAssignedTicks;
         private readonly double[] _lastTickMicDeltas;
 
         // Per-mic bitmask of which parts each mic is currently hitting THIS TICK.
         // Populated by reading each sub-engine's GetMicHittingParts after driving its tick,
-        // and read per-tick by the ambiguity classifier for scoring. This is a single-tick
+        // independently of which part receives committed credit. This is a single-tick
         // transient (the sub-engine resets it every AccumulateMicPartHits call), so it is
         // NOT suitable for the visual layer, which reads one frame later — see below.
         private readonly uint[] _micCurrentlyHittingParts;
@@ -95,27 +120,6 @@ namespace YARG.Core.Engine.Vocals.Engines
         // the sub-engine's GetMicHittingPitchedParts). A matched part without its bit
         // here was matched through a talkie (non-pitched) note.
         private readonly uint[] _micCurrentlyHittingPitchedParts;
-
-        // Per-mic classification of the current matched set: true when the mic matched
-        // at least one part and NONE of them via a pitched note. All-talkie sets
-        // broadcast their credit to every matched part; sets containing any pitched
-        // note keep the conserved-bucket routing.
-        private readonly bool[] _micMatchedAllTalkie;
-
-        // Broadcast anti-stacking bookkeeping (per phrase). For each part we
-        // track the MERGED covered tick spans of every all-talkie broadcast it
-        // received: when mic i vouches part j, the tick span it just sang
-        // ([LastCreditSpanStartTick, CurrentTick)) is unioned into
-        // _partCoveredSpans[j]. A part's broadcast credit is capped at the
-        // union's total size — the TEMPORAL UNION of all mics' covered spans —
-        // so overlapping talkie coverage counts once (two mics stacking the
-        // same line never complete it faster than one) while DISJOINT coverage
-        // adds (mic A on the first half and mic B on the second half vouch the
-        // full line, not the longer half). _broadcastDirectTicks[j] is how much
-        // broadcast credit part j has actually received; it can never exceed
-        // the union size.
-        private readonly List<(uint Start, uint End)>[] _partCoveredSpans;
-        private readonly double[] _broadcastDirectTicks;
 
         // Per-mic bitmask of parts each mic hit at ANY point during the current visual frame.
         // OR-accumulated across ticks and reset per frame (ResetMicSangFlags), mirroring
@@ -127,12 +131,7 @@ namespace YARG.Core.Engine.Vocals.Engines
         // Unified per-mic "sang this tick" flag - source of truth for needle visibility
         private readonly bool[] _micSangThisTick;
 
-        // Coordinator-specific ambiguity scoring state
-        private readonly double[] _harmDirectTicks;
-        private readonly double[] _ambiguityBuckets;
-        private readonly double[,] _bucketPerMic;
-        private readonly uint[] _micHitMaskScratch;
-        private readonly int[] _bucketOrder;
+        // Committed sample coverage is refreshed for the HUD on this throttle.
         private double _lastMeterRefreshTime;
         private const double METER_UPDATE_INTERVAL_SECONDS = 0.1;
 
@@ -160,7 +159,21 @@ namespace YARG.Core.Engine.Vocals.Engines
             int botPartIndex = 0)
             : base(noteTrack, syncTrack, engineParameters, isBot)
         {
+            double fps = engineParameters.ApproximateVocalFps;
+            if (!(fps > 0) || double.IsInfinity(fps))
+                throw new ArgumentOutOfRangeException(nameof(engineParameters),
+                    "Party vocals requires a finite positive approximate vocal sample rate.");
             int partCount = allParts.Count;
+
+            _newSamples = new bool[micCount];
+            _retainedCandidates = new YargFreeVocalsEngine.CreditCandidate?[micCount];
+            _selectedParts = Enumerable.Repeat(-1, micCount).ToArray();
+            _selectedNotes = new VocalNote?[micCount];
+            _consumedSequences = new ulong[micCount];
+            _lastSampleTimes = new double[micCount];
+            _selectedCoverage = new List<YargFreeVocalsEngine.CreditCandidate>[partCount];
+            for (int part = 0; part < partCount; part++)
+                _selectedCoverage[part] = new List<YargFreeVocalsEngine.CreditCandidate>();
 
             _micCount = micCount;
             _allParts = allParts.ToArray();
@@ -173,23 +186,8 @@ namespace YARG.Core.Engine.Vocals.Engines
             _lastTickMicDeltas = new double[micCount];
             _micCurrentlyHittingParts = new uint[micCount];
             _micCurrentlyHittingPitchedParts = new uint[micCount];
-            _micMatchedAllTalkie = new bool[micCount];
-            _partCoveredSpans = new List<(uint Start, uint End)>[partCount];
-            for (int j = 0; j < partCount; j++)
-            {
-                // Allocated once; ResetPhraseState clears (not reallocates) the
-                // contents each phrase, and per-event merging is O(1) amortized.
-                _partCoveredSpans[j] = new List<(uint Start, uint End)>(4);
-            }
-            _broadcastDirectTicks = new double[partCount];
             _micHittingPartsThisFrame = new uint[micCount];
             _micSangThisTick = new bool[micCount];
-
-            _harmDirectTicks = new double[partCount];
-            _ambiguityBuckets = new double[1 << partCount];
-            _bucketPerMic = new double[micCount, 1 << partCount];
-            _micHitMaskScratch = new uint[micCount];
-            _bucketOrder = ComputeBucketOrder(partCount);
 
             // Build one sub-engine per mic (composition).
             //
@@ -260,6 +258,9 @@ namespace YARG.Core.Engine.Vocals.Engines
 
                 // Clear all coordinator-owned phrase/visual state.
                 ResetPhraseState();
+                Array.Clear(_consumedSequences, 0, _consumedSequences.Length);
+                Array.Clear(_lastSampleTimes, 0, _lastSampleTimes.Length);
+                _lastMeterRefreshTime = double.MinValue;
             }
 
             base.Reset(keepCurrentButtons);
@@ -289,6 +290,16 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         public int PartCount => _allParts.Length;
 
+        // NoteIndex tracks ordered phrase publication, which intentionally trails
+        // song time by one capped microphone lookback near phrase boundaries.
+        private int GetPhraseIndexAtCurrentTick()
+        {
+            if (NoteIndex >= Notes.Count) return Notes.Count;
+            int index = Math.Max(0, NoteIndex);
+            while (index + 1 < Notes.Count && Notes[index + 1].Tick <= CurrentTick) index++;
+            return index;
+        }
+
         public bool PartInCurrentPhrase(int partIndex) =>
             partIndex >= 0 && partIndex < _phraseTicksTotalPerPart.Length
             && _phraseTicksTotalPerPart[partIndex] > 0u;
@@ -300,7 +311,7 @@ namespace YARG.Core.Engine.Vocals.Engines
         public bool PartInNextPhrase(int partIndex)
         {
             if (partIndex < 0 || partIndex >= _allParts.Length) return false;
-            int next = NoteIndex + 1;
+            int next = GetPhraseIndexAtCurrentTick() + 1;
             if (next < 0 || next >= Notes.Count) return false;
             return GetTicksInPhraseForPart(_allParts[partIndex], Notes[next]) > 0u;
         }
@@ -312,8 +323,9 @@ namespace YARG.Core.Engine.Vocals.Engines
         {
             get
             {
-                if (NoteIndex < 0 || NoteIndex >= Notes.Count) return 0.0;
-                var phrase = Notes[NoteIndex];
+                int index = GetPhraseIndexAtCurrentTick();
+                if (index >= Notes.Count) return 0.0;
+                var phrase = Notes[index];
                 uint span = phrase.TickEnd - phrase.Tick;
                 if (span == 0) return 0.0;
                 double p = ((double) CurrentTick - phrase.Tick) / span;
@@ -327,8 +339,9 @@ namespace YARG.Core.Engine.Vocals.Engines
         {
             get
             {
-                if (NoteIndex < 0 || NoteIndex >= Notes.Count) return 0.0;
-                var phrase = Notes[NoteIndex];
+                int index = GetPhraseIndexAtCurrentTick();
+                if (index >= Notes.Count) return 0.0;
+                var phrase = Notes[index];
                 return phrase.TimeEnd - phrase.Time;
             }
         }
@@ -432,7 +445,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             // the solo bot path (YargVocalsEngine.UpdateBot's percussion branch).
             if (IsBot)
             {
-                var botPercussion = GetNextPercussionNote(Notes[NoteIndex], CurrentTick, _resolvedPercussion.Contains);
+                var botPercussion = GetNextPercussionNote(Notes[GetPhraseIndexAtCurrentTick()], CurrentTick, _resolvedPercussion.Contains);
                 if (botPercussion is not null && CurrentTime >= botPercussion.Time)
                 {
                     HasHit = true;
@@ -468,57 +481,61 @@ namespace YARG.Core.Engine.Vocals.Engines
                 _micHittingPartsThisFrame[i] |= _micCurrentlyHittingParts[i];
             }
 
-            var phrase = Notes[NoteIndex];
-
-            // Populate per-part tick totals for the current phrase. The coordinator's
-            // phrase total sums across ALL harmony parts — not just Parts[0]/HARM1 — so
-            // phrases that only have HARM2/HARM3 notes are not treated as empty.
-            uint allPartsTotal = 0;
-            for (int j = 0; j < _allParts.Length; j++)
+            for (int mic = 0; mic < _micCount; mic++)
+                _newSamples[mic] = _subEngines[mic].SampleSequence != _consumedSequences[mic];
+            uint lookbackStart = SyncTrack.TimeToTick(time - 1.0 / EngineParameters.ApproximateVocalFps);
+            // Score each new snapshot now, including a next-phrase suffix, while
+            // retaining older phrase coverage for asynchronous microphone prefixes.
+            bool hasNewSample = false;
+            for (int mic = 0; mic < _micCount; mic++) hasNewSample |= _newSamples[mic];
+            if (hasNewSample)
             {
-                _phraseTicksTotalPerPart[j] = GetTicksInPhraseForPart(_allParts[j]);
-                allPartsTotal += _phraseTicksTotalPerPart[j];
+                for (int index = NoteIndex; index < Notes.Count && Notes[index].Tick <= CurrentTick; index++)
+                {
+                    SelectPhraseAllocation(index);
+                    AllocateSamples();
+                }
             }
-
-            _coordinatorPhraseTicksTotal ??= allPartsTotal;
-            PhraseTicksTotal ??= _coordinatorPhraseTicksTotal;
-
-            // Run the coordinator's per-tick ambiguity classifier
-            AccumulateAmbiguityScoring();
-
-            // Speculative refresh on the 100ms throttle for live HUD
-            if (CurrentTime - _lastMeterRefreshTime >= METER_UPDATE_INTERVAL_SECONDS)
+            // No microphone's sample proves completeness for another microphone.
+            // Publish only once every future capped lookback excludes this phrase.
+            while (NoteIndex < Notes.Count && CurrentTick > Notes[NoteIndex].TickEnd &&
+                lookbackStart >= Notes[NoteIndex].TickEnd)
             {
-                _lastMeterRefreshTime = CurrentTime;
-                RunAllocatorIntoCanonicalMeters(commit: false);
-            }
-
-            // Check for end of phrase
-            if (CurrentTick > phrase.TickEnd)
-            {
-                bool hasNotes = _coordinatorPhraseTicksTotal.Value != 0;
-                bool isLastPhrase = NoteIndex == Notes.Count - 1;
-                uint phraseTicksTotal = _coordinatorPhraseTicksTotal.Value;
-
+                int completedIndex = NoteIndex;
+                SelectPhraseAllocation(completedIndex);
+                var phrase = Notes[completedIndex];
+                bool isLastPhrase = completedIndex == Notes.Count - 1;
+                uint phraseTicksTotal = _coordinatorPhraseTicksTotal!.Value;
                 if (phraseTicksTotal == 0)
                 {
                     HitNote(phrase);
-                    // Fire OnPhraseHit so _phrasePercents stays aligned with
-                    // _phraseGrades/_phrasePartResults (populated by the
-                    // OnPartyVocalsPhrase handler below).
                     OnPhraseHit?.Invoke(1.0, true, isLastPhrase);
-                    OnPartyVocalsPhrase?.Invoke(
-                        PhraseGrade.Awesome, Array.Empty<PartyPartResult>(), isLastPhrase);
+                    OnPartyVocalsPhrase?.Invoke(PhraseGrade.Awesome, Array.Empty<PartyPartResult>(), isLastPhrase);
                 }
                 else
                 {
                     ProcessPhraseEnd(phrase, phraseTicksTotal, isLastPhrase);
                 }
-
-                // Reset per-phrase state
-                ResetPhraseState();
-
+                _phraseAllocations.Remove(completedIndex);
                 UpdateCarriedNote(phrase);
+            }
+            for (int mic = 0; mic < _micCount; mic++)
+            {
+                if (!_newSamples[mic]) continue;
+                _consumedSequences[mic] = _subEngines[mic].SampleSequence;
+                _lastSampleTimes[mic] = _subEngines[mic].SampleTime;
+            }
+            if (NoteIndex >= Notes.Count)
+            {
+                ResetPhraseState();
+                return;
+            }
+            SelectPhraseAllocation(GetPhraseIndexAtCurrentTick());
+
+            if (CurrentTime - _lastMeterRefreshTime >= METER_UPDATE_INTERVAL_SECONDS)
+            {
+                _lastMeterRefreshTime = CurrentTime;
+                PublishCommittedMeters();
             }
         }
 
@@ -566,8 +583,8 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         private void ProcessPhraseEnd(VocalNote phrase, uint phraseTicksTotal, bool isLastPhrase)
         {
-            // Final allocation using all accumulated credit
-            RunAllocatorIntoCanonicalMeters(commit: true);
+            // Publish the final committed values used by both phrase events.
+            PublishCommittedMeters();
 
             int partCount = _allParts.Length;
             int awesomeCount = 0;
@@ -615,30 +632,54 @@ namespace YARG.Core.Engine.Vocals.Engines
             OnPartyVocalsPhrase?.Invoke(grade, parts, isLastPhrase);
         }
 
+        private void SelectPhraseAllocation(int index)
+        {
+            if (!_phraseAllocations.TryGetValue(index, out var state))
+            {
+                state = new PhraseAllocation
+                {
+                    SelectedParts = Enumerable.Repeat(-1, _micCount).ToArray(),
+                    SelectedNotes = new VocalNote?[_micCount],
+                    Totals = new uint[_allParts.Length],
+                    Credited = new double[_allParts.Length],
+                    Coverage = new List<YargFreeVocalsEngine.CreditCandidate>[_allParts.Length]
+                };
+                for (int part = 0; part < _allParts.Length; part++)
+                {
+                    state.Totals[part] = GetTicksInPhraseForPart(_allParts[part], Notes[index]);
+                    state.Total += state.Totals[part];
+                    state.Coverage[part] = new List<YargFreeVocalsEngine.CreditCandidate>();
+                }
+                _phraseAllocations.Add(index, state);
+            }
+            _allocationPhraseIndex = index;
+            _selectedParts = state.SelectedParts;
+            _selectedNotes = state.SelectedNotes;
+            _phraseTicksTotalPerPart = state.Totals;
+            _cumulativeAssignedTicks = state.Credited;
+            _selectedCoverage = state.Coverage;
+            _coordinatorPhraseTicksTotal = state.Total;
+            PhraseTicksTotal = state.Total;
+            PhraseTicksHit = state.Hit;
+        }
+
         private void ResetPhraseState()
         {
+            _phraseAllocations.Clear();
             PhraseTicksHit = 0;
             PhraseTicksTotal = null;
             _coordinatorPhraseTicksTotal = null;
 
+            Array.Fill(_selectedParts, -1);
+            Array.Clear(_selectedNotes, 0, _selectedNotes.Length);
+            foreach (var spans in _selectedCoverage) spans.Clear();
             Array.Clear(_micPartHits, 0, _micPartHits.Length);
             Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
             Array.Clear(_cumulativeAssignedTicks, 0, _cumulativeAssignedTicks.Length);
             Array.Clear(_canonicalMeters, 0, _canonicalMeters.Length);
             Array.Clear(_phraseTicksTotalPerPart, 0, _phraseTicksTotalPerPart.Length);
-            Array.Clear(_harmDirectTicks, 0, _harmDirectTicks.Length);
-            Array.Clear(_ambiguityBuckets, 0, _ambiguityBuckets.Length);
-            Array.Clear(_bucketPerMic, 0, _bucketPerMic.Length);
             Array.Clear(_micCurrentlyHittingParts, 0, _micCurrentlyHittingParts.Length);
             Array.Clear(_micCurrentlyHittingPitchedParts, 0, _micCurrentlyHittingPitchedParts.Length);
-            Array.Clear(_micMatchedAllTalkie, 0, _micMatchedAllTalkie.Length);
-            // Keep the per-part list instances (allocation-sane); just drop the
-            // span contents so the next phrase starts with empty coverage.
-            foreach (var spans in _partCoveredSpans)
-            {
-                spans.Clear();
-            }
-            Array.Clear(_broadcastDirectTicks, 0, _broadcastDirectTicks.Length);
             Array.Clear(_micHittingPartsThisFrame, 0, _micHittingPartsThisFrame.Length);
             Array.Clear(_micSangThisTick, 0, _micSangThisTick.Length);
 
@@ -649,186 +690,175 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         #region Ambiguity Scoring
 
-        private void AccumulateAmbiguityScoring()
+        private void AllocateSamples()
         {
-            int partCount = _phraseTicksTotalPerPart.Length;
-
-            // Classify: for each mic, build the mask of HARMs it could be hitting
-            for (int i = 0; i < _micCount; i++)
+            bool hasSample = false;
+            for (int mic = 0; mic < _micCount; mic++)
+                hasSample |= _newSamples[mic];
+            if (!hasSample) return;
+            var reserved = _reservedParts;
+            reserved.Clear();
+            var retained = _retainedCandidates;
+            Array.Clear(retained, 0, retained.Length);
+            bool allFull = true;
+            for (int part = 0; part < _allParts.Length; part++)
+                if (_phraseTicksTotalPerPart[part] > 0 && _cumulativeAssignedTicks[part] <
+                    _phraseTicksTotalPerPart[part] * EngineParameters.PhraseHitPercent) allFull = false;
+            for (int mic = 0; mic < _micCount; mic++)
             {
-                uint rawMask = _micCurrentlyHittingParts[i];
-                uint rawPitchedMask = _micCurrentlyHittingPitchedParts[i];
-                uint mask = 0u;
-                for (int j = 0; j < partCount; j++)
+                var sub = _subEngines[mic];
+                if (!_newSamples[mic])
                 {
-                    if ((rawMask & (1u << j)) != 0u && _phraseTicksTotalPerPart[j] > 0u)
-                        mask |= 1u << j;
+                    int part = _selectedParts[mic];
+                    var note = _selectedNotes[mic];
+                    if (part >= 0 && note != null && CurrentTick < note.TotalTickEnd &&
+                        CurrentTime - _lastSampleTimes[mic] <= 2.0 / EngineParameters.ApproximateVocalFps &&
+                        _cumulativeAssignedTicks[part] < _phraseTicksTotalPerPart[part] * EngineParameters.PhraseHitPercent)
+                        reserved.Add(part);
+                    continue;
                 }
-                _micHitMaskScratch[i] = mask;
-
-                // Note-kind of the matched set: all-talkie when at least one part
-                // matched and NO matched part's current note is pitched. The pitched
-                // test ANDs against the filtered mask so a part excluded above (no
-                // phrase content) cannot flip the verdict. Deliberately PopCount-free —
-                // that helper only counts bits 0-2, while this stays correct for any
-                // part count.
-                _micMatchedAllTalkie[i] = mask != 0u && (rawPitchedMask & mask) == 0u;
-            }
-
-            // Direct credit: binary across mics. All-talkie matched sets BROADCAST
-            // here instead of entering the conserved buckets: every matched part is
-            // credited the mic's own per-part delta for it (capped by that part's own
-            // phrase total in the allocator), so overlapping talkie lines all complete.
-            // Pitched/mixed sets keep the prior routing unchanged.
-            for (int j = 0; j < partCount; j++)
-            {
-                double maxDelta = 0;
-                double maxBroadcast = 0;
-                for (int i = 0; i < _micCount; i++)
+                bool gap = sub.SampleTime - _lastSampleTimes[mic] > 2.0 / EngineParameters.ApproximateVocalFps;
+                if (!gap)
                 {
-                    uint m = _micHitMaskScratch[i];
-                    if ((m & (1u << j)) == 0u)
-                        continue;
-
-                    if (_micMatchedAllTalkie[i])
+                    foreach (var candidate in sub.CreditCandidates)
                     {
-                        // Broadcast: this part takes this mic's per-part delta for it,
-                        // and the tick span the mic just sang joins the part's
-                        // temporal-union coverage (the budget below).
-                        double d = _subEngines[i].LastTickPartDeltas[j];
-                        RecordCoveredSpan(j, _subEngines[i].LastCreditSpanStartTick, CurrentTick);
-                        if (d > maxBroadcast) maxBroadcast = d;
-                    }
-                    else if (PopCount(m) == 1)
-                    {
-                        if (_lastTickMicDeltas[i] > maxDelta) maxDelta = _lastTickMicDeltas[i];
-                    }
-                    // else: pitched/mixed ambiguous set → conserved bucket only
-                }
-
-                // Broadcast budget = TEMPORAL UNION of every mic's covered ticks
-                // for this part (NOT the max single-mic total): a tick sung by
-                // any mic counts once, so overlapping talkie coverage never
-                // stacks, while disjoint coverage adds. The cap never binds for
-                // a single mic — the union grows by exactly the span being
-                // credited.
-                double broadcastCeiling = CoveredSpanUnion(j);
-                double broadcastBudget = broadcastCeiling - _broadcastDirectTicks[j];
-                if (broadcastBudget > 0)
-                {
-                    double add = maxBroadcast < broadcastBudget ? maxBroadcast : broadcastBudget;
-                    _broadcastDirectTicks[j] += add;
-                    maxDelta += add;
-                }
-
-                _harmDirectTicks[j] += maxDelta;
-            }
-
-            // Ambiguity bucket credit: additive across mics with per-mic-span cap.
-            // Use per-part delta (not summed) so the per-mic-span cap correctly
-            // limits each HARM to what one mic actually contributed per HARM.
-            for (int i = 0; i < _micCount; i++)
-            {
-                uint m = _micHitMaskScratch[i];
-                // All-talkie matched sets were broadcast directly above; they get no
-                // allocator and no conservation. Sets containing ANY pitched note keep
-                // the exact prior conserved-bucket semantics.
-                if (!_micMatchedAllTalkie[i] && PopCount(m) >= 2)
-                {
-                    var deltas = _subEngines[i].LastTickPartDeltas;
-                    double partDelta = 0;
-                    int hitCount = 0;
-                    for (int j = 0; j < partCount && j < deltas.Count; j++)
-                    {
-                        if ((m & (1u << j)) != 0u)
+                        if (candidate.End <= Notes[_allocationPhraseIndex].Tick || candidate.Start >= Notes[_allocationPhraseIndex].TickEnd) continue;
+                        int part = candidate.PartIndex;
+                        // An exact note end is a fresh selection opportunity; its clipped
+                        // interval remains eligible if that part is selected again.
+                        if (part == _selectedParts[mic] && ReferenceEquals(candidate.Note, _selectedNotes[mic]) &&
+                            candidate.End < candidate.Note.TotalTickEnd &&
+                            (allFull || _cumulativeAssignedTicks[part] < _phraseTicksTotalPerPart[part] * EngineParameters.PhraseHitPercent))
                         {
-                            partDelta += deltas[j];
-                            hitCount++;
+                            retained[mic] = candidate;
+                            reserved.Add(part);
+                            break;
                         }
                     }
-                    if (hitCount > 0) partDelta /= hitCount;
-
-                    _ambiguityBuckets[(int)m] += partDelta;
-                    _bucketPerMic[i, (int)m] += partDelta;
                 }
             }
+
+            for (int mic = 0; mic < _micCount; mic++)
+            {
+                var sub = _subEngines[mic];
+                if (!_newSamples[mic]) continue;
+                var chosen = retained[mic];
+                if (!chosen.HasValue)
+                {
+                    // Prefer an unfinished, unreserved line, then allow a full matching
+                    // line to receive surplus. A positive pitched match wins fresh ties.
+                    for (int pass = 0; pass < 3 && !chosen.HasValue; pass++)
+                    {
+                        foreach (var candidate in sub.CreditCandidates)
+                        {
+                            if (candidate.End <= Notes[_allocationPhraseIndex].Tick || candidate.Start >= Notes[_allocationPhraseIndex].TickEnd) continue;
+                            int part = candidate.PartIndex;
+                            if (_phraseTicksTotalPerPart[part] == 0) continue;
+                            bool unfinished = _cumulativeAssignedTicks[part] <
+                                _phraseTicksTotalPerPart[part] * EngineParameters.PhraseHitPercent;
+                            if (pass == 0 && (!unfinished || reserved.Contains(part))) continue;
+                            if (pass == 1 && !unfinished) continue;
+                            if (!chosen.HasValue ||
+                                (chosen.Value.Note.IsNonPitched && !candidate.Note.IsNonPitched) ||
+                                (chosen.Value.Note.IsNonPitched == candidate.Note.IsNonPitched &&
+                                    candidate.Weight > chosen.Value.Weight))
+                                chosen = candidate;
+                        }
+                    }
+                }
+                _selectedParts[mic] = chosen?.PartIndex ?? -1;
+                _selectedNotes[mic] = chosen?.Note;
+                if (chosen is { } selected)
+                {
+                    reserved.Add(selected.PartIndex);
+                    var phrase = Notes[_allocationPhraseIndex];
+                    foreach (var candidate in sub.CreditCandidates)
+                    {
+                        if (candidate.PartIndex != selected.PartIndex) continue;
+                        uint start = Math.Max(candidate.Start, phrase.Tick);
+                        uint end = Math.Min(candidate.End, phrase.TickEnd);
+                        if (end > start)
+                            AddCoverage(new YargFreeVocalsEngine.CreditCandidate(
+                                selected.PartIndex, candidate.Note, start, end, candidate.Weight));
+                    }
+                }
+            }
+
+        }
+
+        private void AddCoverage(YargFreeVocalsEngine.CreditCandidate candidate)
+        {
+            var spans = _selectedCoverage[candidate.PartIndex];
+            var scratch = _coverageScratch;
+            scratch.Clear();
+            int first = spans.Count;
+            while (first > 0 && spans[first - 1].End >= candidate.Start) first--;
+            int last = first;
+            uint cursor = candidate.Start;
+            double delta = 0;
+            while (last < spans.Count && spans[last].Start <= candidate.End)
+            {
+                var old = spans[last++];
+                if (old.Start < cursor)
+                    AppendCoverage(scratch, candidate, old.Start, cursor, old.Weight);
+                if (old.Start > cursor)
+                {
+                    uint gapEnd = Math.Min(old.Start, candidate.End);
+                    AppendCoverage(scratch, candidate, cursor, gapEnd, candidate.Weight);
+                    delta += (gapEnd - cursor) * (double)candidate.Weight;
+                    cursor = gapEnd;
+                }
+                uint end = Math.Min(old.End, candidate.End);
+                if (end > cursor)
+                {
+                    float weight = Math.Max(old.Weight, candidate.Weight);
+                    AppendCoverage(scratch, candidate, cursor, end, weight);
+                    delta += (end - cursor) * (double)(weight - old.Weight);
+                    cursor = end;
+                }
+                if (old.End > candidate.End)
+                    AppendCoverage(scratch, candidate, candidate.End, old.End, old.Weight);
+            }
+            if (cursor < candidate.End)
+            {
+                AppendCoverage(scratch, candidate, cursor, candidate.End, candidate.Weight);
+                delta += (candidate.End - cursor) * (double)candidate.Weight;
+            }
+            spans.RemoveRange(first, last - first);
+            spans.InsertRange(first, scratch);
+            _cumulativeAssignedTicks[candidate.PartIndex] = Math.Min(
+                _phraseTicksTotalPerPart[candidate.PartIndex],
+                _cumulativeAssignedTicks[candidate.PartIndex] + delta);
+        }
+
+        private static void AppendCoverage(List<YargFreeVocalsEngine.CreditCandidate> spans,
+            YargFreeVocalsEngine.CreditCandidate candidate, uint start, uint end, float weight)
+        {
+            if (end <= start) return;
+            if (spans.Count > 0 && spans[spans.Count - 1].End == start && spans[spans.Count - 1].Weight == weight)
+            {
+                start = spans[spans.Count - 1].Start;
+                spans.RemoveAt(spans.Count - 1);
+            }
+            spans.Add(new YargFreeVocalsEngine.CreditCandidate(candidate.PartIndex, candidate.Note, start, end, weight));
         }
 
         #endregion
 
         #region Allocator
 
-        private void RunAllocatorIntoCanonicalMeters(bool commit)
+        private void PublishCommittedMeters()
         {
             int partCount = _phraseTicksTotalPerPart.Length;
 
-            Span<double> credited = stackalloc double[partCount];
             for (int j = 0; j < partCount; j++)
             {
                 uint cap = _phraseTicksTotalPerPart[j];
-                credited[j] = cap == 0 ? 0 : Math.Min(_harmDirectTicks[j], cap);
-            }
-
-            Span<double> bucketsCopy = stackalloc double[_ambiguityBuckets.Length];
-            for (int i = 0; i < _ambiguityBuckets.Length; i++) bucketsCopy[i] = _ambiguityBuckets[i];
-
-            Span<double> receivedFromBucket = stackalloc double[partCount];
-
-            foreach (int S in _bucketOrder)
-            {
-                if (bucketsCopy[S] <= 0) continue;
-
-                double perMicCap = 0;
-                for (int i = 0; i < _micCount; i++)
-                {
-                    double v = _bucketPerMic[i, S];
-                    if (v > perMicCap) perMicCap = v;
-                }
-
-                receivedFromBucket.Clear();
-
-                while (bucketsCopy[S] > 0)
-                {
-                    int chosen = -1;
-                    double chosenCredited = -1;
-                    for (int j = 0; j < partCount; j++)
-                    {
-                        if ((S & (1 << j)) == 0) continue;
-                        uint cap = _phraseTicksTotalPerPart[j];
-                        if (cap == 0 || credited[j] >= cap) continue;
-                        if (receivedFromBucket[j] >= perMicCap) continue;
-                        if (credited[j] > chosenCredited)
-                        {
-                            chosenCredited = credited[j];
-                            chosen = j;
-                        }
-                    }
-
-                    if (chosen < 0) break;
-
-                    double remainingCapacity = _phraseTicksTotalPerPart[chosen] - credited[chosen];
-                    double remainingPerMicCap = perMicCap - receivedFromBucket[chosen];
-                    double transfer = Math.Min(
-                        Math.Min(bucketsCopy[S], remainingCapacity),
-                        remainingPerMicCap);
-                    if (transfer <= 0) break;
-                    credited[chosen] += transfer;
-                    bucketsCopy[S] -= transfer;
-                    receivedFromBucket[chosen] += transfer;
-                }
-            }
-
-            for (int j = 0; j < partCount; j++)
-            {
-                uint cap = _phraseTicksTotalPerPart[j];
-                _canonicalMeters[j] = cap == 0 ? 0 : credited[j] / cap;
+                _canonicalMeters[j] = cap == 0 ? 0 : _cumulativeAssignedTicks[j] / cap;
             }
 
             // Mirror best meter into PhraseTicksHit for HUD combo fill bar.
-            // The fill bar represents accumulated progress within a phrase and must be
-            // monotonically non-decreasing — the allocator's speculative refresh can
-            // momentarily compute a lower "best" if timing causes a part's direct
-            // ticks to be reclassified, so we clamp to the previous value.
+            // Both the fill bar and per-part meters reflect the same committed coverage.
             if (PhraseTicksTotal is { } total && total > 0)
             {
                 double best = 0;
@@ -840,98 +870,50 @@ namespace YARG.Core.Engine.Vocals.Engines
                     PhraseTicksHit = newHit;
                 }
             }
-        }
-
-        private static int[] ComputeBucketOrder(int partCount)
-        {
-            var masks = new List<int>();
-            for (int m = 0; m < (1 << partCount); m++)
-            {
-                if (PopCount((uint)m) >= 2) masks.Add(m);
-            }
-            masks.Sort((a, b) =>
-            {
-                int pa = PopCount((uint)a);
-                int pb = PopCount((uint)b);
-                if (pa != pb) return pa - pb;
-                return a - b;
-            });
-            return masks.ToArray();
-        }
-
-        /// <summary>
-        /// Records a mic's covered tick span [start, end) into a part's
-        /// temporal-union coverage. Spans arrive with non-decreasing ends (engine
-        /// time advances between records), so a new span can only overlap a
-        /// SUFFIX of the stored, disjoint list; that suffix is replaced by its
-        /// union. O(1) for the common non-overlapping case, zero allocations
-        /// beyond list growth (capacity is retained across phrase resets).
-        /// </summary>
-        private void RecordCoveredSpan(int partIndex, uint start, uint end)
-        {
-            if (end <= start) return; // zero-length span covers nothing
-
-            var spans = _partCoveredSpans[partIndex];
-            int i = spans.Count;
-            while (i > 0 && spans[i - 1].End > start) i--;
-
-            if (i == spans.Count)
-            {
-                spans.Add((start, end));
-                return;
-            }
-
-            // Union the overlapping suffix into a single tail span.
-            uint mergedStart = start < spans[i].Start ? start : spans[i].Start;
-            spans.RemoveRange(i + 1, spans.Count - (i + 1));
-            spans[i] = (mergedStart, end);
-        }
-
-        /// <summary>
-        /// Total size of a part's merged covered spans — the temporal union of
-        /// every mic's broadcast coverage for it, in phrase ticks.
-        /// </summary>
-        private double CoveredSpanUnion(int partIndex)
-        {
-            double total = 0;
-            foreach (var (start, end) in _partCoveredSpans[partIndex])
-            {
-                total += end - start;
-            }
-            return total;
-        }
-
-        private static int PopCount(uint m)
-        {
-            return (int)(((m >> 0) & 1u) + ((m >> 1) & 1u) + ((m >> 2) & 1u));
+            if (_phraseAllocations.TryGetValue(_allocationPhraseIndex, out var state)) state.Hit = PhraseTicksHit;
         }
 
         #endregion
 
         #region Helpers
 
-        private uint GetTicksInPhraseForPart(VocalsPart part) =>
-            GetTicksInPhraseForPart(part, Notes[NoteIndex]);
-
         private uint GetTicksInPhraseForPart(VocalsPart part, VocalNote masterPhrase)
         {
             uint masterStart = masterPhrase.Tick;
             uint masterEnd = masterPhrase.TickEnd;
 
-            uint totalTime = 0;
+            var intervals = _phraseIntervals;
+            intervals.Clear();
             foreach (var partPhrase in part.NotePhrases)
             {
                 var phraseNote = partPhrase.PhraseParentNote;
                 if (phraseNote.Tick >= masterEnd) break;
-                if (phraseNote.TickEnd <= masterStart) continue;
-
                 foreach (var noteInPhrase in phraseNote.ChildNotes)
                 {
                     if (noteInPhrase.IsPercussion) continue;
-                    totalTime += phraseNote.GetTicksForNote(noteInPhrase);
+                    uint start = Math.Max(masterStart, Math.Max(phraseNote.Tick, noteInPhrase.Tick));
+                    uint end = Math.Min(masterEnd, noteInPhrase.TotalTickEnd);
+                    if (end > start) intervals.Add((start, end));
                 }
             }
-            return totalTime;
+            intervals.Sort((left, right) => left.Start.CompareTo(right.Start));
+            uint totalTime = 0;
+            uint unionStart = 0;
+            uint unionEnd = 0;
+            foreach (var interval in intervals)
+            {
+                if (interval.Start > unionEnd)
+                {
+                    totalTime += unionEnd - unionStart;
+                    unionStart = interval.Start;
+                    unionEnd = interval.End;
+                }
+                else
+                {
+                    unionEnd = Math.Max(unionEnd, interval.End);
+                }
+            }
+            return totalTime + unionEnd - unionStart;
         }
 
         #endregion
@@ -946,7 +928,8 @@ namespace YARG.Core.Engine.Vocals.Engines
                 return;
             }
 
-            var phrase = Notes[NoteIndex];
+            int phraseIndex = GetPhraseIndexAtCurrentTick();
+            var phrase = Notes[phraseIndex];
             var percussion = GetNextPercussionNote(phrase, CurrentTick, _resolvedPercussion.Contains);
             if (percussion is not null)
             {
@@ -963,7 +946,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                         // mutated, then score exactly as before.
                         _resolvedPercussion.Add(percussion);
                         AddScore(percussion);
-                        OnNoteHit?.Invoke(NoteIndex, percussion);
+                        OnNoteHit?.Invoke(phraseIndex, percussion);
                     }
                 }
                 else if (missed)
@@ -973,7 +956,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                     // the miss event, mirroring solo's MissNote(percussion) minus the
                     // shared-note SetMissState.
                     _resolvedPercussion.Add(percussion);
-                    OnNoteMissed?.Invoke(NoteIndex, percussion);
+                    OnNoteMissed?.Invoke(phraseIndex, percussion);
                 }
             }
             else

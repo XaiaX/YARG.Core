@@ -32,21 +32,6 @@ public sealed class PartyVocalsCoordinatorEngineTests
         VocalsEngineTests.SoloBonusStarMultiplierThresholds,
         1.5f, 0.5f, AwesomeThreshold, 60.0, false, 1000);
 
-    private static readonly FieldInfo HarmDirectTicksField =
-        typeof(PartyVocalsCoordinatorEngine).GetField("_harmDirectTicks",
-            BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not find _harmDirectTicks");
-
-    private static readonly FieldInfo AmbiguityBucketsField =
-        typeof(PartyVocalsCoordinatorEngine).GetField("_ambiguityBuckets",
-            BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not find _ambiguityBuckets");
-
-    private static readonly MethodInfo RunAllocatorMethod =
-        typeof(PartyVocalsCoordinatorEngine).GetMethod("RunAllocatorIntoCanonicalMeters",
-            BindingFlags.NonPublic | BindingFlags.Instance)
-        ?? throw new InvalidOperationException("Could not find RunAllocatorIntoCanonicalMeters");
-
     private static readonly MethodInfo GetTicksInPhraseForPartMethod =
         typeof(PartyVocalsCoordinatorEngine).GetMethods(BindingFlags.NonPublic | BindingFlags.Instance)
             .Single(method => method.Name == "GetTicksInPhraseForPart"
@@ -239,66 +224,11 @@ public sealed class PartyVocalsCoordinatorEngineTests
         }
     }
 
-    private static double[] GetHarmDirectTicks(PartyVocalsCoordinatorEngine engine) =>
-        (double[])HarmDirectTicksField.GetValue(engine)!;
-
-    private static double[] GetAmbiguityBuckets(PartyVocalsCoordinatorEngine engine) =>
-        (double[])AmbiguityBucketsField.GetValue(engine)!;
-
     private static double[] GetCanonicalMeters(PartyVocalsCoordinatorEngine engine)
     {
         var field = typeof(PartyVocalsCoordinatorEngine)
             .GetField("_canonicalMeters", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((double[])field.GetValue(engine)!).ToArray();
-    }
-
-    private static void SetDirectTicks(PartyVocalsCoordinatorEngine engine, int partIndex, double ticks)
-    {
-        var arr = (double[])HarmDirectTicksField.GetValue(engine)!;
-        arr[partIndex] = ticks;
-    }
-
-    private static void SetAmbiguityBucket(PartyVocalsCoordinatorEngine engine, int mask, double ticks)
-    {
-        var arr = (double[])AmbiguityBucketsField.GetValue(engine)!;
-        arr[mask] = ticks;
-        // Also set the per-mic bookkeeping so perMicCap matches the bucket total.
-        // For unit tests, mic 0 is treated as the sole contributor — perMicCap = ticks.
-        // This makes the bucket's credit fully usable by any single HARM (matching the
-        // pre-per-mic-cap allocator's behavior for the cases these tests exercise).
-        var perMic = (double[,])typeof(PartyVocalsCoordinatorEngine)
-            .GetField("_bucketPerMic", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .GetValue(engine)!;
-        perMic[0, mask] = ticks;
-    }
-
-    /// <summary>
-    /// Per-mic bucket credit injector for tests that need to model multi-mic
-    /// contributions explicitly (e.g., stacking-shortcut regression tests).
-    /// Caller is responsible for keeping _ambiguityBuckets[mask] consistent
-    /// (= sum across mics).
-    /// </summary>
-    private static void SetBucketPerMic(PartyVocalsCoordinatorEngine engine, int micIndex, int mask, double ticks)
-    {
-        var perMic = (double[,])typeof(PartyVocalsCoordinatorEngine)
-            .GetField("_bucketPerMic", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .GetValue(engine)!;
-        perMic[micIndex, mask] = ticks;
-    }
-
-    private static void SetPhraseTicksTotalPerPart(PartyVocalsCoordinatorEngine engine, params uint[] values)
-    {
-        var field = typeof(PartyVocalsCoordinatorEngine)
-            .GetField("_phraseTicksTotalPerPart", BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var arr = (uint[])field.GetValue(engine)!;
-        for (int i = 0; i < values.Length && i < arr.Length; i++)
-            arr[i] = values[i];
-    }
-
-    private static double[] RunAllocatorAndReturnMeters(PartyVocalsCoordinatorEngine engine)
-    {
-        RunAllocatorMethod.Invoke(engine, new object[] { false });
-        return GetCanonicalMeters(engine);
     }
 
     // ================================================================
@@ -397,123 +327,12 @@ public sealed class PartyVocalsCoordinatorEngineTests
     // AC10: Greedy allocator
     // ================================================================
 
-    [Test]
-    public void Allocator_OnlyDirect_FillsHarmsExact()
-    {
-        // direct = [100, 0], no buckets, capacity = [100, 100]
-        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
-        var engine = CreateCoordinator(parts, 2);
-
-        SetPhraseTicksTotalPerPart(engine, 100, 100);
-        SetDirectTicks(engine, 0, 100);
-        SetDirectTicks(engine, 1, 0);
-
-        var meters = RunAllocatorAndReturnMeters(engine);
-
-        Assert.AreEqual(1.0, meters[0], Epsilon, "HARM0 filled to 1.0");
-        Assert.AreEqual(0.0, meters[1], Epsilon, "HARM1 stays 0.0");
-    }
-
-    [Test]
-    public void Allocator_OnlyBucket01_FillsHarm0First()
-    {
-        // direct = [0, 0], bucket[{0,1}] = 100, capacity = [100, 100]
-        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
-        var engine = CreateCoordinator(parts, 2);
-
-        SetPhraseTicksTotalPerPart(engine, 100, 100);
-        SetDirectTicks(engine, 0, 0);
-        SetDirectTicks(engine, 1, 0);
-        SetAmbiguityBucket(engine, 3, 100); // {0,1} = 0b011
-
-        var meters = RunAllocatorAndReturnMeters(engine);
-
-        Assert.AreEqual(1.0, meters[0], Epsilon, "HARM0 filled first (tiebreak)");
-        Assert.AreEqual(0.0, meters[1], Epsilon, "HARM1 stays 0.0");
-    }
-
-    [Test]
-    public void Allocator_Bucket01_2N_FillsBothHarms()
-    {
-        // direct = [0, 0], bucket[{0,1}] = 200, capacity = [100, 100]
-        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
-        var engine = CreateCoordinator(parts, 2);
-
-        SetPhraseTicksTotalPerPart(engine, 100, 100);
-        SetDirectTicks(engine, 0, 0);
-        SetDirectTicks(engine, 1, 0);
-        SetAmbiguityBucket(engine, 3, 200); // {0,1} with 2× capacity
-
-        var meters = RunAllocatorAndReturnMeters(engine);
-
-        Assert.AreEqual(1.0, meters[0], Epsilon, "HARM0 filled to 1.0");
-        Assert.AreEqual(1.0, meters[1], Epsilon, "HARM1 filled to 1.0");
-    }
-
-    [Test]
-    public void Allocator_Direct0Full_Bucket01_RoutesToHarm1()
-    {
-        // direct = [100, 0], bucket[{0,1}] = 100, capacity = [100, 100]
-        // HARM0 already full, bucket routes to HARM1
-        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true) };
-        var engine = CreateCoordinator(parts, 2);
-
-        SetPhraseTicksTotalPerPart(engine, 100, 100);
-        SetDirectTicks(engine, 0, 100);
-        SetDirectTicks(engine, 1, 0);
-        SetAmbiguityBucket(engine, 3, 100);
-
-        var meters = RunAllocatorAndReturnMeters(engine);
-
-        Assert.AreEqual(1.0, meters[0], Epsilon, "HARM0 capped by direct");
-        Assert.AreEqual(1.0, meters[1], Epsilon, "Bucket routed to HARM1");
-    }
-
-    [Test]
-    public void Allocator_NarrowestFirst()
-    {
-        // bucket[{0,1}] = 100, bucket[{0,1,2}] = 100, capacity = [100, 100, 100]
-        // Narrowest {0,1} fills HARM0, then {0,1,2} fills HARM1
-        var parts = new List<VocalsPart> { CreateVocalsPart(), CreateVocalsPart(true), CreateVocalsPart(true) };
-        var engine = CreateCoordinator(parts, 2);
-
-        SetPhraseTicksTotalPerPart(engine, 100, 100, 100);
-        SetDirectTicks(engine, 0, 0);
-        SetDirectTicks(engine, 1, 0);
-        SetDirectTicks(engine, 2, 0);
-        SetAmbiguityBucket(engine, 3, 100);  // {0,1}
-        SetAmbiguityBucket(engine, 7, 100);  // {0,1,2}
-
-        var meters = RunAllocatorAndReturnMeters(engine);
-
-        Assert.AreEqual(1.0, meters[0], Epsilon, "HARM0 filled by {0,1}");
-        Assert.AreEqual(1.0, meters[1], Epsilon, "HARM1 filled by {0,1,2}");
-        Assert.AreEqual(0.0, meters[2], Epsilon, "HARM2 stays 0");
-    }
+    // Allocation is tested with real packed inputs in FreeHarmonyCreditAllocationTests.
 
     // ================================================================
     // Scenario Tests (10-13)
     // AC14: Correctness scenarios
     // ================================================================
-
-    [Test]
-    public void Scenario_StackShortcutPrevention_HalfPhraseTwoMicsHarm0_Miss()
-    {
-        // AC14.1: Two mics stacking on HARM0 for half the phrase.
-        // Direct credit is binary (max across mics), so M_0 = 0.5 < PhraseHitPercent.
-        // Test via the allocator directly: direct = [240, 0], capacity = [480, 0].
-        // Meter = 240/480 = 0.5 < 0.75 → Miss.
-        var parts = new List<VocalsPart> { CreateVocalsPart() };
-        var engine = CreateCoordinator(parts, 1);
-
-        SetPhraseTicksTotalPerPart(engine, 480);
-        SetDirectTicks(engine, 0, 240); // Half coverage
-
-        var meters = RunAllocatorAndReturnMeters(engine);
-
-        Assert.AreEqual(0.5, meters[0], Epsilon, "HARM0 meter should be 0.5");
-        Assert.Less(meters[0], AwesomeThreshold, "Should be below Awesome threshold");
-    }
 
     [Test]
     public void Scenario_TrueUnison_TwoMics_DoubleAwesome()
@@ -662,14 +481,11 @@ public sealed class PartyVocalsCoordinatorEngineTests
         engine.Update(1.5); // past phrase end
 
         Assert.AreEqual(1, grades.Count, "One phrase grade");
-        Assert.AreEqual(PhraseGrade.DoubleAwesome, grades[0],
-            "All-talkie match must broadcast credit to EVERY matched part — both " +
-            "HARM1 and HARM2 meters complete (RED today: Awesome, one part only).");
-        Assert.AreEqual(1.0, metersByPart[1], Epsilon,
-            "HARM1 meter completes from the broadcast");
-        Assert.AreEqual(1.0, metersByPart[2], Epsilon,
-            "HARM2 meter must ALSO complete from the same samples (RED today: 0.0 " +
-            "— the conserved bucket gave all credit to HARM1).");
+        Assert.AreEqual(PhraseGrade.Awesome, grades[0],
+            "One microphone can complete only one of these simultaneous lines");
+        Assert.That(metersByPart[1], Is.InRange(AwesomeThreshold, AwesomeThreshold + 0.04));
+        Assert.Less(metersByPart[2], AwesomeThreshold,
+            "Only samples after the first Awesome may advance the second line");
     }
 
     [Test]
@@ -714,8 +530,8 @@ public sealed class PartyVocalsCoordinatorEngineTests
         Assert.AreEqual(PhraseGrade.Awesome, grades[0],
             "Exactly one part completes: pitched-wins conserves the credit through " +
             "the bucket (GUARD: naive broadcast would grade DoubleAwesome).");
-        Assert.AreEqual(1.0, metersByPart[1], Epsilon,
-            "Pitched HARM1 completes through the conserved bucket");
+        Assert.That(metersByPart[1], Is.InRange(AwesomeThreshold, AwesomeThreshold + 0.04),
+            "The pitched line hands off on the sample after Awesome");
         Assert.Less(metersByPart[2], AwesomeThreshold,
             "Talkie-only HARM2 must NOT auto-complete from the same samples " +
             "(GUARD: naive broadcast would fill it to 1.0).");
@@ -762,16 +578,13 @@ public sealed class PartyVocalsCoordinatorEngineTests
         engine.Update(3.5); // past the 0-2880 master phrase
 
         Assert.AreEqual(1, grades.Count, "One phrase grade");
-        Assert.AreEqual(PhraseGrade.TripleAwesome, grades[0],
-            "All three talkie lines complete independently (RED today: Awesome — " +
-            "conserved bucket fills HARM1 only).");
-        Assert.AreEqual(1.0, metersByPart[1], Epsilon,
-            "HARM1 short talkie completes");
-        Assert.AreEqual(1.0, metersByPart[2], Epsilon,
-            "HARM2 short talkie completes (RED today: 0.0)");
-        Assert.AreEqual(1.0, metersByPart[3], Epsilon,
-            "HARM3 long talkie completes (RED today: ~0.67 — the broadcast-window " +
-            "credit was conserved into HARM1 instead of shared)");
+        Assert.AreEqual(PhraseGrade.Awesome, grades[0],
+            "One microphone does not broadcast its short-line coverage");
+        Assert.GreaterOrEqual(metersByPart[1], AwesomeThreshold);
+        Assert.Less(metersByPart[2], AwesomeThreshold,
+            "The second short line expires before enough new samples arrive");
+        Assert.Less(metersByPart[3], AwesomeThreshold,
+            "The long line receives only its own selected tail coverage");
     }
 
     /// <summary>

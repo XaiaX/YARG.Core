@@ -214,6 +214,8 @@ namespace YARG.Core.Engine
             RunEngineLoop(time);
         }
 
+        protected virtual bool BatchSameTimestampInputs => false;
+
         private void ProcessInputs(double time)
         {
             while (InputQueue.TryPeek(out var input))
@@ -244,6 +246,14 @@ namespace YARG.Core.Engine
 
                 // Update engine state with input.
                 MutateStateWithInput(input);
+                if (BatchSameTimestampInputs)
+                {
+                    while (InputQueue.TryPeek(out var next) && next.Time == input.Time)
+                    {
+                        InputQueue.Dequeue();
+                        MutateStateWithInput(next);
+                    }
+                }
 
                 // Run the engine.
                 RunEngineLoop(input.Time);

@@ -20,6 +20,33 @@ namespace YARG.Core.Engine.Vocals.Engines
     {
         public int CurrentTargetHarmonyIndex { get; private set; }
 
+        public readonly struct CreditCandidate
+        {
+            public readonly int PartIndex;
+            public readonly VocalNote Note;
+            public readonly uint Start;
+            public readonly uint End;
+            public readonly float Weight;
+
+            public CreditCandidate(int partIndex, VocalNote note, uint start, uint end, float weight)
+            {
+                PartIndex = partIndex;
+                Note = note;
+                Start = start;
+                End = end;
+                Weight = weight;
+            }
+        }
+
+        private readonly List<CreditCandidate> _creditCandidates = new();
+        public IReadOnlyList<CreditCandidate> CreditCandidates => _creditCandidates;
+        public ulong SampleSequence { get; private set; }
+        public double SampleTime { get; private set; }
+        private bool _pendingSample;
+        private readonly VocalNote[][] _candidateNotes;
+        private readonly List<VocalNote>[] _activeCandidateNotes;
+        private readonly int[] _candidateNoteIndices;
+
         /// <summary>
         /// Whether each HARM part has any phrase content in this chart. The Harmony
         /// track always exposes 3 placeholder parts even if the song only charts
@@ -93,6 +120,16 @@ namespace YARG.Core.Engine.Vocals.Engines
             StripStarPowerOnMiss = !isSubEngine;
 
             _allParts = allParts;
+            _candidateNotes = new VocalNote[allParts.Count][];
+            _activeCandidateNotes = new List<VocalNote>[allParts.Count];
+            _candidateNoteIndices = new int[allParts.Count];
+            for (int part = 0; part < allParts.Count; part++)
+            {
+                _candidateNotes[part] = allParts[part].NotePhrases
+                    .SelectMany(phrase => phrase.PhraseParentNote.ChildNotes)
+                    .Where(note => !note.IsPercussion).OrderBy(note => note.Tick).ToArray();
+                _activeCandidateNotes[part] = new List<VocalNote>();
+            }
             _botPartIndex = Math.Max(0, Math.Min(botPartIndex, allParts.Count - 1));
             _currentBotEffectivePartIndex = _botPartIndex;
 
@@ -119,6 +156,13 @@ namespace YARG.Core.Engine.Vocals.Engines
             // array-backed is touched.)
             _singleMicHittingParts = 0u;
             _singleMicHittingPitchedParts = 0u;
+            _pendingSample = false;
+            _creditCandidates?.Clear();
+            if (_candidateNoteIndices != null) Array.Clear(_candidateNoteIndices, 0, _candidateNoteIndices.Length);
+            if (_activeCandidateNotes != null)
+                foreach (var notes in _activeCandidateNotes) notes.Clear();
+            if (_singleMicPartHits != null) Array.Clear(_singleMicPartHits, 0, _singleMicPartHits.Length);
+            if (_lastTickPartDeltas != null) Array.Clear(_lastTickPartDeltas, 0, _lastTickPartDeltas.Length);
 
             base.Reset(keepCurrentButtons);
         }
@@ -189,6 +233,19 @@ namespace YARG.Core.Engine.Vocals.Engines
                     }
                 }
             }
+            UpdateActiveCandidateNotes();
+            if (singNote is null)
+            {
+                foreach (var note in _activeCandidateNotes[effectiveIndex])
+                {
+                    if (note.Tick <= CurrentTick && CurrentTick <= note.TotalTickEnd)
+                    {
+                        singNote = note;
+                        break;
+                    }
+                }
+            }
+            HasSang = false;
             if (singNote is not null)
             {
                 // Bots are queued extra updates to account for in-between "inputs"
@@ -222,21 +279,45 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         protected override void UpdateHitLogic(double time)
         {
-            // Quit early if there are no notes left
+            if (NoteIndex < Notes.Count) UpdateBot(time);
+
+            if (HasSang) UpdateActiveCandidateNotes();
+            if (_pendingSample || IsBot)
+            {
+                _pendingSample = false;
+                SampleSequence++;
+                SampleTime = time;
+                _creditCandidates.Clear();
+                if (HasSang && !float.IsNaN(PitchSang))
+                {
+                    uint lookback = EngineParameters.ApproximateVocalFps > 0
+                        ? SyncTrack.TimeToTick(CurrentTime - 1.0 / EngineParameters.ApproximateVocalFps)
+                        : CurrentTick;
+                    uint start = Math.Max(lookback, LastSingTick);
+                    for (int part = 0; part < _allParts.Count; part++)
+                    {
+                        foreach (var note in _activeCandidateNotes[part])
+                        {
+                            uint clippedStart = Math.Max(start, note.Tick);
+                            uint clippedEnd = Math.Min(CurrentTick, note.TotalTickEnd);
+                            if (clippedEnd > clippedStart && CanVocalNoteBeHit(note, out float weight) && weight > 0)
+                                _creditCandidates.Add(new CreditCandidate(part, note, clippedStart, clippedEnd, weight));
+                        }
+                    }
+                }
+                else
+                {
+                    HasSang = false;
+                }
+            }
+
             if (NoteIndex >= Notes.Count)
             {
                 HasSang = false;
-                // Chart exhausted: AccumulateMicPartHits (which re-clears these
-                // masks every tick) never runs again, so clear them here or
-                // GetMicHittingParts()/GetMicHittingPitchedParts() would keep
-                // exposing the last match forever after the chart ends.
                 _singleMicHittingParts = 0u;
                 _singleMicHittingPitchedParts = 0u;
                 return;
             }
-
-            UpdateBot(time);
-
             var phrase = Notes[NoteIndex];
             PhraseTicksTotal ??= GetTicksInPhrase(phrase);
 
@@ -301,6 +382,25 @@ namespace YARG.Core.Engine.Vocals.Engines
             }
         }
 
+        private void UpdateActiveCandidateNotes()
+        {
+            uint earliest = EngineParameters.ApproximateVocalFps > 0
+                ? SyncTrack.TimeToTick(CurrentTime - 1.0 / EngineParameters.ApproximateVocalFps)
+                : CurrentTick;
+            for (int part = 0; part < _allParts.Count; part++)
+            {
+                var active = _activeCandidateNotes[part];
+                for (int index = active.Count - 1; index >= 0; index--)
+                    if (active[index].TotalTickEnd <= earliest) active.RemoveAt(index);
+                var notes = _candidateNotes[part];
+                while (_candidateNoteIndices[part] < notes.Length && notes[_candidateNoteIndices[part]].Tick <= CurrentTick)
+                {
+                    var note = notes[_candidateNoteIndices[part]++];
+                    if (note.TotalTickEnd > earliest) active.Add(note);
+                }
+            }
+        }
+
         protected override void CheckForNoteHit()
         {
             CheckSingingHit();
@@ -336,9 +436,8 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Accumulate hits for all parts to feed the HUD's HARM1/2/3 %
             for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
             {
-                foreach (var partPhrase in _allParts[partIndex].NotePhrases)
                 {
-                    foreach (var note in partPhrase.PhraseParentNote.ChildNotes)
+                    foreach (var note in _activeCandidateNotes[partIndex])
                     {
                         if (note.IsPercussion) continue;
                         if (CurrentTick < note.Tick || CurrentTick > note.TotalTickEnd) continue;
@@ -408,12 +507,8 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Check each part for active notes
             for (int partIndex = 0; partIndex < _allParts.Count; partIndex++)
             {
-                var part = _allParts[partIndex];
-
-                // Get notes from this part's phrases
-                foreach (var partPhrase in part.NotePhrases)
                 {
-                    foreach (var note in partPhrase.PhraseParentNote.ChildNotes)
+                    foreach (var note in _activeCandidateNotes[partIndex])
                     {
                         if (!note.IsPercussion &&
                             CurrentTick >= note.Tick &&
@@ -589,8 +684,9 @@ namespace YARG.Core.Engine.Vocals.Engines
         public void SetMicPitch(float pitch)
         {
             PitchSang = pitch;
-            HasSang = true;
-            OnSing?.Invoke(true);
+            _pendingSample = true;
+            HasSang = !float.IsNaN(pitch);
+            OnSing?.Invoke(HasSang);
         }
 
     }
