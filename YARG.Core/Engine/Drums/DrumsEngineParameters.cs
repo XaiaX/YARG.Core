@@ -2,6 +2,7 @@
 using System;
 using System.IO;
 using YARG.Core.Extensions;
+using YARG.Core.Chart;
 using YARG.Core.IO;
 using YARG.Core.Replays;
 
@@ -10,6 +11,13 @@ namespace YARG.Core.Engine.Drums
     public class DrumsEngineParameters : BaseEngineParameters
     {
         public const byte LEGACY_ELITE_FILL_RULESET = 0;
+        public const byte LEGACY_CLASSIC_ARTICULATIONS = 0;
+        public const byte CLASSIC_ARTICULATIONS_V1 = 1;
+        public const byte CLASSIC_ARTICULATIONS_V2 = 2;
+        public const byte CURRENT_CLASSIC_ARTICULATIONS = CLASSIC_ARTICULATIONS_V2;
+        public readonly byte ClassicArticulationRuleset;
+        /// <summary>Recorded cymbal target and input-alias policy; independent of display preferences.</summary>
+        public readonly byte EliteCymbalMergePolicy;
         public const byte ELITE_FILL_RULESET_V1 = 1;
         public const float DEFAULT_ENTRY_GRACE_MULTIPLIER = 2f;
         public const double DEFAULT_HI_HAT_CLOSURE_WINDOW = .030;
@@ -49,7 +57,9 @@ namespace YARG.Core.Engine.Drums
         public DrumsEngineParameters(HitWindowSettings hitWindow, int maxMultiplier, float[] starMultiplierThresholds, float[] soloBonusStarMultiplierThresholds,
             DrumMode mode, bool noStarPowerOverlap, bool enableLanes, byte eliteFillRuleset = 0,
             float entryGraceMultiplier = DEFAULT_ENTRY_GRACE_MULTIPLIER,
-            bool hiHatClosureSuppression = false, double hiHatClosureWindow = DEFAULT_HI_HAT_CLOSURE_WINDOW)
+            bool hiHatClosureSuppression = false, double hiHatClosureWindow = DEFAULT_HI_HAT_CLOSURE_WINDOW,
+            byte classicArticulationRuleset = CURRENT_CLASSIC_ARTICULATIONS,
+            byte eliteCymbalMergePolicy = EliteDrumsCymbalProjection.CURRENT_POLICY)
             : base(hitWindow, maxMultiplier, 0, 0, starMultiplierThresholds, soloBonusStarMultiplierThresholds, enableLanes)
         {
             Mode = mode;
@@ -60,6 +70,10 @@ namespace YARG.Core.Engine.Drums
             EntryGraceMultiplier = entryGraceMultiplier;
             HiHatClosureSuppression = hiHatClosureSuppression;
             HiHatClosureWindow = hiHatClosureWindow;
+            ClassicArticulationRuleset = classicArticulationRuleset;
+            EliteCymbalMergePolicy = eliteCymbalMergePolicy;
+            EliteDrumsCymbalProjection.ValidatePolicy(EliteCymbalMergePolicy);
+            ValidateClassicArticulations();
             ValidateEliteFillParameters();
             ValidateHiHatClosureWindow();
         }
@@ -98,6 +112,12 @@ namespace YARG.Core.Engine.Drums
                 HiHatClosureSuppression = false;
                 HiHatClosureWindow = DEFAULT_HI_HAT_CLOSURE_WINDOW;
             }
+            ClassicArticulationRuleset = version >= ReplayIO.CLASSIC_DRUM_ARTICULATIONS_MIN
+                ? stream.ReadByte() : LEGACY_CLASSIC_ARTICULATIONS;
+            ValidateClassicArticulations();
+            EliteCymbalMergePolicy = version >= ReplayIO.ELITE_CYMBAL_MERGES_MIN
+                ? stream.ReadByte() : EliteDrumsCymbalProjection.LEGACY_POLICY;
+            EliteDrumsCymbalProjection.ValidatePolicy(EliteCymbalMergePolicy);
         }
 
         public override void Serialize(BinaryWriter writer)
@@ -112,6 +132,14 @@ namespace YARG.Core.Engine.Drums
             writer.Write(EntryGraceMultiplier);
             writer.Write(HiHatClosureSuppression);
             writer.Write(HiHatClosureWindow);
+            writer.Write(ClassicArticulationRuleset);
+            writer.Write(EliteCymbalMergePolicy);
+        }
+
+        private void ValidateClassicArticulations()
+        {
+            if (ClassicArticulationRuleset > CURRENT_CLASSIC_ARTICULATIONS)
+                throw new InvalidDataException($"Unsupported classic drum articulation ruleset: {ClassicArticulationRuleset}");
         }
 
         private void ValidateHiHatClosureWindow()

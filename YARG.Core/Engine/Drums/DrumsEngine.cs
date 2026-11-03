@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Functional Core
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using YARG.Core.Chart;
@@ -16,6 +17,101 @@ namespace YARG.Core.Engine.Drums
 
         public OverhitEvent? OnOverhit;
         public PadHitEvent?  OnPadHit;
+
+        /// <summary>A second physical strike without a second note lifecycle or dynamics award.</summary>
+        public Action<DrumNote, DrumsAction, float, bool>? OnFlamFollowUp;
+
+        private readonly Dictionary<int, (DrumNote Note, double Start, double End)> _pendingFlams = new();
+        private sealed class PhysicalHit
+        {
+            public DrumsAction Action;
+            public float? Velocity;
+            public double Time;
+            public bool FollowUpConsumed;
+            public DrumsAction FollowUpAction;
+            public float FollowUpVelocity;
+        }
+        private readonly Dictionary<DrumNote, PhysicalHit> _elitePhysicalHits = new();
+        protected bool ClassicArticulationsEnabled => EngineParameters.ClassicArticulationRuleset !=
+            DrumsEngineParameters.LEGACY_CLASSIC_ARTICULATIONS;
+
+        private bool IsScoringFlam(DrumNote note) => ClassicArticulationsEnabled &&
+            (note.IsHandFlam || note.IsKickFlam && EngineParameters.ClassicArticulationRuleset >= DrumsEngineParameters.CLASSIC_ARTICULATIONS_V2);
+
+        private static bool IsFlatHandFlam(DrumNote note) => note.IsHandFlam && note.IsFlatFlam;
+
+        private void ArmFlamFollowUp(DrumNote note)
+        {
+            _pendingFlams.Remove(note.Pad);
+            if (!IsScoringFlam(note) || IsBot || CodaHasStarted && note.IsBigRockEnding) return;
+            var window = CalculateEliteFillOrdinaryWindow(note);
+            if (CurrentTime <= note.Time + window.BackEnd)
+                _pendingFlams[note.Pad] = (note, note.Time + window.FrontEnd, note.Time + window.BackEnd);
+        }
+
+        protected bool TryFlamFollowUp()
+        {
+            if (!ClassicArticulationsEnabled || PadHit is not { } pad || Action is not { } action ||
+                !_pendingFlams.TryGetValue(pad, out var pending)) return false;
+            if (CurrentTime > pending.End) { _pendingFlams.Remove(pad); return false; }
+            if (CurrentTime < pending.Start) return false;
+            _pendingFlams.Remove(pad);
+            if (!pending.Note.WasHit && _elitePhysicalHits.TryGetValue(pending.Note, out var physical))
+            {
+                // V1 may adjudicate this strike before an earlier chart note commits.
+                // Preserve the follow-up together with its own first input, never a later input.
+                physical.FollowUpConsumed = true;
+                physical.FollowUpAction = action;
+                physical.FollowUpVelocity = HitVelocity.GetValueOrDefault();
+            }
+            else
+            {
+                bool bonus = !IsFlatHandFlam(pending.Note);
+                if (bonus) AwardFlamUnit();
+                OnFlamFollowUp?.Invoke(pending.Note, action, HitVelocity.GetValueOrDefault(), bonus);
+            }
+            return true;
+        }
+
+        private void AwardFlamUnit()
+        {
+            int points = GetPointsPerNote();
+            AddScore(points);
+            EngineStats.NoteScore += points;
+        }
+
+        protected void CaptureElitePhysicalHit(DrumNote note, double time)
+        {
+            _elitePhysicalHits[note] = new PhysicalHit { Action = Action!.Value, Velocity = HitVelocity, Time = time };
+            ArmFlamFollowUp(note);
+        }
+
+        protected void HitPhysicalNote(DrumNote note, DrumsAction action, float? velocity, bool openFollowUp = true)
+        {
+            var previousAction = Action;
+            var previousPad = PadHit;
+            var previousVelocity = HitVelocity;
+            Action = action;
+            PadHit = note.Pad;
+            HitVelocity = velocity;
+            try
+            {
+                if (note.WasHit || note.WasMissed) return;
+                bool bonus = !(CodaHasStarted && note.IsBigRockEnding) && ApplyVelocity(note);
+                HitNote(note);
+                if (openFollowUp) ArmFlamFollowUp(note);
+                OnPadHit?.Invoke(action, true, bonus, false, note.Type, velocity.GetValueOrDefault());
+                if (bonus)
+                {
+                    const int velocityBonus = POINTS_PER_NOTE / 2;
+                    AddScore(velocityBonus);
+                    EngineStats.DynamicsBonus += velocityBonus;
+                    if (note.IsAccent) EngineStats.AccentsHit++;
+                    else if (note.IsGhost) EngineStats.GhostsHit++;
+                }
+            }
+            finally { Action = previousAction; PadHit = previousPad; HitVelocity = previousVelocity; }
+        }
 
         protected bool IsKickLaneActive;
         protected double KickLaneAutohitExpireTime;
@@ -118,6 +214,8 @@ namespace YARG.Core.Engine.Drums
             {
                 foreach(var all in note.AllNotes)
                 {
+                    if (EngineParameters.ClassicArticulationRuleset >= DrumsEngineParameters.CLASSIC_ARTICULATIONS_V2 && all.Pad == Kick)
+                        all.Type = DrumNoteType.Neutral;
                     if(all.IsAccent)
                     {
                         EngineStats.TotalAccents++;
@@ -141,6 +239,8 @@ namespace YARG.Core.Engine.Drums
 
             IsKickLaneActive = false;
             KickLaneAutohitExpireTime = -1;
+            _pendingFlams.Clear();
+            _elitePhysicalHits.Clear();
 
             base.Reset(keepCurrentButtons);
             _eliteFillRuntime?.Reset();
@@ -191,7 +291,20 @@ namespace YARG.Core.Engine.Drums
                     $"tick={commit.Note.Tick} pad={commit.Note.Pad} comboBefore={BaseStats.Combo} time={CurrentTime:F6}");
                 if (commit.WasHit)
                 {
-                    HitNote(commit.Note);
+                    if (ClassicArticulationsEnabled && _elitePhysicalHits.TryGetValue(commit.Note, out var physical))
+                    {
+                        _elitePhysicalHits.Remove(commit.Note);
+                        HitPhysicalNote(commit.Note, physical.Action, physical.Velocity, !physical.FollowUpConsumed);
+                        if (physical.FollowUpConsumed && !(CodaHasStarted && commit.Note.IsBigRockEnding))
+                        {
+                            bool bonus = !IsFlatHandFlam(commit.Note);
+                            if (bonus) AwardFlamUnit();
+                            OnFlamFollowUp?.Invoke(commit.Note, physical.FollowUpAction, physical.FollowUpVelocity, bonus);
+                        }
+                    }
+                    else if (ClassicArticulationsEnabled && IsBot)
+                        HitPhysicalNote(commit.Note, ConvertPadToAction(EngineParameters.Mode, commit.Note.Pad), 1);
+                    else HitNote(commit.Note);
                 }
                 else
                 {
@@ -342,6 +455,7 @@ namespace YARG.Core.Engine.Drums
             }
 
             note.SetHitState(true, false);
+            _pendingFlams.Remove(note.Pad);
             if (!activationAutoHit && PadHit is null && note.IsLane)
             {
                 TraceEliteLane($"lane-hit-without-current-pad tick={note.Tick} pad={note.Pad} time={CurrentTime:F6} " +
@@ -609,9 +723,8 @@ namespace YARG.Core.Engine.Drums
 
         protected override void AddScore(DrumNote note)
         {
-            int pointsPerNote = GetPointsPerNote();
-            AddScore(pointsPerNote);
-            EngineStats.NoteScore += pointsPerNote;
+            AwardFlamUnit();
+            if (IsScoringFlam(note) && (IsFlatHandFlam(note) || IsBot)) AwardFlamUnit();
         }
 
         protected sealed override (int baseScore, int noteScore) CalculateChartScores()
@@ -630,7 +743,10 @@ namespace YARG.Core.Engine.Drums
 
                 // Get the current multiplier given the current combo
                 multiplier = Math.Min((combo / 10) + 1, BaseParameters.MaxMultiplier);
-                double scoreForNote = GetPointsPerNote() * (1 + note.ChildNotes.Count);
+                int units = 0;
+                foreach (var member in note.AllNotes)
+                    units += IsScoringFlam(member) ? 2 : 1;
+                double scoreForNote = GetPointsPerNote() * units;
                 baseScore += multiplier * scoreForNote;
                 noteScore += scoreForNote;
                 combo += 1 + note.ChildNotes.Count;

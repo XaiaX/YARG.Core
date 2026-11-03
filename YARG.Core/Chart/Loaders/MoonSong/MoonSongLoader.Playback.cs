@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -53,6 +54,8 @@ namespace YARG.Core.Chart
                     if (note.IsDoubleKick) flags |= MoonNote.Flags.InstrumentPlus;
                     if (note.IsAccent) flags |= MoonNote.Flags.ProDrums_Accent;
                     if (note.IsGhost) flags |= MoonNote.Flags.ProDrums_Ghost;
+                    if (note.IsFlam) flags |= MoonNote.Flags.EliteDrums_Flam;
+                    if (note.IsFlatFlam) flags |= MoonNote.Flags.EliteDrums_FlatFlam;
                     var emitted = new MoonNote(note.Tick, (int)pad, 0, flags);
                     moon.Add(emitted);
                     originalMembers.Add(emitted, note);
@@ -80,11 +83,11 @@ namespace YARG.Core.Chart
         }
 
         internal static InstrumentDifficulty<DrumNote> ConvertPlaybackElite(
-            InstrumentDifficulty<EliteDrumNote> source, Instrument output, uint resolution)
+            InstrumentDifficulty<EliteDrumNote> source, Instrument output, uint resolution, bool classicArticulations = true)
         {
             var settings = ParseSettings.Default;
             settings.DrumsType = DrumsType.FourLane;
-            var loader = new MoonSongLoader(new MoonSong(resolution), settings) { _loadingAuthoredDrums = true };
+            var loader = new MoonSongLoader(new MoonSong(resolution), settings) { _loadingAuthoredDrums = true, _classicDrumArticulations = classicArticulations };
             // The existing downcharter expects all historical tier keys; populate them with empty
             // difficulties, never a different source's notes.
             var tiers = new Dictionary<Difficulty, InstrumentDifficulty<EliteDrumNote>>();

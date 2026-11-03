@@ -1,4 +1,5 @@
-﻿// Copyright (c) 2016-2020 Alexander Ong
+﻿// pattern: Mixed (needs refactoring)
+// Copyright (c) 2016-2020 Alexander Ong
 // See LICENSE in project root for license information.
 
 using System;
@@ -201,6 +202,7 @@ namespace MoonscraperChartEditor.Song.IO
         private static readonly List<EventProcessFn> DrumsPostProcessList = new()
         {
             DisambiguateDrumsType,
+            CreateKickFlams,
             ReplaceDrumFillDuringCoda,
             SetCodaFlags,
         };
@@ -680,8 +682,9 @@ namespace MoonscraperChartEditor.Song.IO
 
         private static void CreateKickFlams(ref EventProcessParams processParams)
         {
-            if (processParams.instrument is not MoonSong.MoonInstrument.EliteDrums)
+            if (processParams.instrument is not (MoonSong.MoonInstrument.EliteDrums or MoonSong.MoonInstrument.Drums))
                 return;
+            bool elite = processParams.instrument == MoonSong.MoonInstrument.EliteDrums;
 
             foreach (var difficulty in EnumExtensions<MoonSong.Difficulty>.Values)
             {
@@ -693,7 +696,7 @@ namespace MoonscraperChartEditor.Song.IO
                 for (int i = chart.notes.Count - 1; i >= 0; --i)
                 {
                     var kick = chart.notes[i];
-                    if (kick.eliteDrumPad is not MoonNote.EliteDrumPad.Kick ||
+                    if (!(elite ? kick.eliteDrumPad == MoonNote.EliteDrumPad.Kick : kick.drumPad == MoonNote.DrumPad.Kick) ||
                         (kick.flags & MoonNote.Flags.InstrumentPlus) == 0)
                         continue;
 
@@ -703,7 +706,7 @@ namespace MoonscraperChartEditor.Song.IO
                     for (int j = first; j < chart.notes.Count && chart.notes[j].tick == kick.tick; ++j)
                     {
                         var plainKick = chart.notes[j];
-                        if (plainKick.eliteDrumPad is not MoonNote.EliteDrumPad.Kick ||
+                        if (!(elite ? plainKick.eliteDrumPad == MoonNote.EliteDrumPad.Kick : plainKick.drumPad == MoonNote.DrumPad.Kick) ||
                             (plainKick.flags & MoonNote.Flags.InstrumentPlus) != 0)
                             continue;
 
@@ -1073,7 +1076,7 @@ namespace MoonscraperChartEditor.Song.IO
                         var defaultFlags = MoonNote.Flags.None;
                         DrumPadDefaultFlags.TryGetValue(pad, out defaultFlags);
 
-                        if (enableVelocity && pad != MoonNote.DrumPad.Kick)
+                        if (enableVelocity)
                         {
                             processFnDict.Add(key, (ref EventProcessParams eventProcessParams) =>
                             {
@@ -1112,12 +1115,30 @@ namespace MoonscraperChartEditor.Song.IO
                         if (pad == MoonNote.DrumPad.Kick)
                         {
                             processFnDict.Add(key - 1, (ref EventProcessParams eventProcessParams) => {
-                                ProcessNoteOnEventAsNote(ref eventProcessParams, difficulty, fret, MoonNote.Flags.InstrumentPlus);
+                                var flags = MoonNote.Flags.InstrumentPlus;
+                                if (enableVelocity && eventProcessParams.timedEvent.midiEvent is NoteEvent noteEvent)
+                                {
+                                    if (noteEvent.Velocity == MidIOHelper.VELOCITY_ACCENT) flags |= MoonNote.Flags.ProDrums_Accent;
+                                    if (noteEvent.Velocity == MidIOHelper.VELOCITY_GHOST) flags |= MoonNote.Flags.ProDrums_Ghost;
+                                }
+                                ProcessNoteOnEventAsNote(ref eventProcessParams, difficulty, fret, flags);
                             });
                         }
                     }
                 }
             };
+
+            // The classic marker is shared by all difficulties. Channel one selects
+            // flat flams, matching Elite's existing marker convention. Feet are excluded.
+            processFnDict.Add(MidIOHelper.FLAM_MARKER, (ref EventProcessParams parameters) =>
+            {
+                var flag = parameters.timedEvent.midiEvent is NoteEvent marker &&
+                    marker.Channel == MidIOHelper.ELITE_DRUMS_CHANNEL_FLAT_FLAM
+                    ? MoonNote.Flags.EliteDrums_FlatFlam : MoonNote.Flags.EliteDrums_Flam;
+                foreach (var handPad in EnumExtensions<MoonNote.DrumPad>.Values)
+                    if (handPad != MoonNote.DrumPad.Kick)
+                        ProcessNoteOnEventAsFlagToggle(ref parameters, flag, (int)handPad);
+            });
 
             foreach (var keyVal in MidIOHelper.PAD_TO_CYMBAL_LOOKUP)
             {
@@ -1419,7 +1440,15 @@ namespace MoonscraperChartEditor.Song.IO
                         {
                             processFnDict.Add(key - 1, (ref EventProcessParams eventProcessParams) =>
                             {
-                                ProcessNoteOnEventAsNote(ref eventProcessParams, difficulty, fret, MoonNote.Flags.InstrumentPlus);
+                                var flags = MoonNote.Flags.InstrumentPlus;
+                                // Elite dynamics are always enabled for non-pedal notes;
+                                // the extra key follows the ordinary kick's velocity contract.
+                                if (eventProcessParams.timedEvent.midiEvent is NoteEvent noteEvent)
+                                {
+                                    if (noteEvent.Velocity == MidIOHelper.VELOCITY_ACCENT) flags |= MoonNote.Flags.ProDrums_Accent;
+                                    if (noteEvent.Velocity == MidIOHelper.VELOCITY_GHOST) flags |= MoonNote.Flags.ProDrums_Ghost;
+                                }
+                                ProcessNoteOnEventAsNote(ref eventProcessParams, difficulty, fret, flags);
                             });
                         }
                     }

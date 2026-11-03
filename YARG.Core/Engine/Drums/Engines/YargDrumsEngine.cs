@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Functional Core
+using System;
 using System.Linq;
 using YARG.Core.Chart;
 using YARG.Core.Utility;
@@ -98,6 +99,7 @@ namespace YARG.Core.Engine.Drums.Engines
             }
             else if (Action is { } padAction)
             {
+                if (TryFlamFollowUp()) { ResetPadState(); return; }
                 OnPadHit?.Invoke(padAction, false, false, false, DrumNoteType.Neutral, HitVelocity.GetValueOrDefault(0));
                 ResetPadState();
             }
@@ -154,29 +156,7 @@ namespace YARG.Core.Engine.Drums.Engines
                     // Hit note
                     if (CanNoteBeHit(note))
                     {
-                        bool awardVelocityBonus = ApplyVelocity(note);
-
-                        // TODO - Deadly Dynamics modifier check on awardVelocityBonus
-
-                        HitNote(note);
-                        OnPadHit?.Invoke(Action!.Value, true, awardVelocityBonus, false, note.Type, HitVelocity.GetValueOrDefault(0));
-
-                        if (awardVelocityBonus)
-                        {
-                            const int velocityBonus = POINTS_PER_NOTE / 2;
-                            AddScore(velocityBonus);
-                            EngineStats.DynamicsBonus += velocityBonus;
-                            YargLogger.LogFormatTrace("Velocity bonus of {0} points was awarded to a note at tick {1}.", velocityBonus, note.Tick);
-
-                            if(note.IsAccent)
-                            {
-                                EngineStats.AccentsHit++;
-                            }
-                            else if(note.IsGhost)
-                            {
-                                EngineStats.GhostsHit++;
-                            }
-                        }
+                        HitPhysicalNote(note, Action!.Value, HitVelocity);
 
                         ResetPadState();
 
@@ -199,6 +179,7 @@ namespace YARG.Core.Engine.Drums.Engines
             // If no note was hit but the user hit a pad, then over hit
             if (PadHit != null)
             {
+                if (TryFlamFollowUp()) { ResetPadState(); return; }
                 OnPadHit?.Invoke(Action!.Value, false, false, ActiveLaneIncludesNote((int) PadHit), DrumNoteType.Neutral, HitVelocity.GetValueOrDefault(0));
                 Overhit();
                 ResetPadState();
@@ -258,10 +239,13 @@ namespace YARG.Core.Engine.Drums.Engines
                 // candidates are always tried and judged before any protection.
                 TraceEliteLane($"input-candidate tick={candidate.Tick} pad={candidate.Pad} time={time:F6}");
                 runtime.RecordAuthoredLaneInput(candidate, time);
+                if (ClassicArticulationsEnabled) CaptureElitePhysicalHit(candidate, time);
                 CommitEliteFill(hitCommits, "input-candidate");
                 ResetPadState();
                 return;
             }
+
+            if (TryFlamFollowUp()) { ResetPadState(); return; }
 
             // Elite V1 authored-lane input protection: a real strike on a pad of an
             // entered, temporally active authored lane whose cadence was refreshed by a

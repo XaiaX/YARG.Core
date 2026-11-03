@@ -1,3 +1,4 @@
+// pattern: Imperative Shell
 // Copyright (c) 2016-2020 Alexander Ong
 // See LICENSE in project root for license information.
 
@@ -764,9 +765,11 @@ namespace MoonscraperChartEditor.Song.IO
                 chart.notes.Capacity = 5000;
 
             if (eventProcessParams.instrument is MoonSong.MoonInstrument.EliteDrums &&
-                newMoonNote.eliteDrumPad is MoonNote.EliteDrumPad.Kick)
+                newMoonNote.eliteDrumPad is MoonNote.EliteDrumPad.Kick ||
+                eventProcessParams.instrument is MoonSong.MoonInstrument.Drums &&
+                newMoonNote.drumPad is MoonNote.DrumPad.Kick)
             {
-                // Elite MIDI uses two pitches for the same pad. Keep one of each variant
+                // Drum MIDI uses two pitches for the same kick pad. Keep one of each variant
                 // until postprocessing can distinguish a kick flam from a lone 2x kick.
                 int pos = chart.notes.Count;
                 while (pos > 0 && chart.notes[pos - 1].tick > tick)

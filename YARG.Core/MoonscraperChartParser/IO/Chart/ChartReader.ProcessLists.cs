@@ -1,4 +1,5 @@
-﻿// Copyright (c) 2016-2020 Alexander Ong
+﻿// pattern: Mixed (needs refactoring)
+// Copyright (c) 2016-2020 Alexander Ong
 // See LICENSE in project root for license information.
 
 // Chart file format specifications- https://docs.google.com/document/d/1v2v0U-9HQ5qHeccpExDOLJ5CMPZZ3QytPmAG5WF0Kzs/edit?usp=sharing
@@ -52,7 +53,9 @@ namespace MoonscraperChartEditor.Song.IO
                 ProcessNoteOnEventAsNoteFlagToggle(ref noteProcessParams, (int)MoonNote.DrumPad.Orange, NoteFlagPriority.Cymbal);
             } },
 
-            // { ChartIOHelper.NOTE_OFFSET_DRUMS_ACCENT + 0, ... }  // Reserved for kick accents, if they should ever be a thing
+            { ChartIOHelper.NOTE_OFFSET_DRUMS_ACCENT, (ref NoteProcessParams noteProcessParams) => {
+                ProcessNoteOnEventAsNoteFlagToggle(ref noteProcessParams, (int)MoonNote.DrumPad.Kick, NoteFlagPriority.Accent);
+            } },
             { ChartIOHelper.NOTE_OFFSET_DRUMS_ACCENT + 1, (ref NoteProcessParams noteProcessParams) => {
                 ProcessNoteOnEventAsNoteFlagToggle(ref noteProcessParams, (int)MoonNote.DrumPad.Red, NoteFlagPriority.Accent);
             } },
@@ -69,7 +72,9 @@ namespace MoonscraperChartEditor.Song.IO
                 ProcessNoteOnEventAsNoteFlagToggle(ref noteProcessParams, (int)MoonNote.DrumPad.Green, NoteFlagPriority.Accent);
             } },
 
-            // { ChartIOHelper.NOTE_OFFSET_DRUMS_GHOST + 0, ... }  // Reserved for kick ghosts, if they should ever be a thing
+            { ChartIOHelper.NOTE_OFFSET_DRUMS_GHOST, (ref NoteProcessParams noteProcessParams) => {
+                ProcessNoteOnEventAsNoteFlagToggle(ref noteProcessParams, (int)MoonNote.DrumPad.Kick, NoteFlagPriority.Ghost);
+            } },
             { ChartIOHelper.NOTE_OFFSET_DRUMS_GHOST + 1, (ref NoteProcessParams noteProcessParams) => {
                 ProcessNoteOnEventAsNoteFlagToggle(ref noteProcessParams, (int)MoonNote.DrumPad.Red, NoteFlagPriority.Ghost);
             } },

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using YARG.Core.Game;
+using YARG.Core.Engine.Drums;
 using static YARG.Core.Chart.EliteDrumNote;
 
 namespace YARG.Core.Chart
@@ -29,9 +30,13 @@ namespace YARG.Core.Chart
         /// </summary>
         public static PreparedDrumPlayback PrepareForScore(SongChart chart, ResolvedDrumPlayback playback,
             Action<InstrumentDifficulty<DrumNote>>? pureClassicModifiers = null,
-            Action<InstrumentDifficulty<EliteDrumNote>>? pureEliteModifiers = null)
+            Action<InstrumentDifficulty<EliteDrumNote>>? pureEliteModifiers = null,
+            byte classicArticulationRuleset = DrumsEngineParameters.CURRENT_CLASSIC_ARTICULATIONS,
+            EliteDrumsLayoutPreset? eliteCymbalLayout = null,
+            byte eliteCymbalMergePolicy = EliteDrumsCymbalProjection.CURRENT_POLICY)
         {
-            var selected = Prepare(chart, playback, pureClassicModifiers, pureEliteModifiers);
+            var selected = Prepare(chart, playback, pureClassicModifiers, pureEliteModifiers, classicArticulationRuleset,
+                eliteCymbalLayout, eliteCymbalMergePolicy);
             bool contributes = false;
             if (playback.ExtraKickPolicy == DrumExtraKickPolicy.Include)
             {
@@ -39,8 +44,9 @@ namespace YARG.Core.Chart
                 var disabled = new ResolvedDrumPlayback(playback.RequestedOutput, playback.SourceFormat,
                     playback.BaseDifficulty, playback.SourceDifficulty, source!.Facts.KickPolicy(false),
                     false, playback.ScoreCategory, playback.PolicyVersion);
-                var baseline = Prepare(chart, disabled, pureClassicModifiers, pureEliteModifiers);
-                contributes = CountScoringUnits(selected, kickOnly: true) > CountScoringUnits(baseline, kickOnly: true);
+                var baseline = Prepare(chart, disabled, pureClassicModifiers, pureEliteModifiers, classicArticulationRuleset,
+                    eliteCymbalLayout, eliteCymbalMergePolicy);
+                contributes = CountScoringUnits(selected, classicArticulationRuleset, kickOnly: true) > CountScoringUnits(baseline, classicArticulationRuleset, kickOnly: true);
             }
             selected.ScoreIdentity = new DrumScoreIdentity(playback.BaseDifficulty, contributes, playback.ScoreCategory);
             return selected;
@@ -51,7 +57,7 @@ namespace YARG.Core.Chart
 
         // Contribution requires kick obligations in the final prepared chart. Beginner collapses
         // kicks to neutral wildcards, whose added total score does not require playing a kick.
-        private static int CountScoringUnits(PreparedDrumPlayback playback, bool kickOnly = false)
+        private static int CountScoringUnits(PreparedDrumPlayback playback, byte ruleset = DrumsEngineParameters.CURRENT_CLASSIC_ARTICULATIONS, bool kickOnly = false)
         {
             if (playback is null) throw new ArgumentNullException(nameof(playback));
             int units = 0;
@@ -61,14 +67,15 @@ namespace YARG.Core.Chart
                     foreach (var note in parent.AllNotes)
                         if (!note.IsInvisibleTerminator && !note.IsBigRockEnding &&
                             (!kickOnly || note.Pad == (int)EliteDrumPad.Kick))
-                            units += note.IsHandFlam ? 2 : 1;
+                            units += note.IsHandFlam || note.IsKickFlam && ruleset >= DrumsEngineParameters.CLASSIC_ARTICULATIONS_V2 ? 2 : 1;
             }
             else if (playback.Classic is { } classic)
             {
                 foreach (var parent in classic.Notes)
                     if (!parent.IsBigRockEnding)
                         foreach (var note in parent.AllNotes)
-                            if (!kickOnly || note.Pad == (int)FourLaneDrumPad.Kick) units++;
+                            if (!kickOnly || note.Pad == (int)FourLaneDrumPad.Kick)
+                                units += note.IsHandFlam || note.IsKickFlam && ruleset >= DrumsEngineParameters.CLASSIC_ARTICULATIONS_V2 ? 2 : 1;
             }
             return units;
         }
@@ -79,8 +86,14 @@ namespace YARG.Core.Chart
         /// </summary>
         public static PreparedDrumPlayback Prepare(SongChart chart, ResolvedDrumPlayback playback,
             Action<InstrumentDifficulty<DrumNote>>? classicModifiers = null,
-            Action<InstrumentDifficulty<EliteDrumNote>>? eliteModifiers = null)
+            Action<InstrumentDifficulty<EliteDrumNote>>? eliteModifiers = null,
+            byte classicArticulationRuleset = DrumsEngineParameters.CURRENT_CLASSIC_ARTICULATIONS,
+            EliteDrumsLayoutPreset? eliteCymbalLayout = null,
+            byte eliteCymbalMergePolicy = EliteDrumsCymbalProjection.CURRENT_POLICY)
         {
+            if (classicArticulationRuleset > DrumsEngineParameters.CURRENT_CLASSIC_ARTICULATIONS)
+                throw new InvalidDataException($"Unsupported classic drum articulation ruleset: {classicArticulationRuleset}");
+            EliteDrumsCymbalProjection.ValidatePolicy(eliteCymbalMergePolicy);
             if (chart is null) throw new ArgumentNullException(nameof(chart));
             if (playback is null) throw new ArgumentNullException(nameof(playback));
             if (!chart.AuthoredDrumSources.TryGetTier(playback.SourceFormat, playback.SourceDifficulty, out var source))
@@ -89,6 +102,7 @@ namespace YARG.Core.Chart
             if (playback.SourceFormat == DrumSourceFormat.Elite)
             {
                 var elite = source!.CloneEliteDifficulty();
+                ApplyEliteExtraKickRuleset(elite, classicArticulationRuleset);
                 Filter(elite, n => !(n.Pad == (int)EliteDrumPad.Kick && n.IsDoubleKick && playback.ExtraKickPolicy == DrumExtraKickPolicy.Remove), n =>
                 {
                     if (n.Pad != (int)EliteDrumPad.Kick) return n;
@@ -101,33 +115,42 @@ namespace YARG.Core.Chart
                 });
                 Rebuild(elite);
                 if (playback.RequestedOutput == Instrument.EliteDrums)
-                    return FinishElite(elite, beginner, chart, eliteModifiers);
-                var classic = MoonSongLoader.ConvertPlaybackElite(elite, playback.RequestedOutput, chart.Resolution);
+                    return FinishElite(elite, beginner, chart, eliteModifiers, eliteCymbalLayout, eliteCymbalMergePolicy);
+                var classic = MoonSongLoader.ConvertPlaybackElite(elite, playback.RequestedOutput, chart.Resolution,
+                    classicArticulationRuleset != DrumsEngineParameters.LEGACY_CLASSIC_ARTICULATIONS);
                 foreach (var note in classic.Notes.SelectMany(n => n.ChildNotes.Prepend(n)))
                     note.Time = chart.SyncTrack.TickToTime(note.Tick);
-                return FinishClassic(classic, beginner, chart, classicModifiers);
+                return FinishClassic(classic, beginner, chart, classicModifiers, classicArticulationRuleset);
             }
             else
             {
                 var classic = source!.CloneClassicDifficulty();
                 Filter(classic, n => !(n.IsDoubleKick && playback.ExtraKickPolicy == DrumExtraKickPolicy.Remove), n =>
-                    new DrumNote(n.Pad, n.Type, n.DrumFlags, n.Flags, n.Time, n.Tick,
+                {
+                    var flags = n.DrumFlags;
+                    if (n.Pad == (int)FourLaneDrumPad.Kick && playback.ExtraKickPolicy != DrumExtraKickPolicy.Include &&
+                        source.PairedKickTicks.Contains(n.Tick))
+                        flags &= ~(DrumNoteFlags.Flam | DrumNoteFlags.FlatFlam);
+                    return new DrumNote(n.Pad, n.Type, flags, n.Flags, n.Time, n.Tick,
                         playback.ExtraKickPolicy == DrumExtraKickPolicy.NormalizeExtraOnly ? false : n.IsDoubleKick,
-                        n.Stem, n.ConversionOrigin));
+                        n.Stem, n.ConversionOrigin);
+                });
                 Rebuild(classic);
+                ApplyClassicArticulationRuleset(classic, classicArticulationRuleset);
                 if (playback.RequestedOutput == Instrument.EliteDrums)
-                    return FinishElite(classic.ConvertToEliteDrums(), beginner, chart, eliteModifiers);
+                    return FinishElite(classic.ConvertToEliteDrums(), beginner, chart, eliteModifiers, eliteCymbalLayout, eliteCymbalMergePolicy);
                 var converted = MoonSongLoader.ConvertPlaybackClassic(classic, playback.RequestedOutput, false, chart.Resolution);
                 foreach (var note in converted.Notes.SelectMany(n => n.ChildNotes.Prepend(n)))
                     note.Time = chart.SyncTrack.TickToTime(note.Tick);
-                return FinishClassic(converted, beginner, chart, classicModifiers);
+                return FinishClassic(converted, beginner, chart, classicModifiers, classicArticulationRuleset);
             }
         }
 
         private static PreparedDrumPlayback FinishClassic(InstrumentDifficulty<DrumNote> notes, bool beginner,
-            SongChart chart, Action<InstrumentDifficulty<DrumNote>>? modifiers)
+            SongChart chart, Action<InstrumentDifficulty<DrumNote>>? modifiers, byte ruleset)
         {
             var sync = chart.SyncTrack;
+            ApplyClassicArticulationRuleset(notes, ruleset);
             ApplyModifiers(notes, modifiers);
             chart.GeneratePlaybackActivationPhrases(notes);
             Rebuild(notes);
@@ -142,7 +165,8 @@ namespace YARG.Core.Chart
         }
 
         private static PreparedDrumPlayback FinishElite(InstrumentDifficulty<EliteDrumNote> notes, bool beginner,
-            SongChart chart, Action<InstrumentDifficulty<EliteDrumNote>>? modifiers)
+            SongChart chart, Action<InstrumentDifficulty<EliteDrumNote>>? modifiers,
+            EliteDrumsLayoutPreset? cymbalLayout, byte cymbalPolicy)
         {
             ApplyModifiers(notes, modifiers);
             var controls = new InstrumentDifficulty<DrumNote>(Instrument.ProDrums, notes.Difficulty);
@@ -156,6 +180,7 @@ namespace YARG.Core.Chart
                     notes.Phrases.Add(phrase.Clone());
             Rebuild(notes);
             if (beginner) notes = EliteDrumsBeginner.Collapse(notes);
+            EliteDrumsCymbalProjection.Apply(notes, cymbalLayout, cymbalPolicy);
             return new(notes);
         }
 
@@ -209,6 +234,127 @@ namespace YARG.Core.Chart
         }
 
         /// <summary>
+        /// Resolves a pre-source-selection playback copy using recorded rules. Old generated
+        /// tracks are rebuilt from authored Elite data, retaining historical collision policy.
+        /// </summary>
+        public static InstrumentDifficulty<DrumNote> PrepareClassicRuleset(SongChart chart,
+            InstrumentDifficulty<DrumNote> selected, byte ruleset)
+        {
+            if (ruleset > DrumsEngineParameters.CURRENT_CLASSIC_ARTICULATIONS)
+                throw new InvalidDataException($"Unsupported classic drum articulation ruleset: {ruleset}");
+            var result = selected.Clone();
+            if (ruleset == DrumsEngineParameters.LEGACY_CLASSIC_ARTICULATIONS &&
+                selected.Notes.SelectMany(n => n.ChildNotes.Prepend(n)).Any(n => n.ConversionOrigin is not null))
+            {
+                var tier = selected.Difficulty == Difficulty.ExpertPlus ? Difficulty.Expert : selected.Difficulty;
+                if (!chart.AuthoredDrumSources.TryGetTier(DrumSourceFormat.Elite, tier, out var source))
+                    throw new InvalidDataException("Historical generated drums require their authored Elite source.");
+                var elite = source!.CloneEliteDifficulty();
+                ApplyEliteExtraKickRuleset(elite, ruleset);
+                if (selected.Difficulty != Difficulty.ExpertPlus)
+                    Filter(elite, n => !n.IsDoubleKick, n => n);
+                result = MoonSongLoader.ConvertPlaybackElite(elite, selected.Instrument, chart.Resolution, false);
+                if (result.Difficulty != selected.Difficulty)
+                {
+                    var retagged = new InstrumentDifficulty<DrumNote>(result.Instrument, selected.Difficulty,
+                        result.Notes, result.Phrases, result.TextEvents);
+                    retagged.RangeShiftEvents.AddRange(result.RangeShiftEvents);
+                    retagged.SetEliteDrumVisualDescriptors(result.EliteDrumVisualDescriptors);
+                    retagged.SetEliteDrumAuthoredLanePhraseRecords(result.EliteDrumAuthoredLanePhraseRecords);
+                    result = retagged;
+                }
+                foreach (var note in result.Notes.SelectMany(n => n.ChildNotes.Prepend(n)))
+                    note.Time = chart.SyncTrack.TickToTime(note.Tick);
+            }
+            ApplyClassicArticulationRuleset(result, ruleset);
+            return result;
+        }
+
+        // The old Elite extra-key handler discarded velocity, whereas ordinary Elite
+        // kicks already supported it. Apply this before NormalizeExtraOnly clears 2x identity.
+        internal static void ApplyEliteExtraKickRuleset(InstrumentDifficulty<EliteDrumNote> notes, byte ruleset)
+        {
+            if (ruleset != DrumsEngineParameters.LEGACY_CLASSIC_ARTICULATIONS) return;
+            foreach (var parent in notes.Notes)
+                foreach (var note in parent.AllNotes)
+                    if (note.Pad == (int)EliteDrumPad.Kick && note.IsDoubleKick)
+                        note.Dynamics = DrumNoteType.Neutral;
+        }
+
+        private static void ApplyClassicArticulationRuleset(InstrumentDifficulty<DrumNote> notes, byte ruleset)
+        {
+            if (ruleset != DrumsEngineParameters.LEGACY_CLASSIC_ARTICULATIONS)
+            {
+                NormalizeClassicFlams(notes, ruleset >= DrumsEngineParameters.CLASSIC_ARTICULATIONS_V2);
+                if (ruleset >= DrumsEngineParameters.CLASSIC_ARTICULATIONS_V2) notes.RemoveKickDynamics();
+                return;
+            }
+            foreach (var parent in notes.Notes)
+                foreach (var note in parent.AllNotes)
+                {
+                    note.IsFlam = false;
+                    note.IsFlatFlam = false;
+                    // Old native classic parsing deliberately ignored kick velocities;
+                    // generated Elite tracks already retained their kick dynamics.
+                    if (note.Pad == (int)FourLaneDrumPad.Kick && note.ConversionOrigin is null)
+                        note.Type = DrumNoteType.Neutral;
+                }
+        }
+
+        /// <summary>
+        /// Repairs only the uniquely reversible legacy adjacent-pad expansions. Ambiguous
+        /// hand chords remain intact and ordinary; feet never consume a flam hand.
+        /// Must run on a player-owned copy before engine construction.
+        /// </summary>
+        public static void NormalizeClassicFlams(InstrumentDifficulty<DrumNote> notes, bool includeKickFlams = true)
+        {
+            var replacements = new List<DrumNote>();
+            foreach (var chord in notes.Notes)
+            {
+                var members = chord.ChildNotes.Prepend(chord).ToList();
+                var hands = members.Where(n => n.Pad != (int)FourLaneDrumPad.Kick &&
+                    n.Pad != (int)FourLaneDrumPad.Wildcard).ToList();
+                var marked = hands.Where(n => n.IsHandFlam).ToList();
+                if (marked.Count > 0 && hands.Count > 1)
+                {
+                    int Color(DrumNote n) => notes.Instrument == Instrument.FiveLaneDrums || n.Pad < 5 ? n.Pad : n.Pad - 3;
+                    var ordered = hands.OrderBy(Color).ToArray();
+                    bool repair = hands.Count == 2 && marked.Count == 2 &&
+                        hands.All(n => n.ConversionOrigin is null && !n.IsAnyLane) &&
+                        ((Color(ordered[0]), Color(ordered[1])) is (1, 2) ||
+                         (Color(ordered[0]), Color(ordered[1])) is (2, 3) &&
+                         ordered[0].Type == ordered[1].Type &&
+                         ordered[0].IsFlatFlam == ordered[1].IsFlatFlam &&
+                         (notes.Instrument == Instrument.FiveLaneDrums || (ordered[0].Pad >= 5) == (ordered[1].Pad >= 5)));
+                    if (repair) members.Remove(ordered[1]);
+                    else foreach (var hand in hands) { hand.IsFlam = false; hand.IsFlatFlam = false; }
+                }
+                foreach (var member in members)
+                {
+                    if (member.IsAnyLane || member.Pad == (int)FourLaneDrumPad.Wildcard)
+                    { member.IsFlam = false; member.IsFlatFlam = false; }
+                    else if (member.Pad == (int)FourLaneDrumPad.Kick)
+                    {
+                        bool flam = includeKickFlams && member.IsKickFlam;
+                        member.IsFlatFlam = false;
+                        member.IsFlam = flam;
+                    }
+                }
+                DrumNote? parent = null;
+                foreach (var member in members)
+                {
+                    var note = member.CloneWithoutChildNotes();
+                    if (parent is null) parent = note;
+                    else parent.AddChildNote(note);
+                }
+                if (parent is not null) replacements.Add(parent);
+            }
+            notes.Notes.Clear();
+            notes.Notes.AddRange(replacements);
+            Rebuild(notes);
+        }
+
+        /// <summary>
         /// Clears effective flam flags in same-pad authored lanes on a player-owned playback copy.
         /// Call before engine construction, including direct Clone playback without resolved source records.
         /// Authored intent and source identity are unchanged; activation DrumFill phrases are ignored.
@@ -219,13 +365,14 @@ namespace YARG.Core.Chart
             {
                 bool inLane = difficulty.EliteDrumNativeAuthoredLaneRecords.Count > 0
                     ? difficulty.EliteDrumNativeAuthoredLaneRecords.Any(r =>
-                        (int) r.AuthoredPad == note.Pad && r.ContainsTick(note.Tick) &&
+                        (int) r.AuthoredPad == note.OriginalPad && r.ContainsTick(note.Tick) &&
                         note.SourceDefinition is not null && r.MemberSources.Contains(note.SourceDefinition))
                     : difficulty.Phrases.Any(p =>
                         EliteDrumNativeAuthoredLaneRecord.TryGetNativePad(p.Type, out var pad) &&
-                        (int) pad == note.Pad && note.Tick >= p.Tick && (note.Tick < p.TickEnd || note.Tick == p.TickEnd &&
+                        (int) pad == note.OriginalPad && note.Tick >= p.Tick && (note.Tick < p.TickEnd || note.Tick == p.TickEnd &&
                             EliteDrumNativeAuthoredLaneRecord.IncludesEnd(p, difficulty.Phrases)));
                 if (inLane) { note.IsFlam = false; note.IsFlatFlam = false; }
+                else if (note.IsKickFlam) { note.IsFlam = true; note.IsFlatFlam = false; }
             }
         }
 

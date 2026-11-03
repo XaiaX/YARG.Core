@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,7 +12,7 @@ namespace YARG.Core.Chart
     {
         /// <summary>
         /// Converts one selected difficulty without changing its source. Cymbal and tom identities
-        /// are mapped directly; no articulation, pedal, flam, or missing lane members are inferred.
+        /// are mapped directly; explicit source flams are retained without inferring new articulations.
         /// Lane membership uses the source loader's validated Tremolo/Trill/KickLane flags.
         /// Callers must select an actual native source, not an Elite-generated downchart or
         /// a Pro/Four-Lane representation synthesized from native Five-Lane drums.
@@ -41,10 +42,10 @@ namespace YARG.Core.Chart
                         member.Tick, member.TickLength, member.Time, member.TimeLength);
                     sourceMembers.Add(definition, member);
                     var converted = new EliteDrumNote(pad, member.Type, EliteDrumsHatState.Indifferent,
-                        EliteDrumsHatPedalType.Stomp, false,
+                        EliteDrumsHatPedalType.Stomp, member.IsFlam,
                         member.DrumFlags & ~(DrumNoteFlags.KickLane | DrumNoteFlags.KickLaneStart | DrumNoteFlags.KickLaneEnd),
                         member.Flags & ~(NoteFlags.Tremolo | NoteFlags.Trill | NoteFlags.LaneStart | NoteFlags.LaneEnd),
-                        EliteDrumsChannelFlag.None, member.Time, member.Tick, member.IsDoubleKick, definition);
+                        EliteDrumsChannelFlag.None, member.Time, member.Tick, member.IsDoubleKick, definition, isFlatFlam: member.IsFlatFlam);
                     if (parent is null) parent = converted;
                     else parent.AddChildNote(converted);
                 }

@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using YARG.Core.Chart;
 using YARG.Core.Input;
@@ -42,10 +43,12 @@ namespace YARG.Core.Game
         };
 
         /// <summary>The authored hand/pad color, independent of hand-flam presentation.</summary>
-        public static EliteDrumsColorRole GetHandRole(EliteDrumNote note) => GetRole(note, true);
+        public static EliteDrumsColorRole GetHandRole(EliteDrumNote note, bool keepOriginalCymbalColors = false) =>
+            GetRole(note, true, keepOriginalCymbalColors);
 
         /// <summary>Split hand flams keep each hand's own role; unsplit hand flams use HandFlam.</summary>
-        public static EliteDrumsColorRole GetRole(EliteDrumNote note, bool splitHandFlam = false)
+        public static EliteDrumsColorRole GetRole(EliteDrumNote note, bool splitHandFlam = false,
+            bool keepOriginalCymbalColors = false)
         {
             if (note == null) throw new ArgumentNullException(nameof(note));
             if (note.IsInvisibleTerminator && note.Pad == (int) EliteDrumPad.HatPedal)
@@ -58,7 +61,7 @@ namespace YARG.Core.Game
                 return note.IsSplash ? EliteDrumsColorRole.Splash : EliteDrumsColorRole.Stomp;
             if (note.IsHandFlam && !splitHandFlam) return EliteDrumsColorRole.HandFlam;
 
-            return (EliteDrumPad) note.Pad switch
+            return (EliteDrumPad) note.GetColorPad(keepOriginalCymbalColors) switch
             {
                 EliteDrumPad.Wildcard => EliteDrumsColorRole.Wildcard,
                 EliteDrumPad.Snare => EliteDrumsColorRole.Snare,

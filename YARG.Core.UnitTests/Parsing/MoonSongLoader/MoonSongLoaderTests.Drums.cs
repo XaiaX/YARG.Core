@@ -1,3 +1,4 @@
+// pattern: Imperative Shell
 using System.Collections.Generic;
 using System.Linq;
 using MoonscraperChartEditor.Song;
@@ -486,7 +487,7 @@ namespace YARG.Core.UnitTests.Parsing
         }
 
         [Test]
-        public void EliteDrumsDownchart_FlamExpansionsCountAsSurvivingPhysicalMembers()
+        public void Legacy_EliteDrumsDownchart_FlamExpansionsCountAsSurvivingPhysicalMembers()
         {
             var song = CreateSong();
             var chart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
@@ -498,7 +499,7 @@ namespace YARG.Core.UnitTests.Parsing
             chart.Add(flam);
             chart.Add(new MoonNote(TICKS(2), (int)EliteDrumNote.EliteDrumPad.Snare));
 
-            var difficulty = LoadDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
+            var difficulty = LoadLegacyDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
             var physical = ExpandNotes(difficulty.Notes).ToArray();
             using (Assert.EnterMultipleScope())
             {
@@ -524,7 +525,7 @@ namespace YARG.Core.UnitTests.Parsing
         }
 
         [Test]
-        public void EliteDrumsDownchart_AuthoredRollFlamExpandsOnlyInGeneratedDrums()
+        public void Legacy_EliteDrumsDownchart_AuthoredRollFlamExpandsOnlyInGeneratedDrums()
         {
             var song = CreateSong();
             var chart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
@@ -535,7 +536,7 @@ namespace YARG.Core.UnitTests.Parsing
 
             var eliteTrack = new MoonSongLoader(song, ParseSettings.Default).LoadEliteDrumsTrack(Instrument.EliteDrums);
             var native = eliteTrack.GetDifficulty(Difficulty.Expert).Notes.Single();
-            var generated = LoadDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
+            var generated = LoadLegacyDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
             var physical = ExpandNotes(generated.Notes).ToArray();
 
             using (Assert.EnterMultipleScope())
@@ -671,14 +672,14 @@ namespace YARG.Core.UnitTests.Parsing
         }
 
         [Test]
-        public void EliteDownchart_RetainsFlamChildren()
+        public void Legacy_EliteDownchart_RetainsFlamChildren()
         {
             var song = CreateSong();
             var chart = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
             chart.Add(new MoonNote(TICKS(0), (int) EliteDrumNote.EliteDrumPad.Snare, 0, Flags.EliteDrums_Flam));
             chart.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.Kick));
 
-            var difficulty = LoadDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
+            var difficulty = LoadLegacyDowncharts(song)[Instrument.ProDrums].GetDifficulty(Difficulty.Expert);
             using (Assert.EnterMultipleScope())
             {
                 Assert.That(difficulty.Notes, Has.Count.EqualTo(2));
@@ -689,7 +690,7 @@ namespace YARG.Core.UnitTests.Parsing
         }
 
         [Test]
-        public void EliteDrumsDownchart_TransfersOriginsPerDifficultyAndFlamChild()
+        public void Legacy_EliteDrumsDownchart_TransfersOriginsPerDifficultyAndFlamChild()
         {
             var song = CreateSong();
             var medium = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Medium);
@@ -697,7 +698,7 @@ namespace YARG.Core.UnitTests.Parsing
             var expert = song.GetChart(MoonSong.MoonInstrument.EliteDrums, MoonSong.Difficulty.Expert);
             expert.Add(new MoonNote(TICKS(1), (int) EliteDrumNote.EliteDrumPad.Kick));
 
-            var generated = LoadDowncharts(song)[Instrument.ProDrums];
+            var generated = LoadLegacyDowncharts(song)[Instrument.ProDrums];
             var mediumPhysical = ExpandNotes(generated.GetDifficulty(Difficulty.Medium).Notes).ToArray();
             var expertNotes = generated.GetDifficulty(Difficulty.Expert).Notes;
 
@@ -1147,6 +1148,26 @@ namespace YARG.Core.UnitTests.Parsing
             }
 
             return count;
+        }
+
+        // Historical recordings deliberately keep the original adjacent-pad expansion,
+        // including the provenance and malformed-lane semantics asserted above.
+        private static IReadOnlyDictionary<Instrument, InstrumentTrack<DrumNote>> LoadLegacyDowncharts(MoonSong song)
+        {
+            var elite = new MoonSongLoader(song, ParseSettings.Default).LoadEliteDrumsTrack(Instrument.EliteDrums);
+            var result = new Dictionary<Instrument, InstrumentTrack<DrumNote>>();
+            foreach (var output in new[] { Instrument.FourLaneDrums, Instrument.ProDrums, Instrument.FiveLaneDrums })
+            {
+                var track = new InstrumentTrack<DrumNote>(output);
+                foreach (var tier in new[] { Difficulty.Easy, Difficulty.Medium, Difficulty.Hard, Difficulty.Expert })
+                {
+                    var source = elite.GetDifficulty(tier);
+                    track.AddDifficulty(tier, source.Notes.Count == 0 ? new(output, tier) :
+                        MoonSongLoader.ConvertPlaybackElite(source, output, song.resolution, false));
+                }
+                result.Add(output, track);
+            }
+            return result;
         }
 
         private static IReadOnlyDictionary<Instrument, InstrumentTrack<DrumNote>> LoadDowncharts(MoonSong song)

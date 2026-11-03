@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Functional Core
+using System;
 using System.Collections.Generic;
 using MoonscraperChartEditor.Song;
 using MoonscraperChartEditor.Song.IO;
@@ -615,9 +616,13 @@ namespace YARG.Core.Chart
 
         private DrumNoteFlags GetDrumNoteFlags(MoonNote moonNote, Dictionary<MoonPhrase.Type, MoonPhrase> currentPhrases)
         {
-            // Can be populated later if additional note flags are added
-            // Activation note marking is done within DrumsPlayer
-            return DrumNoteFlags.None;
+            var flags = DrumNoteFlags.None;
+            if ((moonNote.flags & MoonNote.Flags.EliteDrums_Flam) != 0) flags |= DrumNoteFlags.Flam;
+            if ((moonNote.flags & MoonNote.Flags.EliteDrums_FlatFlam) != 0) flags |= DrumNoteFlags.FlatFlam;
+            if (moonNote.drumPad == MoonNote.DrumPad.Kick && moonNote.pairedExtraKick is not null &&
+                !_loadingAuthoredDrums && _currentDifficulty != Difficulty.ExpertPlus)
+                flags &= ~(DrumNoteFlags.Flam | DrumNoteFlags.FlatFlam);
+            return flags;
         }
 
         private InstrumentDifficulty<DrumNote> LoadFromEliteDrumsDownchartDifficulty(Instrument instrument,

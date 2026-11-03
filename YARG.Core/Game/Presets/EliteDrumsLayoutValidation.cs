@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -53,10 +54,10 @@ namespace YARG.Core.Game
             var assigned = new HashSet<string>(StringComparer.Ordinal);
             bool supported = true;
             int kick = 0, kick1 = 0, kick2 = 0;
-            if (preset == null || preset.SchemaVersion != EliteDrumsLayoutPreset.CURRENT_SCHEMA_VERSION ||
+            if (preset == null || (preset.SchemaVersion != 1 && preset.SchemaVersion != EliteDrumsLayoutPreset.CURRENT_SCHEMA_VERSION) ||
                 preset.Slots == null || preset.Slots.Length != EliteDrumsLayoutPreset.SLOT_COUNT)
             {
-                errors.Add("Expected schema v1 and exactly ten slots.");
+                errors.Add("Expected schema v1 or v2 and exactly ten slots.");
                 return new EliteDrumsLayoutValidation(false, false, false, errors);
             }
             var mergeIds = new HashSet<string>(StringComparer.Ordinal);
@@ -76,7 +77,10 @@ namespace YARG.Core.Game
                     !mergeIds.Add(merge.EffectiveId)) errors.Add("Merge ID is duplicate or noncanonical.");
                 foreach (string source in merge.Sources)
                     if (!mergedSources.Add(source)) errors.Add("Merge definitions must be disjoint.");
-                supported = false;
+                if (merge.PrimarySource != null && (preset.SchemaVersion == 1 ||
+                    !merge.Sources.Contains(merge.PrimarySource) || !EliteDrumsCymbalPairs.TryGetMerge(merge, out _)))
+                    errors.Add("Merge primary must be a supported member in schema v2.");
+                supported &= EliteDrumsCymbalPairs.TryGetMerge(merge, out _);
             }
             for (int i = 0; i < preset.Slots.Length; i++)
             {
@@ -125,7 +129,7 @@ namespace YARG.Core.Game
                 if (sources.Length == 1 && mergedSources.Contains(id)) return false;
                 if (sources.Length > 1)
                 {
-                    supported = false;
+                    supported &= EliteDrumsCymbalPairs.TryGet(id, out _);
                     if (!mergeIds.Contains(id)) return false;
                 }
                 bool unique = true;

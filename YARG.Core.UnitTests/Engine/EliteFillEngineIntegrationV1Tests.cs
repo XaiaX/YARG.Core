@@ -1,3 +1,4 @@
+// pattern: Imperative Shell
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -1337,10 +1338,84 @@ public sealed class EliteFillEngineIntegrationV1Tests
             ?? throw new AssertionException("Elite Fill V1 runtime was not initialized."));
     }
 
+    [TestCase(1)]
+    [TestCase(2)]
+    public void DeferredPhysicalKickRetainsFeedbackAndOnlyHistoricalVelocityScoring(int ruleset)
+    {
+        var (engine, notes) = Build(new[]
+        {
+            NoteSpec.At(1.000, FourLaneDrumPad.RedDrum),
+            NoteSpec.At(1.020, FourLaneDrumPad.Kick, DrumNoteType.Accent),
+        }, classicArticulationRuleset: (byte)ruleset);
+        var feedback = new List<(DrumsAction Action, float Velocity)>();
+        engine.OnPadHit += (action, hit, _, _, _, velocity) => { if (hit) feedback.Add((action, velocity)); };
+        Hit(engine, 1.020, DrumsAction.Kick, .95f);
+        Assert.That(notes.Notes[1].WasHit, Is.False);
+        Hit(engine, 1.030, DrumsAction.BlueDrum, .05f);
+        engine.Update(1.3);
+        Assert.Multiple(() =>
+        {
+            Assert.That(notes.Notes[1].HitVelocity, Is.EqualTo(ruleset == 1 ? .95f : (float?)null));
+            Assert.That(engine.EngineStats.DynamicsBonus, Is.EqualTo(ruleset == 1 ? 25 : 0));
+            Assert.That(engine.EngineStats.AccentsHit, Is.EqualTo(ruleset == 1 ? 1 : 0));
+            Assert.That(feedback, Is.EqualTo(new[] { (DrumsAction.Kick, .95f) }));
+        });
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public void DeferredFlamAcceptsOneFollowUpBeforeItsPrimaryCommit(bool flat)
+    {
+        var flam = NoteSpec.At(1.020, FourLaneDrumPad.YellowDrum, DrumNoteType.Accent);
+        flam.DrumFlags = flat ? DrumNoteFlags.FlatFlam : DrumNoteFlags.Flam;
+        var (engine, notes) = Build(new[] { NoteSpec.At(1.000, FourLaneDrumPad.RedDrum), flam });
+        int lifecycle = 0, followups = 0;
+        engine.OnNoteHit += (_, _) => lifecycle++;
+        engine.OnFlamFollowUp += (_, _, _, _) => followups++;
+        Hit(engine, 1.020, DrumsAction.YellowDrum, .95f);
+        Hit(engine, 1.030, DrumsAction.YellowDrum, .1f);
+        Assert.That(notes.Notes[1].WasHit, Is.False);
+        engine.Update(1.3);
+        Assert.Multiple(() =>
+        {
+            Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(120));
+            Assert.That(engine.EngineStats.DynamicsBonus, Is.EqualTo(25));
+            Assert.That(engine.EngineStats.Combo, Is.EqualTo(1));
+            Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(1));
+            Assert.That(lifecycle, Is.EqualTo(1));
+            Assert.That(followups, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public void AutomaticLaneContinuationDoesNotInheritVelocityOrOpenFlam()
+    {
+        var (engine, notes) = Build(new[]
+        {
+            NoteSpec.Lane(1.0, FourLaneDrumPad.RedDrum, start: true),
+            NoteSpec.Lane(1.1, FourLaneDrumPad.RedDrum),
+            NoteSpec.Lane(1.2, FourLaneDrumPad.RedDrum, end: true),
+        }, authoredLanes: new[] { new[] { 0, 1, 2 } });
+        notes.Notes[1].Type = DrumNoteType.Accent;
+        notes.Notes[2].Type = DrumNoteType.Ghost;
+        int feedback = 0;
+        engine.OnPadHit += (_, hit, _, _, _, _) => { if (hit) feedback++; };
+        Hit(engine, 1.0, DrumsAction.RedDrum, 1);
+        engine.Update(1.4);
+        Assert.Multiple(() =>
+        {
+            Assert.That(notes.Notes[1].WasHit, Is.True);
+            Assert.That(engine.EngineStats.DynamicsBonus, Is.Zero);
+            Assert.That(notes.Notes[1].HitVelocity, Is.Null);
+            Assert.That(notes.Notes[2].HitVelocity, Is.Null);
+            Assert.That(feedback, Is.EqualTo(1));
+        });
+    }
+
     private static (YargDrumsEngine Engine, InstrumentDifficulty<DrumNote> Notes) Build(
         IReadOnlyList<NoteSpec> specs, double? codaStart = null, double? codaEnd = null, bool isBot = false,
         IReadOnlyList<int[]>? authoredLanes = null, IReadOnlyList<int[]>? unresolvedLanes = null,
-        double laneAutohitWindow = 0.16)
+        double laneAutohitWindow = 0.16, byte classicArticulationRuleset = DrumsEngineParameters.CURRENT_CLASSIC_ARTICULATIONS)
     {
         var notes = new List<DrumNote>();
         var origins = new List<EliteDrumConversionOrigin?>();
@@ -1412,7 +1487,7 @@ public sealed class EliteFillEngineIntegrationV1Tests
         {
             diff.SetEliteDrumAuthoredLanePhraseRecords(records);
         }
-        return (CreateEngine(diff, isBot, laneAutohitWindow), diff);
+        return (CreateEngine(diff, isBot, laneAutohitWindow, classicArticulationRuleset), diff);
     }
 
     private static EliteDrumVisualDescriptorV1 MakeAuthoredLaneRecord(string id,
@@ -1428,12 +1503,12 @@ public sealed class EliteFillEngineIntegrationV1Tests
     }
 
     private static YargDrumsEngine CreateEngine(InstrumentDifficulty<DrumNote> diff, bool isBot,
-        double laneAutohitWindow = 0.16)
+        double laneAutohitWindow = 0.16, byte classicArticulationRuleset = DrumsEngineParameters.CURRENT_CLASSIC_ARTICULATIONS)
     {
         var hitWindow = new HitWindowSettings(0.14, 0.14, 1.0, false, 0, 1.0, 1.0, laneAutohitWindow, 0.25);
         var parameters = new DrumsEngineParameters(hitWindow, 4, StarThresholds, SoloThresholds,
             DrumsEngineParameters.DrumMode.ProFourLane, false, true,
-            DrumsEngineParameters.ELITE_FILL_RULESET_V1, 1f);
+            DrumsEngineParameters.ELITE_FILL_RULESET_V1, 1f, classicArticulationRuleset: classicArticulationRuleset);
         return new YargDrumsEngine(diff, CreateSyncTrack(), parameters, isBot, false);
     }
 

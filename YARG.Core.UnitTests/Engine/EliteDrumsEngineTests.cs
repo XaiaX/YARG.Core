@@ -1,3 +1,4 @@
+// pattern: Imperative Shell
 using System.Collections.Generic;
 using NUnit.Framework;
 using YARG.Core.Chart;
@@ -113,10 +114,9 @@ public class EliteDrumsEngineTests
         Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(50));
     }
 
-    [TestCase(EliteDrumNote.EliteDrumPad.Kick, EliteDrumsAction.Kick)]
     [TestCase(EliteDrumNote.EliteDrumPad.HatPedal, EliteDrumsAction.EliteStomp)]
     [TestCase(EliteDrumNote.EliteDrumPad.Wildcard, EliteDrumsAction.WildcardPad)]
-    public void NonHandFlamFlagsNeverDoubleScore(EliteDrumNote.EliteDrumPad pad, EliteDrumsAction action)
+    public void NonScoringFlamFlagsNeverDoubleScore(EliteDrumNote.EliteDrumPad pad, EliteDrumsAction action)
     {
         var note = MakeNote(pad);
         note.IsFlam = note.IsFlatFlam = true;
@@ -175,11 +175,19 @@ public class EliteDrumsEngineTests
         var afterEnd = source.Clone();
         foreach (var note in afterEnd.Notes) note.Tick = 1921;
         DrumPlaybackPreparer.NormalizeEliteFlams(afterEnd);
-        foreach (var note in afterEnd.Notes) Assert.That(note.IsFlam && note.IsFlatFlam, Is.True);
+        foreach (var note in afterEnd.Notes)
+        {
+            Assert.That(note.IsFlam, Is.True);
+            Assert.That(note.IsFlatFlam, Is.EqualTo(note.Pad != (int)EliteDrumNote.EliteDrumPad.Kick));
+        }
         source.Phrases.Clear();
         source.Phrases.Add(new Phrase(PhraseType.DrumFill, 1, 1, 960, 960));
         DrumPlaybackPreparer.NormalizeEliteFlams(source);
-        foreach (var note in source.Notes) Assert.That(note.IsFlam && note.IsFlatFlam, Is.True);
+        foreach (var note in source.Notes)
+        {
+            Assert.That(note.IsFlam, Is.True);
+            Assert.That(note.IsFlatFlam, Is.EqualTo(note.Pad != (int)EliteDrumNote.EliteDrumPad.Kick));
+        }
     }
 
     [Test]

@@ -1,4 +1,5 @@
-﻿using MoonscraperChartEditor.Song;
+﻿// pattern: Functional Core
+using MoonscraperChartEditor.Song;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -296,7 +297,7 @@ namespace YARG.Core.Chart
             return authored;
         }
 
-        private static DownchartChord? DownchartEliteDrumsChord(EliteDrumNote eliteDrumChord, List<Phrase> phrases)
+        private DownchartChord? DownchartEliteDrumsChord(EliteDrumNote eliteDrumChord, List<Phrase> phrases)
         {
             DownchartNote? kick = null;
             DownchartNote? firstHandGem = null;
@@ -343,8 +344,12 @@ namespace YARG.Core.Chart
             return new(kick, firstHandGem, secondHandGem);
         }
 
-        // In most cases, returns 1 note. Unforced or invisible hat pedals return 0 notes, while flams return 2.
-        private static List<DownchartNote> DownchartIndividualEliteDrumsNote(EliteDrumNote eliteDrumNote, bool noteIsInDiscoFlip)
+        // Kept instance-local so historical replay reconstruction can retain the
+        // original adjacent-pad expansion without changing shared authored charts.
+        private bool _classicDrumArticulations = true;
+
+        // Ordinary conversion retains one semantic flam. Historical replay policy alone expands it to two pads.
+        private List<DownchartNote> DownchartIndividualEliteDrumsNote(EliteDrumNote eliteDrumNote, bool noteIsInDiscoFlip)
         {
             List<DownchartNote> notes = new();
 
@@ -400,6 +405,9 @@ namespace YARG.Core.Chart
                     _ => MoonNote.Flags.None
                 };
 
+                if (_classicDrumArticulations && eliteDrumNote.IsScoringFlam)
+                    flags |= eliteDrumNote.IsHandFlam && eliteDrumNote.IsFlatFlam ? MoonNote.Flags.EliteDrums_FlatFlam : MoonNote.Flags.EliteDrums_Flam;
+
                 var mainNote = new MoonNote(eliteDrumNote.Tick, -1, 0, flags)
                 {
                     drumPad = pad.Value
@@ -407,9 +415,9 @@ namespace YARG.Core.Chart
 
                 notes.Add(new(mainNote, eliteDrumNote, 0));
 
-                // Generated drums retain authored flam expansion even when native Elite
+                // Historical generated drums retain authored flam expansion even when native Elite
                 // suppresses the flam within a same-pad roll lane.
-                if (eliteDrumNote.IsAuthoredFlam)
+                if (!_classicDrumArticulations && eliteDrumNote.IsAuthoredFlam)
                 {
                     MoonNote.DrumPad? otherPad = pad.Value switch
                     {

@@ -1,3 +1,4 @@
+// pattern: Mixed (needs refactoring)
 #nullable disable
 using System;
 using System.IO;
@@ -28,7 +29,7 @@ namespace YARG.Core.Game
         /// 17 appends the Elite Drums layout identity plus an optional resolved-layout
         /// content snapshot; older versions read as the built-in Compact layout.
         /// </remarks>
-        private const int PROFILE_VERSION = 17;
+        private const int PROFILE_VERSION = 19;
 
         public int Version;
 
@@ -94,6 +95,8 @@ namespace YARG.Core.Game
         /// captured at record time (see there for why the GUID is not sufficient).
         /// </summary>
         public Guid EliteDrumsLayout;
+        /// <summary>Local display preference; never changes targets, score category, or shared layout data.</summary>
+        public bool KeepOriginalCymbalColors;
 
         /// <summary>
         /// The selected instrument.
@@ -570,6 +573,17 @@ namespace YARG.Core.Game
             {
                 EliteDrumsLayout = EliteDrumsLayoutPreset.CompactId;
             }
+
+            // Historical replays have an explicit V default and never inherit
+            // a current machine's global-setting migration.
+            if (Version >= 18)
+            {
+                var layout = (DrumFlamLayout) stream.ReadByte();
+                if (!IsValidFlamLayout(layout))
+                    throw new InvalidDataException($"unsupported drum flam layout: {(byte)layout}");
+                FlamLayout = layout;
+            }
+            KeepOriginalCymbalColors = Version >= 19 && stream.ReadBoolean();
         }
 
         /// <summary>
@@ -839,6 +853,7 @@ namespace YARG.Core.Game
                     {
                         if (IsModifierActive(Modifier.NoKicks)) fallbackDrumsTrack.RemoveKickDrumNotes();
                         if (IsModifierActive(Modifier.NoDynamics)) fallbackDrumsTrack.RemoveDynamics();
+                        else if (IsModifierActive(Modifier.NoKickDynamics)) fallbackDrumsTrack.RemoveKickDynamics();
                         break;
                     }
                     throw new InvalidOperationException("Cannot apply Elite drum modifiers to track " +
@@ -859,6 +874,10 @@ namespace YARG.Core.Game
                     if (IsModifierActive(Modifier.NoDynamics))
                     {
                         drumsTrack.RemoveDynamics();
+                    }
+                    else if (IsModifierActive(Modifier.NoKickDynamics))
+                    {
+                        drumsTrack.RemoveKickDynamics();
                     }
 
                     break;
@@ -1055,6 +1074,11 @@ namespace YARG.Core.Game
             // the resolved layout content needed to reproduce the recorded lanes.
             writer.Write(EliteDrumsLayout);
             WriteEliteDrumsLayoutSnapshot(writer);
+
+            // Version 18 appends the profile-owned visual flam layout.
+            writer.Write((byte) FlamLayout);
+            // Version 19 appends the local merged-cymbal color preference.
+            writer.Write(KeepOriginalCymbalColors);
         }
 
         private static DrumsHighwayItem[] DEFAULT_FOUR_LANE_ORDERING = new DrumsHighwayItem[] {

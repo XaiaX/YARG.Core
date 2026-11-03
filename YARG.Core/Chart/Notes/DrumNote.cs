@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Functional Core
+using System;
 
 namespace YARG.Core.Chart
 {
@@ -26,6 +27,22 @@ namespace YARG.Core.Chart
         public bool IsNeutral => Type == DrumNoteType.Neutral;
         public bool IsAccent  => Type == DrumNoteType.Accent;
         public bool IsGhost   => Type == DrumNoteType.Ghost;
+
+        public bool IsFlam
+        {
+            get => (DrumFlags & DrumNoteFlags.Flam) != 0;
+            set { if (value) ActivateFlag(DrumNoteFlags.Flam); else ClearFlag(DrumNoteFlags.Flam); }
+        }
+        public bool IsFlatFlam
+        {
+            get => (DrumFlags & DrumNoteFlags.FlatFlam) != 0;
+            set { if (value) ActivateFlag(DrumNoteFlags.FlatFlam); else ClearFlag(DrumNoteFlags.FlatFlam); }
+        }
+        public bool IsHandFlam => Pad != (int)FourLaneDrumPad.Kick && Pad != (int)FourLaneDrumPad.Wildcard && (IsFlam || IsFlatFlam);
+
+        /// <summary>Kick flams are always regular, including malformed flat kick flags.</summary>
+        public bool IsKickFlam => Pad == (int)FourLaneDrumPad.Kick && (IsFlam || IsFlatFlam);
+        public bool IsScoringFlam => IsHandFlam || IsKickFlam;
 
         public float? HitVelocity;
         public EliteDrumConversionOrigin? ConversionOrigin { get; private set; }
@@ -170,6 +187,8 @@ namespace YARG.Core.Chart
         KickLane = 1 << 1,
         KickLaneStart = 1 << 2,
         KickLaneEnd = 1 << 3,
+        Flam = 1 << 4,
+        FlatFlam = 1 << 5,
     }
 
     public enum DrumStem

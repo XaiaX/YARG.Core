@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Linq;
 
@@ -10,8 +11,8 @@ namespace YARG.Core.Game
         {
             if (!EliteDrumsLayoutValidator.Validate(preset).IsStructurallyValid)
                 throw new ArgumentException("Expected a structurally valid layout.", nameof(preset));
-            if (preset.Merges.Length != 0)
-                throw new ArgumentException("Component merging is not supported by the layout editor.", nameof(preset));
+            if (!EliteDrumsCymbalPairs.HasOnlySupportedMerges(preset))
+                throw new ArgumentException("This layout contains unsupported component merges.", nameof(preset));
             var assigned = preset.Slots.SelectMany(slot => new[] { slot.Drum, slot.Cymbal })
                 .Where(id => id != null).SelectMany(id => id!.Split('+')).ToArray();
             return Array.AsReadOnly(EliteDrumsLayoutSources.All.Except(assigned).ToArray());
@@ -44,6 +45,7 @@ namespace YARG.Core.Game
             var copy = Prepare(preset, column);
             copy.Slots[column] = new EliteDrumsLayoutSlot();
             NormalizeKicks(copy);
+            CleanMerges(copy);
             return copy;
         }
 
@@ -54,26 +56,29 @@ namespace YARG.Core.Game
             if (drum) copy.Slots[column].Drum = null;
             else copy.Slots[column].Cymbal = null;
             NormalizeOrdinary(copy.Slots[column]);
+            CleanMerges(copy);
             return copy;
         }
 
         public static EliteDrumsLayoutPreset Place(EliteDrumsLayoutPreset preset, int column, string effectiveId)
         {
             var copy = Prepare(preset, column);
+            EliteDrumsCymbalPairs.TryGetChoice(effectiveId, out var selectedPair);
+            if (selectedPair != null) effectiveId = selectedPair.EffectiveId;
             bool drum = EliteDrumsLayoutSources.TryExpand(effectiveId, true, out var sources);
             if (!drum && !EliteDrumsLayoutSources.TryExpand(effectiveId, false, out sources))
                 throw new ArgumentException("Unknown or noncanonical effective ID.", nameof(effectiveId));
-            if (sources.Length != 1)
-                throw new ArgumentException("The phase-1 picker accepts individual sources only; saved merges are not editor commands.", nameof(effectiveId));
-            // Remove overlapping assignments, including saved pairs, without changing unrelated rows.
-            foreach (var slot in copy.Slots)
+            if (sources.Length != 1 && !EliteDrumsCymbalPairs.TryGet(effectiveId, out _))
+                throw new ArgumentException("Only the supported non-hat cymbal pairs can be combined.", nameof(effectiveId));
+            // Extract moved members from other cells. The destination row is deliberately replaced below.
+            for (int index = 0; index < copy.Slots.Length; index++)
             {
-                if (slot.Drum != null && slot.Drum.Split('+').Intersect(sources).Any()) slot.Drum = null;
-                if (slot.Cymbal != null && slot.Cymbal.Split('+').Intersect(sources).Any())
-                {
-                    slot.Cymbal = null;
-                    if (slot.Kind == EliteDrumsLayoutSlotKind.HiHat) slot.Kind = EliteDrumsLayoutSlotKind.Empty;
-                }
+                if (index == column) continue;
+                var slot = copy.Slots[index];
+                slot.Drum = RemoveSources(slot.Drum, sources);
+                slot.Cymbal = RemoveSources(slot.Cymbal, sources);
+                if (slot.Kind == EliteDrumsLayoutSlotKind.HiHat && slot.Cymbal == null)
+                    slot.Kind = EliteDrumsLayoutSlotKind.Empty;
                 NormalizeOrdinary(slot);
             }
             var target = copy.Slots[column];
@@ -86,7 +91,15 @@ namespace YARG.Core.Game
                 if (drum) target.Drum = effectiveId;
                 else target.Cymbal = effectiveId;
             }
+            if (sources.Length == 2)
+            {
+                if (selectedPair == null) EliteDrumsCymbalPairs.TryGet(effectiveId, out selectedPair);
+                var merge = new EliteDrumsLayoutMerge { EffectiveId = effectiveId,
+                    Sources = (string[])sources.Clone(), PrimarySource = selectedPair!.PrimarySource };
+                copy.Merges = copy.Merges.Where(existing => existing.EffectiveId != effectiveId).Concat(new[] { merge }).ToArray();
+            }
             NormalizeKicks(copy);
+            CleanMerges(copy);
             return copy;
         }
 
@@ -113,6 +126,7 @@ namespace YARG.Core.Game
                 }
                 else copy.Slots[column] = EliteDrumsLayoutSlot.Exclusive(EliteDrumsLayoutSlotKind.Kick);
             }
+            CleanMerges(copy);
             return copy;
         }
 
@@ -136,6 +150,7 @@ namespace YARG.Core.Game
             copy.Slots[from] = new EliteDrumsLayoutSlot();
             copy.Slots[to] = source;
             NormalizeKicks(copy);
+            CleanMerges(copy);
             return copy;
         }
 
@@ -154,13 +169,26 @@ namespace YARG.Core.Game
                 slot.Kind = EliteDrumsLayoutSlotKind.Empty;
         }
 
+        private static string? RemoveSources(string? id, string[] moved)
+        {
+            if (id == null) return null;
+            var remaining = id.Split('+').Except(moved).ToArray();
+            return remaining.Length == 0 ? null : string.Join("+", remaining);
+        }
+
+        private static void CleanMerges(EliteDrumsLayoutPreset preset)
+        {
+            var used = preset.Slots.SelectMany(slot => new[] { slot.Drum, slot.Cymbal }).ToArray();
+            preset.Merges = preset.Merges.Where(merge => used.Contains(merge.EffectiveId)).ToArray();
+        }
+
         private static EliteDrumsLayoutPreset Prepare(EliteDrumsLayoutPreset preset, int column)
         {
             CheckColumn(column);
             if (!EliteDrumsLayoutValidator.Validate(preset).IsStructurallyValid)
                 throw new ArgumentException("Edit operations require a structurally valid layout.", nameof(preset));
-            if (preset.Merges.Length != 0)
-                throw new ArgumentException("Component merging is not supported by the layout editor.", nameof(preset));
+            if (!EliteDrumsCymbalPairs.HasOnlySupportedMerges(preset))
+                throw new ArgumentException("This layout contains unsupported component merges.", nameof(preset));
             return preset.Copy();
         }
 

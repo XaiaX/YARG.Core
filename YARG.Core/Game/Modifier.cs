@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Functional Core
+using System;
 using System.Collections.Generic;
 
 namespace YARG.Core.Game
@@ -25,7 +26,9 @@ namespace YARG.Core.Game
         NoHiHat = 1 << 15,
         EnableEliteUpconversion = 1UL << 16,
         Enable2xKicks = 1UL << 17,
-        PreferEliteDowncharts = 1UL << 18
+        PreferEliteDowncharts = 1UL << 18,
+        // Reserved for V1 replay compatibility; never offered by live modifier menus.
+        NoKickDynamics = 1UL << 19
     }
 
     public static class ModifierConflicts
@@ -61,9 +64,10 @@ namespace YARG.Core.Game
                 _ => Modifier.None
             };
 
-            if (gameMode == GameMode.EliteDrums && instrument != Instrument.EliteDrums)
+            if (gameMode == GameMode.EliteDrums)
             {
-                excusable |= Modifier.NoHiHat;
+                if (instrument != Instrument.EliteDrums) excusable |= Modifier.NoHiHat;
+
             }
 
             var possible = all & ~excusable;

@@ -1,3 +1,4 @@
+// pattern: Imperative Shell
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -254,7 +255,7 @@ namespace YARG.Core.Replays.Analyzer
                 {
                     if (profile.ReplayDrumPlayback != null)
                     {
-                        var prepared = PrepareRecordedDrums(profile);
+                        var prepared = PrepareRecordedDrums(profile, (DrumsEngineParameters)parameters);
                         if (prepared.Elite is { } elite)
                             manager.Register((EliteDrumsEngine)engine, elite, _chart, rockMeterPreset);
                         else
@@ -264,16 +265,19 @@ namespace YARG.Core.Replays.Analyzer
 
                     if (DrumDifficultySelector.UsesNativeEliteTrack(profile))
                     {
-                        var eliteNotes = DrumDifficultySelector.SelectNativeEliteTrack(_chart, profile)
+                        var eliteNotes = DrumDifficultySelector.SelectNativeEliteTrack(_chart, profile, ((DrumsEngineParameters)parameters).ClassicArticulationRuleset)
                             .GetDifficulty(profile.CurrentDifficulty).Clone();
                         eliteNotes.SetDrumActivationFlags(profile.StarPowerActivationType);
                         profile.ApplyModifiers(eliteNotes, _chart.SyncTrack);
+                        EliteDrumsCymbalProjection.Apply(eliteNotes, RecordedEliteLayout(profile),
+                            ((DrumsEngineParameters)parameters).EliteCymbalMergePolicy);
                         manager.Register((EliteDrumsEngine)engine, eliteNotes, _chart, rockMeterPreset);
                         break;
                     }
 
-                    var notes = DrumDifficultySelector.SelectTrack(_chart, profile)
-                        .GetDifficulty(profile.CurrentDifficulty).Clone();
+                    var notes = DrumPlaybackPreparer.PrepareClassicRuleset(_chart,
+                        DrumDifficultySelector.SelectTrack(_chart, profile).GetDifficulty(profile.CurrentDifficulty),
+                        ((DrumsEngineParameters)parameters).ClassicArticulationRuleset);
                     profile.ApplyModifiers(notes, _chart.SyncTrack);
                     // TODO: Implement support for custom RockMeterPresets in replays
                     manager.Register((DrumsEngine)engine, notes, _chart, rockMeterPreset);
@@ -312,7 +316,7 @@ namespace YARG.Core.Replays.Analyzer
             }
         }
 
-        private PreparedDrumPlayback PrepareRecordedDrums(YargProfile profile)
+        private PreparedDrumPlayback PrepareRecordedDrums(YargProfile profile, DrumsEngineParameters parameters)
         {
             var playback = profile.ReplayDrumPlayback;
             if (profile.GameMode != GameMode.EliteDrums ||
@@ -324,11 +328,17 @@ namespace YARG.Core.Replays.Analyzer
 
             var prepared = DrumPlaybackPreparer.Prepare(_chart, playback,
                 notes => profile.ApplyModifiers(notes, _chart.SyncTrack),
-                notes => profile.ApplyModifiers(notes, _chart.SyncTrack));
+                notes => profile.ApplyModifiers(notes, _chart.SyncTrack), parameters.ClassicArticulationRuleset);
             prepared.Classic?.SetDrumActivationFlags(profile.StarPowerActivationType);
             prepared.Elite?.SetDrumActivationFlags(profile.StarPowerActivationType);
+            if (prepared.Elite is { } elite)
+                EliteDrumsCymbalProjection.Apply(elite, RecordedEliteLayout(profile), parameters.EliteCymbalMergePolicy);
             return prepared;
         }
+
+        private static EliteDrumsLayoutPreset RecordedEliteLayout(YargProfile profile) =>
+            profile.ReplayEliteDrumsLayout ?? (profile.EliteDrumsLayout == EliteDrumsLayoutPreset.FullId
+                ? EliteDrumsLayoutPreset.Full : EliteDrumsLayoutPreset.Compact);
 
         private BaseEngine CreateEngine(YargProfile profile, BaseEngineParameters parameters)
         {
@@ -381,13 +391,15 @@ namespace YARG.Core.Replays.Analyzer
                 {
                     if (profile.ReplayDrumPlayback != null)
                     {
-                        var prepared = PrepareRecordedDrums(profile);
+                        var prepared = PrepareRecordedDrums(profile, (DrumsEngineParameters)parameters);
                         if (prepared.Elite is { } elite)
                         {
                             foreach (var note in elite.Notes)
                                 foreach (var member in note.AllNotes) member.ResetNoteState();
                             return new EliteDrumsEngine(elite, _chart.SyncTrack,
-                                (DrumsEngineParameters) parameters, profile.IsBot, true);
+                                (DrumsEngineParameters) parameters, profile.IsBot, true,
+                                autoHiHatPedal: profile.EffectiveAutoHiHatPedal,
+                                cymbalLayout: RecordedEliteLayout(profile));
                         }
 
                         var classic = prepared.Classic!;
@@ -399,7 +411,7 @@ namespace YARG.Core.Replays.Analyzer
 
                     if (DrumDifficultySelector.UsesNativeEliteTrack(profile))
                     {
-                        var eliteNotes = DrumDifficultySelector.SelectNativeEliteTrack(_chart, profile)
+                        var eliteNotes = DrumDifficultySelector.SelectNativeEliteTrack(_chart, profile, ((DrumsEngineParameters)parameters).ClassicArticulationRuleset)
                             .GetDifficulty(profile.CurrentDifficulty).Clone();
                         eliteNotes.SetDrumActivationFlags(profile.StarPowerActivationType);
                         profile.ApplyModifiers(eliteNotes, _chart.SyncTrack);
@@ -413,13 +425,16 @@ namespace YARG.Core.Replays.Analyzer
 
                         DrumPlaybackPreparer.NormalizeEliteFlams(eliteNotes);
                         return new EliteDrumsEngine(eliteNotes, _chart.SyncTrack,
-                            (DrumsEngineParameters) parameters, profile.IsBot, true);
+                            (DrumsEngineParameters) parameters, profile.IsBot, true,
+                            autoHiHatPedal: profile.EffectiveAutoHiHatPedal,
+                            cymbalLayout: RecordedEliteLayout(profile));
                     }
 
                     // Explicit generated targets must resolve to their requested variant;
                     // missing or malformed targets never fall back to a native track.
-                    var notes = DrumDifficultySelector.SelectTrack(_chart, profile)
-                        .GetDifficulty(profile.CurrentDifficulty).Clone();
+                    var notes = DrumPlaybackPreparer.PrepareClassicRuleset(_chart,
+                        DrumDifficultySelector.SelectTrack(_chart, profile).GetDifficulty(profile.CurrentDifficulty),
+                        ((DrumsEngineParameters)parameters).ClassicArticulationRuleset);
                     notes.SetDrumActivationFlags(profile.StarPowerActivationType);
                     profile.ApplyModifiers(notes, _chart.SyncTrack);
                     foreach (var note in notes.Notes)

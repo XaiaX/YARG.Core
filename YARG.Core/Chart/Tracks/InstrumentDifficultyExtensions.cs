@@ -1028,6 +1028,14 @@ namespace YARG.Core.Chart
                 _ => note.Pad
             };
 
+        /// <summary>Disables only kick velocity obligations; hand dynamics are preserved.</summary>
+        public static void RemoveKickDynamics(this InstrumentDifficulty<DrumNote> difficulty)
+        {
+            foreach (var parent in difficulty.Notes)
+                foreach (var note in parent.AllNotes)
+                    if (note.Pad == (int)FourLaneDrumPad.Kick) note.Type = DrumNoteType.Neutral;
+        }
+
         public static void RemoveDynamics(this InstrumentDifficulty<DrumNote> difficulty)
         {
             foreach (var i in difficulty.Notes)

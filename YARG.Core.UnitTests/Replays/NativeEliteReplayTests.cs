@@ -25,6 +25,8 @@ internal static class NativeEliteReplayFixture
         GameMode = GameMode.EliteDrums,
         CurrentInstrument = instrument,
         CurrentDifficulty = Difficulty.Expert,
+        // Fixture engines use required pedals unless a test explicitly opts into assistance.
+        AutoHiHatPedal = false,
     };
 
     internal static EliteDrumNote EliteNote(EliteDrumNote.EliteDrumPad pad, double time) =>

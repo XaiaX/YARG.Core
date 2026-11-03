@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -80,17 +81,17 @@ namespace YARG.Core.Game
             return resolved!;
         }
 
-        /// <summary>Resolves a structurally valid, merge-free layout for display while it is being edited.</summary>
+        /// <summary>Resolves a structurally valid layout with supported assignments while it is being edited.</summary>
         public static bool TryPreviewResolve(EliteDrumsLayoutPreset? preset, out EliteDrumsResolvedLayout? resolved)
         {
             resolved = null;
             var validation = EliteDrumsLayoutValidator.Validate(preset);
-            if (!validation.IsStructurallyValid || preset!.Merges.Length != 0) return false;
+            if (!validation.IsStructurallyValid || !EliteDrumsCymbalPairs.HasOnlySupportedMerges(preset)) return false;
             resolved = BuildResolvedLayout(preset);
             return true;
         }
 
-        /// <summary>Resolves a structurally valid, merge-free layout for display while it is being edited.</summary>
+        /// <summary>Resolves a structurally valid layout with supported assignments while it is being edited.</summary>
         public static EliteDrumsResolvedLayout PreviewResolve(EliteDrumsLayoutPreset preset)
         {
             if (!TryPreviewResolve(preset, out var resolved))

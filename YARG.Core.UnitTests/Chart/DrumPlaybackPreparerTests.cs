@@ -261,7 +261,7 @@ namespace YARG.Core.UnitTests.Chart
                 var disabledForScore = DrumPlaybackPreparer.PrepareForScore(chart, State(output, format, facts.KickPolicy(false), tier));
                 Assert.That(disabledForScore.ScoreIdentity!.Value.HasExtraKickContribution, Is.False, context);
                 if (content == "paired" && format == DrumSourceFormat.Elite && output == Instrument.EliteDrums)
-                    Assert.That(enabled.ScoreIdentity.Value.HasExtraKickContribution, Is.False, context);
+                    Assert.That(enabled.ScoreIdentity.Value.HasExtraKickContribution, Is.EqualTo(tier != Difficulty.Beginner), context);
                 if (content == "coda")
                 {
                     Assert.That(enabled.ScoreIdentity.Value.HasExtraKickContribution, Is.False, context);

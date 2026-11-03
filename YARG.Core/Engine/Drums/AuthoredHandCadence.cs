@@ -41,10 +41,10 @@ namespace YARG.Core.Engine.Drums
                 : new Lane(l.Pad, (double[])l.Times.Clone(), l.InputStart, l.InputEnd)).ToArray();
             foreach (var lane in _lanes)
             {
-                if (lane.Times.Length < 2 || !Finite(lane.InputStart) || !Finite(lane.InputEnd) ||
+                if (lane.Times.Length < 1 || !Finite(lane.InputStart) || !Finite(lane.InputEnd) ||
                     lane.InputStart > lane.Times[0] || lane.InputEnd < lane.Times[^1] || lane.Times.Any(t => !Finite(t)) ||
                     !lane.Times.SequenceEqual(lane.Times.OrderBy(t => t)))
-                    throw new ArgumentException("Cadence lanes require ordered finite member times.", nameof(lanes));
+                    throw new ArgumentException("Cadence target intervals require at least one ordered finite member time.", nameof(lanes));
             }
             _events = _lanes.SelectMany(l => l.Times.Select(t => (l.Pad, Time: t)))
                 .Distinct().OrderBy(n => n.Time).ThenBy(n => n.Pad).ToArray();

@@ -1,7 +1,9 @@
+// pattern: Functional Core
 using System;
 using System.IO;
 using YARG.Core.Chart;
 using YARG.Core.Song;
+using YARG.Core.Engine.Drums;
 
 namespace YARG.Core.Game
 {
@@ -110,7 +112,8 @@ namespace YARG.Core.Game
         /// conversion of native Pro/Four-Lane notes without changing the shared song chart.
         /// An explicit generated target must never fall back to this track.
         /// </summary>
-        public static InstrumentTrack<EliteDrumNote> SelectNativeEliteTrack(SongChart chart, YargProfile profile)
+        public static InstrumentTrack<EliteDrumNote> SelectNativeEliteTrack(SongChart chart, YargProfile profile,
+            byte classicArticulationRuleset = DrumsEngineParameters.CURRENT_CLASSIC_ARTICULATIONS)
         {
             if (chart is null) throw new ArgumentNullException(nameof(chart));
             if (profile is null) throw new ArgumentNullException(nameof(profile));
@@ -124,7 +127,13 @@ namespace YARG.Core.Game
             if (chart.EliteDrums.TryGetDifficulty(difficulty, out var native) &&
                 native.Notes.Exists(note => !note.IsInvisibleTerminator))
             {
-                return chart.EliteDrums;
+                if (classicArticulationRuleset != DrumsEngineParameters.LEGACY_CLASSIC_ARTICULATIONS)
+                    return chart.EliteDrums;
+                var historical = chart.EliteDrums.Clone();
+                for (var tier = Difficulty.Beginner; tier <= Difficulty.ExpertPlus; tier++)
+                    if (historical.TryGetDifficulty(tier, out var notes))
+                        DrumPlaybackPreparer.ApplyEliteExtraKickRuleset(notes, classicArticulationRuleset);
+                return historical;
             }
 
             foreach (var instrument in new[] { Instrument.ProDrums, Instrument.FourLaneDrums })
@@ -136,7 +145,7 @@ namespace YARG.Core.Game
                         note.ConversionOrigin is not null || note.ChildNotes.Exists(child => child.ConversionOrigin is not null)))
                 {
                     var converted = new InstrumentTrack<EliteDrumNote>(Instrument.EliteDrums);
-                    converted.AddDifficulty(difficulty, source.ConvertToEliteDrums());
+                    converted.AddDifficulty(difficulty, DrumPlaybackPreparer.PrepareClassicRuleset(chart, source, classicArticulationRuleset).ConvertToEliteDrums());
                     return converted;
                 }
             }

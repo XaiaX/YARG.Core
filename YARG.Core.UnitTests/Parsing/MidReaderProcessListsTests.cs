@@ -1,3 +1,4 @@
+﻿// pattern: Imperative Shell
 using Melanchall.DryWetMidi.Common;
 using Melanchall.DryWetMidi.Core;
 using MoonscraperChartEditor.Song;
@@ -104,6 +105,69 @@ public class MidReaderProcessListsTests
             Assert.That(notes[1].drumPad, Is.EqualTo(DrumPad.Blue));
             AssertHasFlag(notes[1], Flags.ProDrums_Cymbal);
             AssertHasFlag(notes[1], Flags.ProDrums_Ghost);
+        }
+    }
+
+    [TestCase(96, 1, true, (int)Flags.ProDrums_Ghost)]
+    [TestCase(96, 127, true, (int)Flags.ProDrums_Accent)]
+    [TestCase(95, 1, true, (int)Flags.ProDrums_Ghost)]
+    [TestCase(95, 127, true, (int)Flags.ProDrums_Accent)]
+    [TestCase(96, 127, false, (int)Flags.None)]
+    [TestCase(95, 64, true, (int)Flags.None)]
+    public void ClassicKickDynamics_UseTheExistingDynamicsGate(int key, int velocity, bool enabled, int expected)
+    {
+        var midi = MakeMidi(MakeTrack(MidIOHelper.DRUMS_TRACK,
+            enabled ? Text(0, $"[{MidIOHelper.CHART_DYNAMICS_TEXT}]") : Text(0, "unrelated"),
+            Note(10, 100, key, velocity: velocity)));
+        var note = MidReader.ReadMidi(midi).GetChart(MoonInstrument.Drums, Difficulty.Expert).notes.Single();
+        Assert.That(note.flags & (Flags.ProDrums_Accent | Flags.ProDrums_Ghost), Is.EqualTo((Flags)expected));
+    }
+
+    [TestCase(0, (int)Flags.EliteDrums_Flam)]
+    [TestCase(1, (int)Flags.EliteDrums_FlatFlam)]
+    public void ClassicHandFlamMarkerNeverTurnsAnAccompanyingKickIntoAFlam(int channel, int flag)
+    {
+        var song = MidReader.ReadMidi(MakeMidi(MakeTrack(MidIOHelper.DRUMS_TRACK,
+            Note(10, 20, MidIOHelper.FLAM_MARKER, channel: channel),
+            Note(12, 30, 96), Note(12, 30, 97))));
+        var expected = (Flags)flag;
+        var notes = song.GetChart(MoonInstrument.Drums, Difficulty.Expert).notes;
+        Assert.That(notes.Single(n => n.drumPad == DrumPad.Kick).flags & (Flags.EliteDrums_Flam | Flags.EliteDrums_FlatFlam), Is.EqualTo(Flags.None));
+        Assert.That(notes.Single(n => n.drumPad == DrumPad.Red).flags & expected, Is.EqualTo(expected));
+    }
+
+    [TestCase(1, (int)Flags.ProDrums_Ghost)]
+    [TestCase(127, (int)Flags.ProDrums_Accent)]
+    [TestCase(64, (int)Flags.None)]
+    public void EliteExtraKickVelocityMatchesOrdinaryEliteDynamicsWithoutClassicTextGate(int velocity, int expected)
+    {
+        int start = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert];
+        var song = MidReader.ReadMidi(MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(10, 20, start - 1, velocity: velocity), Note(30, 40, start, velocity: velocity))));
+        var notes = song.GetChart(MoonInstrument.EliteDrums, Difficulty.Expert).notes;
+        foreach (var note in notes)
+            Assert.That(note.flags & (Flags.ProDrums_Accent | Flags.ProDrums_Ghost), Is.EqualTo((Flags)expected));
+        AssertHasFlag(notes[0], Flags.InstrumentPlus);
+    }
+
+    [TestCase(1, DrumNoteType.Ghost)]
+    [TestCase(127, DrumNoteType.Accent)]
+    [TestCase(64, DrumNoteType.Neutral)]
+    public void EliteExtraKickVelocityIsIgnoredInAllClassicPlaybackOutputs(int velocity, DrumNoteType expected)
+    {
+        int start = MidIOHelper.ELITE_DRUMS_DIFF_START_LOOKUP[Difficulty.Expert];
+        var song = MidReader.ReadMidi(MakeMidi(MakeTrack(MidIOHelper.ELITE_DRUMS_TRACK,
+            Note(10, 20, start - 1, velocity: velocity), Note(30, 40, start + 1))));
+        var loader = new MoonSongLoader(song, ParseSettings.Default);
+        var chart = new SongChart(192) { SyncTrack = loader.LoadSyncTrack(), AuthoredDrumSources = loader.LoadAuthoredDrumSources() };
+        foreach (var output in new[] { Instrument.FourLaneDrums, Instrument.ProDrums, Instrument.FiveLaneDrums })
+        {
+            var state = new YARG.Core.Game.ResolvedDrumPlayback(output, YARG.Core.Game.DrumSourceFormat.Elite,
+                YARG.Core.Difficulty.Expert, YARG.Core.Difficulty.Expert, YARG.Core.Game.DrumExtraKickPolicy.Include,
+                true, YARG.Core.Game.ResolvedDrumPlayback.CategoryFor(output, YARG.Core.Game.DrumSourceFormat.Elite));
+            var kick = DrumPlaybackPreparer.Prepare(chart, state).Classic!.Notes[0];
+            Assert.That(kick.Type, Is.EqualTo(DrumNoteType.Neutral), $"{output}, velocity {velocity}");
+            Assert.That(kick.IsDoubleKick, Is.True);
         }
     }
 
@@ -327,6 +391,35 @@ public class MidReaderProcessListsTests
             Assert.That(pedal.isChord, Is.False,
                 "a Hard-only hi-hat is not part of the Expert pedal's chord");
             AssertDoesNotHaveFlag(pedal, Flags.EliteDrums_InvisibleTerminator);
+        }
+    }
+
+    [Test]
+    public void ClassicKickPairKeepsOneKickAndOnlyAddsFlamWhenExtraKicksEnabled()
+    {
+        var song = MidReader.ReadMidi(MakeMidi(MakeTrack(MidIOHelper.DRUMS_TRACK,
+            Note(10, 20, 95), Note(10, 20, 96), Note(10, 20, 97),
+            Note(30, 40, 95), Note(50, 60, 96))));
+        var kicks = song.GetChart(MoonInstrument.Drums, Difficulty.Expert).notes.Where(n => n.drumPad == DrumPad.Kick).ToArray();
+        var pair = kicks.Single(n => n.tick == 10);
+        Assert.That(kicks, Has.Length.EqualTo(3));
+        Assert.That(pair.pairedExtraKick, Is.Not.Null);
+        AssertHasFlag(pair, Flags.EliteDrums_Flam);
+        var settings = ParseSettings.Default;
+        settings.DrumsType = DrumsType.FourLane;
+        var loader = new MoonSongLoader(song, settings);
+        var chart = new SongChart(192) { SyncTrack = loader.LoadSyncTrack(), AuthoredDrumSources = loader.LoadAuthoredDrumSources() };
+        foreach (bool extra in new[] { false, true })
+        {
+            var state = new YARG.Core.Game.ResolvedDrumPlayback(Instrument.ProDrums, YARG.Core.Game.DrumSourceFormat.FourLane,
+                YARG.Core.Difficulty.Expert, YARG.Core.Difficulty.Expert,
+                extra ? YARG.Core.Game.DrumExtraKickPolicy.Include : YARG.Core.Game.DrumExtraKickPolicy.Remove,
+                extra, YARG.Core.Game.ResolvedDrumPlayback.CategoryFor(Instrument.ProDrums, YARG.Core.Game.DrumSourceFormat.FourLane));
+            var loaded = DrumPlaybackPreparer.Prepare(chart, state).Classic!;
+            var loadedKicks = loaded.Notes.SelectMany(n => n.ChildNotes.Prepend(n)).Where(n => n.Pad == 0).ToArray();
+            Assert.That(loadedKicks.Single(n => n.Tick == 10).IsFlam, Is.EqualTo(extra));
+            Assert.That(loadedKicks.Count(n => n.Tick == 10), Is.EqualTo(1));
+            Assert.That(loadedKicks.Any(n => n.Tick == 30), Is.EqualTo(extra));
         }
     }
 

@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Linq;
 using Newtonsoft.Json;
@@ -117,7 +118,7 @@ namespace YARG.Core.UnitTests.Game
         }
 
         [Test]
-        public void GeneratedPairsAreCanonicalDisjointAndUnsupported()
+        public void GeneratedPairsAreCanonicalDisjointAndOnlyWhitelistedCymbalPairsAreSupported()
         {
             foreach (bool drum in new[] { true, false })
             {
@@ -141,8 +142,9 @@ namespace YARG.Core.UnitTests.Game
                     var validation = EliteDrumsLayoutValidator.Validate(preset);
                     Assert.That(validation.IsStructurallyValid, Is.True, id);
                     Assert.That(validation.IsComplete, Is.True, id);
-                    Assert.That(validation.IsRuntimeSupported, Is.False, id);
-                    Assert.That(EliteDrumsLayoutResolver.TryResolve(preset, out _), Is.False);
+                    bool supported = !drum && !sources[a].Equals("hi-hat") && !sources[b].Equals("hi-hat");
+                    Assert.That(validation.IsRuntimeSupported, Is.EqualTo(supported), id);
+                    Assert.That(EliteDrumsLayoutResolver.TryResolve(preset, out _), Is.EqualTo(supported));
                     if (id.Contains("hi-hat")) Assert.That(preset.Slots[8].Kind, Is.EqualTo(EliteDrumsLayoutSlotKind.HiHat));
                     var restored = JsonConvert.DeserializeObject<EliteDrumsLayoutPreset>(JsonConvert.SerializeObject(preset))!;
                     Assert.That(restored.Slots[8].Drum ?? restored.Slots[8].Cymbal, Is.EqualTo(id));
@@ -214,7 +216,7 @@ namespace YARG.Core.UnitTests.Game
             Assert.That(result.IsStructurallyValid, Is.True);
             Assert.That(result.IsComplete, Is.False);
             Assert.That(result.IsRuntimeSupported, Is.False);
-            preset.SchemaVersion = 2;
+            preset.SchemaVersion = EliteDrumsLayoutPreset.CURRENT_SCHEMA_VERSION + 1;
             Assert.That(EliteDrumsLayoutValidator.Validate(preset).IsStructurallyValid, Is.False);
             preset.SchemaVersion = 1;
             preset.Slots = new EliteDrumsLayoutSlot[9];

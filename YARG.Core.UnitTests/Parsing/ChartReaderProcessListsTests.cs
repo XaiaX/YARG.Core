@@ -1,3 +1,4 @@
+// pattern: Imperative Shell
 using MoonscraperChartEditor.Song;
 using MoonscraperChartEditor.Song.IO;
 using NUnit.Framework;
@@ -440,6 +441,20 @@ namespace YARG.Core.UnitTests.Parsing
                 Assert.That(chart.specialPhrases, Has.One.Matches<MoonPhrase>(phrase =>
                     phrase is { tick: 500, length: 0, type: MoonPhrase.Type.Solo }));
             }
+        }
+
+        [TestCase(0, true)]
+        [TestCase(0, false)]
+        [TestCase(ChartIOHelper.NOTE_OFFSET_INSTRUMENT_PLUS, true)]
+        [TestCase(ChartIOHelper.NOTE_OFFSET_INSTRUMENT_PLUS, false)]
+        public void ClassicDotChartKickDynamics_UseReservedKickFlagOffsets(int kickKey, bool accent)
+        {
+            int marker = accent ? ChartIOHelper.NOTE_OFFSET_DRUMS_ACCENT : ChartIOHelper.NOTE_OFFSET_DRUMS_GHOST;
+            var text = ChartText.Chart(ChartText.SongSection(), ChartText.SyncSection(),
+                ChartText.Section("ExpertDrums", $"0 = N {kickKey} 0", $"0 = N {marker} 0"));
+            var note = ChartReader.ReadFromText(text).GetChart(MoonInstrument.Drums, MoonDifficulty.Expert).notes.Single();
+            Assert.That(note.drumPad, Is.EqualTo(DrumPad.Kick));
+            AssertHasFlag(note, accent ? Flags.ProDrums_Accent : Flags.ProDrums_Ghost);
         }
 
         [Test]

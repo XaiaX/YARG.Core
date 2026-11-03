@@ -43,8 +43,10 @@ namespace YARG.Core.Replays
         /// Replays written by the YOLO line at its forked versions 15-17 are not readable;
         /// they are rejected by deserialization validation rather than a version gate.
         /// </remarks>
-        public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 22);
+        public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 25);
+        public const int ELITE_CYMBAL_MERGES_MIN = 25;
         public const int HI_HAT_CLOSURE_MIN = 22;
+        public const int CLASSIC_DRUM_ARTICULATIONS_MIN = 23;
         /// <summary>Replay version in which Elite drum fill parameters were appended to drum frames.</summary>
         public const int ELITE_FILL_MIN = 20;
         /// <summary>Replay version in which optional pedal stats were appended to drum frames and metadata.</summary>
@@ -53,9 +55,11 @@ namespace YARG.Core.Replays
         /// Increase this whenever the engine is functionally changed in any way,
         /// to where a replay may no longer simulate accurately what was originally performed.
         /// </remarks>
-        // v22 freezes experimental hi-hat closure judging in the drum parameter
-        // payload. Older recordings default to ordinary, zero-delay judging.
-        private const int ENGINE_VERSION = 7;
+        // v23 freezes classic kick dynamics and semantic hand-flam judging. Older
+        // recordings retain their original kick/adjacent-pad chart interpretation.
+        // V2 adds optional kick-flam scoring and removes classic kick velocity obligations.
+        // v25 freezes merged-cymbal playable targets and equivalent physical inputs.
+        private const int ENGINE_VERSION = 10;
 
         public static (ReplayReadResult Result, ReplayInfo Info, ReplayData Data) TryDeserialize(string path, ReplayReadOptions replayOptions)
         {

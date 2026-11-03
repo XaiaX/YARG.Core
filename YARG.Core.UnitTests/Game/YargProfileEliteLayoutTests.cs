@@ -1,3 +1,4 @@
+// pattern: Imperative Shell
 using System;
 using System.IO;
 using System.Text;
@@ -127,7 +128,7 @@ public sealed class YargProfileEliteLayoutTests
     }
 
     // ----------------------------------------------------------------
-    // Binary replay persistence (profile version 17)
+    // Binary replay persistence (layout block introduced in profile version 17)
     // ----------------------------------------------------------------
 
     [Test]
@@ -141,7 +142,7 @@ public sealed class YargProfileEliteLayoutTests
         var snapshot = restored.ReplayEliteDrumsLayout!;
         Assert.Multiple(() =>
         {
-            Assert.That(restored.Version, Is.EqualTo(17));
+            Assert.That(restored.Version, Is.EqualTo(19));
             Assert.That(restored.EliteDrumsLayout, Is.EqualTo(CUSTOM_LAYOUT_ID));
             Assert.That(snapshot.Id, Is.EqualTo(CUSTOM_LAYOUT_ID));
             Assert.That(snapshot.Name, Is.EqualTo("My layout"));
@@ -282,9 +283,9 @@ public sealed class YargProfileEliteLayoutTests
             original.Serialize(writer);
         }
 
-        // A v17 write with no snapshot appends exactly the 16-byte GUID plus the
-        // one-byte presence flag; strip those and relabel the version as 16.
-        var v16Bytes = ms.ToArray()[..^17];
+        // v18/v19 append flam/color bytes after v17's 16-byte GUID and presence flag.
+        // Strip all four additions and relabel the actual historical prefix as v16.
+        var v16Bytes = ms.ToArray()[..^19];
         BitConverter.GetBytes(16).CopyTo(v16Bytes, 0);
 
         using var buffer = FixedArray<byte>.Alloc(v16Bytes.Length);
@@ -376,7 +377,7 @@ public sealed class YargProfileEliteLayoutTests
     [Test]
     public void TruncatedLengthPrefix_IsRejectedAsInvalidData()
     {
-        var bytes = SerializeCurrentWithTrailingPresence((byte) 1); // presence flag, then nothing
+        var bytes = SerializeVersion17WithTrailingPresence((byte) 1); // presence flag, then nothing
         using var buffer = FixedArray<byte>.Alloc(bytes.Length);
         bytes.CopyTo(buffer.Span);
         var stream = new FixedArrayStream(buffer);
@@ -386,7 +387,7 @@ public sealed class YargProfileEliteLayoutTests
     [Test]
     public void InvalidPresenceFlag_IsRejectedAtRead()
     {
-        var bytes = SerializeCurrentWithTrailingPresence((byte) 2);
+        var bytes = SerializeVersion17WithTrailingPresence((byte) 2);
         using var buffer = FixedArray<byte>.Alloc(bytes.Length);
         bytes.CopyTo(buffer.Span);
         var stream = new FixedArrayStream(buffer);
@@ -399,7 +400,7 @@ public sealed class YargProfileEliteLayoutTests
     [TestCase(SNAPSHOT_BYTE_BOUND)]     // within the bound, but more than the stream holds
     public void OversizedSnapshotLengthPrefix_IsRejectedBeforeDecoding(int claimedLength)
     {
-        var bytes = SerializeCurrentWithTrailingPresence((byte) 1);
+        var bytes = SerializeVersion17WithTrailingPresence((byte) 1);
         using var ms = new MemoryStream();
         ms.Write(bytes);
         using var writer = new BinaryWriter(ms);
@@ -416,7 +417,7 @@ public sealed class YargProfileEliteLayoutTests
     // Helpers
     // ----------------------------------------------------------------
 
-    private static byte[] SerializeCurrentWithTrailingPresence(byte presence)
+    private static byte[] SerializeVersion17WithTrailingPresence(byte presence)
     {
         var profile = new YargProfile { Name = "Presence" };
         using var ms = new MemoryStream();
@@ -425,8 +426,11 @@ public sealed class YargProfileEliteLayoutTests
             profile.Serialize(writer);
         }
 
-        var bytes = ms.ToArray();
-        bytes[^1] = presence; // the v17 tail's presence flag is the final byte
+        // Keep these corruption tests on the actual v17 snapshot wire layout.
+        // Current v19 adds flam-layout and cymbal-color bytes after the snapshot block.
+        var bytes = ms.ToArray()[..^2];
+        BitConverter.GetBytes(17).CopyTo(bytes, 0);
+        bytes[^1] = presence;
         return bytes;
     }
 
@@ -443,7 +447,7 @@ public sealed class YargProfileEliteLayoutTests
 
     private static YargProfile? ReadWithInjectedSnapshot(byte[] jsonBytes)
     {
-        var bytes = SerializeCurrentWithTrailingPresence((byte) 1);
+        var bytes = SerializeVersion17WithTrailingPresence((byte) 1);
         using var ms = new MemoryStream();
         ms.Write(bytes);
         using var writer = new BinaryWriter(ms);

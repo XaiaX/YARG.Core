@@ -1,8 +1,9 @@
-// pattern: Functional Core
+﻿// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using YARG.Core.Chart;
 using YARG.Core.Input;
+using YARG.Core.Game;
 using YARG.Core.Utility;
 
 namespace YARG.Core.Engine.Drums.Engines
@@ -15,10 +16,15 @@ namespace YARG.Core.Engine.Drums.Engines
 
         public PadHitEvent? OnPadHit;
         public Action? OnOverhit;
-        /// <summary>One optional second hand-flam strike, without another note lifecycle or dynamics award.</summary>
+        /// <summary>One optional second flam strike, without another note lifecycle or dynamics award.</summary>
         public Action<EliteDrumNote, EliteDrumsAction, float, bool>? OnFlamFollowUp;
 
         private readonly Dictionary<int, (EliteDrumNote Note, double Start, double End)> _pendingFlams = new();
+
+        private bool IsScoringFlam(EliteDrumNote note) => note.IsHandFlam ||
+            note.IsKickFlam && EngineParameters.ClassicArticulationRuleset >= DrumsEngineParameters.CLASSIC_ARTICULATIONS_V2;
+
+        private static bool IsFlatHandFlam(EliteDrumNote note) => note.IsHandFlam && note.IsFlatFlam;
 
         private bool TryFlamFollowUp(EliteDrumsAction action)
         {
@@ -32,7 +38,7 @@ namespace YARG.Core.Engine.Drums.Engines
             }
             if (CurrentTime < pending.Start || !Matches(action, note)) return false;
             _pendingFlams.Remove(pad);
-            bool bonus = !note.IsFlatFlam;
+            bool bonus = !IsFlatHandFlam(note);
             if (bonus) AwardFlamUnit();
             OnFlamFollowUp?.Invoke(note, action, _velocity.GetValueOrDefault(), bonus);
             return true;
@@ -47,22 +53,25 @@ namespace YARG.Core.Engine.Drums.Engines
         public Action<EliteDrumNote>? OnPedalAssisted;
 
         private readonly bool _autoHiHatPedal;
+        private readonly EliteDrumsCymbalPair? _cymbalPair;
         private readonly NativeEliteAuthoredLaneMap _authoredLanes;
         private EliteDrumsAction? _action;
         private float? _velocity;
 
         public EliteDrumsEngine(InstrumentDifficulty<EliteDrumNote> chart, SyncTrack syncTrack,
             DrumsEngineParameters engineParameters, bool isBot, bool isMidiDrumsInput,
-            bool autoHiHatPedal = false)
-            : base(chart, syncTrack, engineParameters, true, isBot)
+            bool autoHiHatPedal = false, EliteDrumsLayoutPreset? cymbalLayout = null)
+            : base(PrepareCymbals(chart, cymbalLayout, engineParameters.EliteCymbalMergePolicy), syncTrack, engineParameters, true, isBot)
         {
             _autoHiHatPedal = autoHiHatPedal;
+            if (EliteDrumsCymbalProjection.TryGetPair(cymbalLayout, engineParameters.EliteCymbalMergePolicy, out var pair))
+                _cymbalPair = pair;
             _authoredLanes = new NativeEliteAuthoredLaneMap(chart, engineParameters.HitWindow.LaneAutohitWindow,
                 engineParameters.HitWindow.LaneProximityProtectionWindow, note =>
                 {
                     double window = EngineParameters.HitWindow.CalculateHitWindow(GetAverageNoteDistance(note));
                     return (EngineParameters.HitWindow.GetFrontEnd(window), EngineParameters.HitWindow.GetBackEnd(window));
-                });
+                }, _cymbalPair != null && engineParameters.EliteCymbalMergePolicy == EliteDrumsCymbalProjection.CURRENT_POLICY);
             EngineStats.OptionalPedalAccuracyEnabled = autoHiHatPedal;
             // Invisible pedal terminators are chart control events, not playable notes.
             foreach (var parent in Notes)
@@ -91,6 +100,13 @@ namespace YARG.Core.Engine.Drums.Engines
             }
             EngineStats.TotalChords = EngineStats.TotalNotes;
             GetWaitCountdowns(Notes);
+        }
+
+        private static InstrumentDifficulty<EliteDrumNote> PrepareCymbals(
+            InstrumentDifficulty<EliteDrumNote> chart, EliteDrumsLayoutPreset? layout, byte policy)
+        {
+            EliteDrumsCymbalProjection.Apply(chart, layout, policy);
+            return chart;
         }
 
         public override void Reset(bool keepCurrentButtons = false)
@@ -276,7 +292,7 @@ namespace YARG.Core.Engine.Drums.Engines
             // continuation for the complete physical timestamp group.
             ResolveAuthoredCadenceBefore(input.Time);
             _processingPhysicalInput = true;
-            var action = input.GetAction<EliteDrumsAction>();
+            var action = EliteDrumsCymbalProjection.NormalizeAction(input.GetAction<EliteDrumsAction>(), _cymbalPair);
             _closureDecision = ResolveHiHatClosure(input);
             if (_closureDecision == ClosureDecision.Ignore)
             {
@@ -570,7 +586,7 @@ namespace YARG.Core.Engine.Drums.Engines
                 EngineStats.IncrementNotesHit(note, CurrentTime);
             UpdateMultiplier();
             AddScore(note);
-            if (!activationAutoHit && note.IsHandFlam && !IsBot && !_resolvingAuthoredContinuation)
+            if (!activationAutoHit && IsScoringFlam(note) && !IsBot && !_resolvingAuthoredContinuation)
             {
                 double window = EngineParameters.HitWindow.CalculateHitWindow(GetAverageNoteDistance(note));
                 _pendingFlams[note.Pad] = (note, note.Time + EngineParameters.HitWindow.GetFrontEnd(window),
@@ -634,7 +650,7 @@ namespace YARG.Core.Engine.Drums.Engines
         {
             AwardFlamUnit();
             // Bot completion is deliberately not a synthetic physical follow-up.
-            if (note.IsHandFlam && (note.IsFlatFlam || IsBot)) AwardFlamUnit();
+            if (IsScoringFlam(note) && (IsFlatHandFlam(note) || IsBot)) AwardFlamUnit();
         }
 
         protected override (int baseScore, int noteScore) CalculateChartScores()
@@ -645,7 +661,7 @@ namespace YARG.Core.Engine.Drums.Engines
                 foreach (var note in parent.AllNotes)
                 {
                     if (note.IsInvisibleTerminator || note.IsBigRockEnding) continue;
-                    int units = note.IsHandFlam ? 2 : 1;
+                    int units = IsScoringFlam(note) ? 2 : 1;
                     score += units * POINTS_PER_NOTE * Math.Min(combo / 10 + 1, BaseParameters.MaxMultiplier);
                     noteScore += units * POINTS_PER_NOTE;
                     combo++;

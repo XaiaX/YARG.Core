@@ -1,5 +1,7 @@
+// pattern: Functional Core
 using System;
 using System.Linq;
+using System.Runtime.Serialization;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Converters;
 
@@ -26,15 +28,18 @@ namespace YARG.Core.Game
     {
         public string EffectiveId = "";
         public string[] Sources = Array.Empty<string>();
+        /// <summary>Null identifies an old unordered merge and uses its historical keeper.</summary>
+        public string? PrimarySource;
         public EliteDrumsLayoutMerge Copy() => new EliteDrumsLayoutMerge
         {
-            EffectiveId = EffectiveId, Sources = Sources == null ? null! : (string[]) Sources.Clone()
+            EffectiveId = EffectiveId, Sources = Sources == null ? null! : (string[]) Sources.Clone(),
+            PrimarySource = PrimarySource
         };
     }
 
     public sealed class EliteDrumsLayoutPreset : BasePreset
     {
-        public const int CURRENT_SCHEMA_VERSION = 1;
+        public const int CURRENT_SCHEMA_VERSION = 2;
         public const int SLOT_COUNT = 10;
         public static readonly Guid CompactId = new Guid("06871f46-49ea-41ee-a857-a7d0c3022141");
         public static readonly Guid FullId = new Guid("611d5dc0-e3c2-4fd6-8913-693ce1be0a84");
@@ -84,12 +89,30 @@ namespace YARG.Core.Game
         }
 
         /// <summary>Deep copy retaining identity, including malformed saved data for recovery.</summary>
-        public EliteDrumsLayoutPreset Copy() => new EliteDrumsLayoutPreset(Name, DefaultPreset)
+        public EliteDrumsLayoutPreset Copy()
         {
-            Id = Id, Type = Type, Path = Path, SchemaVersion = SchemaVersion,
-            Slots = Slots == null ? null! : Slots.Select(slot => slot?.Copy()!).ToArray(),
-            Merges = Merges == null ? null! : Merges.Select(merge => merge?.Copy()!).ToArray()
-        };
+            var copy = new EliteDrumsLayoutPreset(Name, DefaultPreset)
+            {
+                Id = Id, Type = Type, Path = Path, SchemaVersion = SchemaVersion,
+                Slots = Slots == null ? null! : Slots.Select(slot => slot?.Copy()!).ToArray(),
+                Merges = Merges == null ? null! : Merges.Select(merge => merge?.Copy()!).ToArray()
+            };
+            copy.UpgradeLegacySchema();
+            return copy;
+        }
+
+        [OnDeserialized]
+        private void OnDeserialized(StreamingContext context) => UpgradeLegacySchema();
+
+        private void UpgradeLegacySchema()
+        {
+            // An explicit primary in v1 could be ignored by old readers; keep it invalid.
+            if (SchemaVersion != 1 || Merges == null || Merges.Any(merge => merge?.PrimarySource != null)) return;
+            SchemaVersion = CURRENT_SCHEMA_VERSION;
+            foreach (var merge in Merges)
+                if (merge != null && EliteDrumsCymbalPairs.TryGet(merge.EffectiveId, out var pair))
+                    merge.PrimarySource = pair!.PrimarySource;
+        }
 
         public override BasePreset CopyWithNewName(string name)
         {
