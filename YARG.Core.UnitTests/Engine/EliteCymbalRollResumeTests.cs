@@ -60,8 +60,8 @@ public sealed class EliteCymbalRollResumeTests
         var records = chart.EliteDrumNativeAuthoredLaneRecords.ToArray();
         var bot = Engine(chart, pair, true);
         Assert.That(Gems(chart).Count(), Is.EqualTo(12));
-        Assert.That(Gems(chart).Any(n => n.IsCymbalExpanded), Is.False);
-        Assert.That(Gems(chart).Select(n => n.Pad).Distinct().Count(), Is.EqualTo(2));
+        Assert.That(Gems(chart).Any(n => n.IsCymbalExpanded), Is.True);
+        Assert.That(Gems(chart).Select(n => n.Pad).Distinct().Count(), Is.EqualTo(3));
         foreach (var note in chart.Notes) bot.Update(note.Time);
         bot.Update(2);
         Assert.That(bot.EngineStats.NotesHit, Is.EqualTo(12));
@@ -82,14 +82,14 @@ public sealed class EliteCymbalRollResumeTests
     [TestCase("left-crash+ride")]
     [TestCase("left-crash+right-crash")]
     [TestCase("ride+right-crash")]
-    public void HumanInterleavedRollsContinueWithTwoPhysicalPadsThenMissAfterSilence(string pair)
+    public void RecordedUnionInterleavedRollsContinueWithTwoPhysicalPadsThenMissAfterSilence(string pair)
     {
         var chart = Chart(new[] {
             Stream("lc", EliteDrumPad.LeftCrash, Enumerable.Range(0, 8).Select(i => 1 + i * .12).ToArray()),
             Stream("ride", EliteDrumPad.Ride, Enumerable.Range(0, 8).Select(i => 1.04 + i * .12).ToArray()),
             Stream("rc", EliteDrumPad.RightCrash, Enumerable.Range(0, 8).Select(i => 1.08 + i * .12).ToArray()) });
         var endpoints = chart.EliteDrumNativeAuthoredLaneRecords.Select(r => (r.StartTick, r.EndTick)).ToArray();
-        var engine = Engine(chart, pair);
+        var engine = Engine(chart, pair, policy: EliteDrumsCymbalProjection.PHYSICAL_UNION_POLICY);
         Hit(engine, 1, EliteDrumsAction.EliteLeftCrash);
         Hit(engine, 1.04, EliteDrumsAction.EliteRide);
         Hit(engine, 1.08, EliteDrumsAction.EliteRightCrash);
@@ -195,14 +195,14 @@ public sealed class EliteCymbalRollResumeTests
     }
 
     [Test]
-    public void OpenRideRollDoesNotExpandAnLCAndHatChordWithoutAnExactRideOnset()
+    public void ReservedSecondaryRollAvoidsAnOccupiedHiHatTarget()
     {
         var chart = Chart(new[] { Stream("lc", EliteDrumPad.LeftCrash, 1, 1.08, 1.16),
             Stream("ride", EliteDrumPad.Ride, 1.04, 1.12, 1.20) }, EliteCymbalMergeTests.Note(EliteDrumPad.HiHat, 1.08));
         _ = Engine(chart);
         var chord = chart.Notes.Single(n => n.Tick == (uint)(1.08 * 960));
-        Assert.That(chord.ChildNotes.Prepend(chord).Select(n => n.Pad), Is.EquivalentTo(new[] { 8, 3 }));
-        Assert.That(chord.ChildNotes.Prepend(chord).Any(n => n.IsCymbalExpanded), Is.False);
+        Assert.That(chord.ChildNotes.Prepend(chord).Select(n => n.Pad), Is.EquivalentTo(new[] { 9, 3 }));
+        Assert.That(chord.ChildNotes.Prepend(chord).Any(n => n.IsCymbalExpanded), Is.True);
     }
 
     [Test]

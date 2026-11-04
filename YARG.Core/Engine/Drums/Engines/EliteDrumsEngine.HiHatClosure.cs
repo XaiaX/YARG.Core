@@ -96,7 +96,8 @@ namespace YARG.Core.Engine.Drums.Engines
                 Matches(EliteDrumsAction.EliteClosedHiHat, flam.Note)) cymbal = true;
             if (stomp) return cymbal ? HiHatClosureDisposition.Both : HiHatClosureDisposition.Stomp;
             if (cymbal) return HiHatClosureDisposition.Cymbal;
-            return open ? HiHatClosureDisposition.OpenHatPedalFault : HiHatClosureDisposition.Forgiven;
+            return open || WouldBreakHiHatSustain(pedalTime)
+                ? HiHatClosureDisposition.OpenHatPedalFault : HiHatClosureDisposition.Forgiven;
         }
     }
 }

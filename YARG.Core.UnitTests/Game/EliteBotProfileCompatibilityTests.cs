@@ -24,8 +24,8 @@ public sealed class EliteBotProfileCompatibilityTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(BitConverter.ToInt32(humanBytes), Is.EqualTo(19));
-            Assert.That(BitConverter.ToInt32(botBytes), Is.EqualTo(19));
+            Assert.That(BitConverter.ToInt32(humanBytes), Is.EqualTo(20));
+            Assert.That(BitConverter.ToInt32(botBytes), Is.EqualTo(20));
             Assert.That(humanBytes.Length, Is.EqualTo(botBytes.Length));
             Assert.That(humanBytes.AsSpan(reservedByteOffset, 3).ToArray(), Is.EqualTo(new byte[3]));
             Assert.That(botBytes.AsSpan(reservedByteOffset, 3).ToArray(), Is.EqualTo(ELITE_BOT_MARKER));

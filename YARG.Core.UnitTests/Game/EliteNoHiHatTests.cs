@@ -29,14 +29,14 @@ public sealed class EliteNoHiHatTests
     };
 
     [Test]
-    public void AvailabilityAndDefaultsAreNativeEliteOnly()
+    public void CymbalRemovalIsUnavailableAndPedalDefaultsRemainNativeEliteOnly()
     {
         Assert.That((ulong) Modifier.NoHiHat, Is.EqualTo(1UL << 15));
-        Assert.That((GameMode.EliteDrums.PossibleModifiers(Instrument.EliteDrums).possible & Modifier.NoHiHat), Is.EqualTo(Modifier.NoHiHat));
+        Assert.That((GameMode.EliteDrums.PossibleModifiers(Instrument.EliteDrums).possible & Modifier.NoHiHat), Is.EqualTo(Modifier.None));
         Assert.That((GameMode.FourLaneDrums.PossibleModifiers(Instrument.FourLaneDrums).possible & Modifier.NoHiHat), Is.EqualTo(Modifier.None));
         var (fallbackPossible, fallbackExcusable) = GameMode.EliteDrums.PossibleModifiers(Instrument.ProDrums);
         Assert.That(fallbackPossible & Modifier.NoHiHat, Is.EqualTo(Modifier.None));
-        Assert.That(fallbackExcusable & Modifier.NoHiHat, Is.EqualTo(Modifier.NoHiHat));
+        Assert.That(fallbackExcusable & Modifier.NoHiHat, Is.EqualTo(Modifier.None));
         var profile = Profile();
         Assert.That(profile.IsNativeEliteDrums, Is.True);
         Assert.That(profile.AutoHiHatPedal, Is.True);
@@ -50,7 +50,7 @@ public sealed class EliteNoHiHatTests
     }
 
     [Test]
-    public void HatAndPedalSettingsAreIndependentAndPreserveTerminatorAndLinks()
+    public void RetiredCymbalFlagCannotRemoveHiHatAndPedalRemovalPreservesIt()
     {
         var hat = Note(EliteDrumNote.EliteDrumPad.HiHat, 1);
         var snare = Note(EliteDrumNote.EliteDrumPad.Snare, 1);
@@ -64,7 +64,7 @@ public sealed class EliteNoHiHatTests
         var gameplay = original.Clone();
         profile.ApplyModifiers(gameplay, new SyncTrack(480));
         Assert.That(gameplay.Notes, Has.Count.EqualTo(3));
-        Assert.That(gameplay.Notes[0].Pad, Is.EqualTo((int) EliteDrumNote.EliteDrumPad.Snare));
+        Assert.That(gameplay.Notes[0].Pad, Is.EqualTo((int) EliteDrumNote.EliteDrumPad.HiHat));
         Assert.That(gameplay.Notes[1].Pad, Is.EqualTo((int) EliteDrumNote.EliteDrumPad.HatPedal));
         Assert.That(original.Notes[0].Pad, Is.EqualTo((int) EliteDrumNote.EliteDrumPad.HiHat));
 
@@ -72,12 +72,28 @@ public sealed class EliteNoHiHatTests
         gameplay = original.Clone();
         profile.ApplyModifiers(gameplay, new SyncTrack(480));
         Assert.That(gameplay.Notes, Has.Count.EqualTo(2));
-        Assert.That(gameplay.Notes[0].Pad, Is.EqualTo((int) EliteDrumNote.EliteDrumPad.Snare));
+        Assert.That(gameplay.Notes[0].Pad, Is.EqualTo((int) EliteDrumNote.EliteDrumPad.HiHat));
         Assert.That(gameplay.Notes[1].IsInvisibleTerminator, Is.True);
         Assert.That(gameplay.Notes[0].PreviousNote, Is.Null);
         Assert.That(gameplay.Notes[0].NextNote, Is.SameAs(gameplay.Notes[1]));
         Assert.That(gameplay.Notes[1].PreviousNote, Is.SameAs(gameplay.Notes[0]));
         Assert.That(gameplay.Notes[1].NextNote, Is.Null);
+    }
+
+    [Test]
+    public void RetiredCymbalFlagIsClearedFromInitializedLiveAndReloadedProfiles()
+    {
+        var profile = Profile();
+        profile.InitializeLiveMidiDrumModifiers();
+        profile.AddSingleModifier(Modifier.NoHiHat | Modifier.Enable2xKicks);
+        profile.InitializeLiveMidiDrumModifiers();
+        Assert.That(profile.IsModifierActive(Modifier.NoHiHat), Is.False);
+        Assert.That(profile.IsModifierActive(Modifier.Enable2xKicks), Is.True);
+        profile.RestoreSavedModifiers();
+        Assert.That(profile.IsModifierActive(Modifier.NoHiHat), Is.False);
+        var reloaded = JsonConvert.DeserializeObject<YargProfile>(JsonConvert.SerializeObject(profile))!;
+        Assert.That(reloaded.IsModifierActive(Modifier.NoHiHat), Is.False);
+        Assert.That(reloaded.IsModifierActive(Modifier.Enable2xKicks), Is.True);
     }
 
     [Test]
@@ -141,7 +157,7 @@ public sealed class EliteNoHiHatTests
         var json = JsonConvert.DeserializeObject<YargProfile>(JsonConvert.SerializeObject(profile))!;
         Assert.That(json.AutoHiHatPedal, Is.False);
         Assert.That(json.NoHiHatPedal, Is.True);
-        Assert.That(json.IsModifierActive(Modifier.NoHiHat), Is.True);
+        Assert.That(json.IsModifierActive(Modifier.NoHiHat), Is.False);
 
         using var ms = new MemoryStream();
         using (var writer = new BinaryWriter(ms, System.Text.Encoding.UTF8, true))
@@ -151,9 +167,8 @@ public sealed class EliteNoHiHatTests
         bytes.CopyTo(buffer.Span);
         var stream = new FixedArrayStream(buffer);
         var replay = new YargProfile(ref stream);
-        Assert.That(replay.Version, Is.EqualTo(19));
+        Assert.That(replay.Version, Is.EqualTo(20));
         Assert.That(replay.AutoHiHatPedal, Is.False);
         Assert.That(replay.NoHiHatPedal, Is.True);
-        Assert.That(replay.IsModifierActive(Modifier.NoHiHat), Is.True);
     }
 }

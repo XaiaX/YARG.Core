@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Functional Core
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using YARG.Core.Chart;
@@ -798,22 +799,26 @@ namespace YARG.Core.Engine
 
         protected abstract void AddScore(TNoteType note);
 
-        protected void AddScore(int score)
+        protected void AddScore(int score) => AddScore(score, EngineStats.ScoreMultiplier,
+            EngineStats.IsStarPowerActive, EngineStats.BandBonusMultiplier);
+
+        // A deferred portion of a gem retains its original hit's scoring context.
+        protected void AddScore(int score, int multiplier, bool starPower, int bandBonusMultiplier)
         {
-            int scoreMultiplier = score * EngineStats.ScoreMultiplier;
+            int scoreMultiplier = score * multiplier;
 
             // scoreMultiplier includes combo+star power score
             EngineStats.CommittedScore += scoreMultiplier;
 
             EngineStats.AverageMultiplier = (float) EngineStats.CommittedScore / BaseNoteScore;
 
-            if (EngineStats.IsStarPowerActive)
+            if (starPower)
             {
                 // Amount of points just from Star Power is half of the current multiplier (8x total -> 4x SP points)
                 var spScore = scoreMultiplier / 2;
 
                 EngineStats.StarPowerScore += spScore;
-                EngineStats.BandBonusScore += EngineStats.BandBonusMultiplier * spScore;
+                EngineStats.BandBonusScore += bandBonusMultiplier * spScore;
 
                 // Subtract score from the note that was just hit to get the multiplier points
                 EngineStats.MultiplierScore += spScore - score;
@@ -821,7 +826,7 @@ namespace YARG.Core.Engine
             else
             {
                 EngineStats.MultiplierScore += scoreMultiplier - score;
-                EngineStats.BandBonusScore += EngineStats.BandBonusMultiplier * scoreMultiplier;
+                EngineStats.BandBonusScore += bandBonusMultiplier * scoreMultiplier;
             }
 
             UpdateStars();
@@ -1497,7 +1502,8 @@ namespace YARG.Core.Engine
             }
         }
 
-        protected void GetWaitCountdowns(List<TNoteType> notes)
+        protected void GetWaitCountdowns(List<TNoteType> notes,
+            Func<TNoteType, (double Time, uint Tick)>? noteEnd = null)
         {
             WaitCountdowns = new List<WaitCountdown>();
 
@@ -1551,8 +1557,9 @@ namespace YARG.Core.Engine
 
                 foreach (var child in parent.AllNotes)
                 {
-                    latestNoteEndTime = Math.Max(latestNoteEndTime, child.TimeEnd);
-                    latestNoteEndTick = Math.Max(latestNoteEndTick, child.TickEnd);
+                    var end = noteEnd?.Invoke(child) ?? (child.TimeEnd, child.TickEnd);
+                    latestNoteEndTime = Math.Max(latestNoteEndTime, end.Item1);
+                    latestNoteEndTick = Math.Max(latestNoteEndTick, end.Item2);
                 }
             }
         }

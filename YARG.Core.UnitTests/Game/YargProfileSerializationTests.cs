@@ -45,7 +45,7 @@ public sealed class YargProfileSerializationTests
             Assert.That(deserialized.LeftyFlip, Is.True);
             Assert.That(deserialized.RangeEnabled, Is.False);
             Assert.That(deserialized.Name, Is.EqualTo("TestProfile"));
-            Assert.That(deserialized.Version, Is.EqualTo(19));
+            Assert.That(deserialized.Version, Is.EqualTo(20));
         });
     }
 
@@ -106,7 +106,7 @@ public sealed class YargProfileSerializationTests
         Assert.That(JsonConvert.SerializeObject(original), Does.Not.Contain("ReplayDrumPlayback"));
 
         using var future = FixedArray<byte>.Alloc(4);
-        BitConverter.GetBytes(20).CopyTo(future.Span);
+        BitConverter.GetBytes(21).CopyTo(future.Span);
         var futureStream = new FixedArrayStream(future);
         Assert.Throws<InvalidDataException>(() => new YargProfile(ref futureStream));
     }

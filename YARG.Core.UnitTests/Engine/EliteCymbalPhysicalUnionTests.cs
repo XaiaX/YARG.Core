@@ -80,7 +80,7 @@ public sealed class EliteCymbalPhysicalUnionTests
         var chart = Chart(new[] { Stream("lc", EliteDrumPad.LeftCrash, 0, 80, 160),
             Stream("ride", EliteDrumPad.Ride, 40, 80, 200),
             Stream("hat", EliteDrumPad.HiHat, 20, 80, 180) });
-        EliteDrumsCymbalProjection.Apply(chart, EliteCymbalMergeTests.Layout("left-crash+ride"));
+        EliteDrumsCymbalProjection.Apply(chart, EliteCymbalMergeTests.Layout("left-crash+ride"), EliteDrumsCymbalProjection.PHYSICAL_UNION_POLICY);
         Assert.That(Gems(chart).Count(), Is.EqualTo(8), "Only the coincident physical hat roll member is redundant.");
         Assert.That(chart.Notes.Single(note => note.Tick == 1080).ChildNotes.Prepend(chart.Notes.Single(note => note.Tick == 1080))
             .Select(note => note.Pad), Is.EquivalentTo(new[] { (int)EliteDrumPad.HiHat, (int)EliteDrumPad.Ride }));
@@ -173,14 +173,14 @@ public sealed class EliteCymbalPhysicalUnionTests
         Assert.That(Sources(chart.Notes[0]).Count, Is.EqualTo(1));
         var expected = chart.EliteDrumNativeAuthoredLaneRecords.SelectMany(record => record.MemberSources).ToArray();
         var layout = EliteCymbalMergeTests.Layout("left-crash+ride");
-        EliteDrumsCymbalProjection.Apply(chart, layout);
+        EliteDrumsCymbalProjection.Apply(chart, layout, EliteDrumsCymbalProjection.PHYSICAL_UNION_POLICY);
         var hat = Gems(chart).Single(note => note.Tick == 1080 && note.Pad == (int)EliteDrumPad.HiHat);
         Assert.That(hat.OriginalPad, Is.EqualTo((int)EliteDrumPad.HiHat));
         Assert.That(hat.SourceDefinition!.SourceId, Is.EqualTo("hat"));
         Assert.That(Sources(hat).Select(source => source.SourceId), Is.EquivalentTo(new[] { "hat", "lc" }));
         Assert.That(Gems(chart).SelectMany(Sources), Is.EquivalentTo(expected));
         var clone = chart.Clone();
-        EliteDrumsCymbalProjection.Apply(clone, layout);
+        EliteDrumsCymbalProjection.Apply(clone, layout, EliteDrumsCymbalProjection.PHYSICAL_UNION_POLICY);
         Assert.That(Gems(clone).Count(), Is.EqualTo(8));
         Assert.That(Gems(clone).SelectMany(Sources), Is.EquivalentTo(expected));
         var practice = new InstrumentDifficulty<EliteDrumNote>(chart.Instrument, chart.Difficulty,

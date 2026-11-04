@@ -13,6 +13,9 @@ namespace YARG.Core.Engine.Drums
         /// </summary>
         public int Overhits;
 
+        /// <summary>Legacy ruleset-1 sustain faults, included in Overhits. Ruleset 2 never increments this.</summary>
+        public int HiHatSustainBreaks;
+
         /// <summary>
         /// Number of overhits which have occurred for each drum action.
         /// </summary>
@@ -55,9 +58,9 @@ namespace YARG.Core.Engine.Drums
         /// <summary>Whether native Elite optional pedal misses are excluded from full combo.</summary>
         public bool OptionalPedalAccuracyEnabled;
 
-        public override bool IsFullCombo => OptionalPedalAccuracyEnabled
+        public override bool IsFullCombo => HiHatSustainBreaks == 0 && (OptionalPedalAccuracyEnabled
             ? NotesMissed == 0
-            : base.IsFullCombo;
+            : base.IsFullCombo);
 
         public DrumsStats()
         {
@@ -66,6 +69,7 @@ namespace YARG.Core.Engine.Drums
         public DrumsStats(DrumsStats stats) : base(stats)
         {
             Overhits = stats.Overhits;
+            HiHatSustainBreaks = stats.HiHatSustainBreaks;
             foreach (var (action, count) in stats.OverhitsByAction)
             {
                 OverhitsByAction[action] = count;
@@ -98,12 +102,15 @@ namespace YARG.Core.Engine.Drums
                 AssistedPedalNotes = stream.Read<int>(Endianness.Little);
                 OptionalPedalAccuracyEnabled = stream.ReadBoolean();
             }
+            if (version >= ReplayIO.HI_HAT_SUSTAINS_MIN)
+                HiHatSustainBreaks = stream.Read<int>(Endianness.Little);
         }
 
         public override void Reset()
         {
             base.Reset();
             Overhits = 0;
+            HiHatSustainBreaks = 0;
             OverhitsByAction.Clear();
             GhostsHit = 0;
             // Don't reset TotalGhosts
@@ -133,6 +140,7 @@ namespace YARG.Core.Engine.Drums
             writer.Write(OptionalPedalHits);
             writer.Write(AssistedPedalNotes);
             writer.Write(OptionalPedalAccuracyEnabled);
+            writer.Write(HiHatSustainBreaks);
         }
 
         public void RecordOverhit(int? action)

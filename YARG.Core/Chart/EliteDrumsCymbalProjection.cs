@@ -14,7 +14,8 @@ namespace YARG.Core.Chart
     {
         public const byte LEGACY_POLICY = 0;
         public const byte UNORDERED_POLICY = 1;
-        public const byte CURRENT_POLICY = 2;
+        public const byte PHYSICAL_UNION_POLICY = 2;
+        public const byte CURRENT_POLICY = 3;
 
         public static void ValidatePolicy(byte policy)
         {
@@ -37,6 +38,18 @@ namespace YARG.Core.Chart
             int keeper = PadForSource(pair!.KeeperSource);
             int displaced = PadForSource(pair.DisplacedSource);
             int destination = PadForSource(pair.DestinationSource);
+            IReadOnlyDictionary<EliteDrumSourceDefinition, int> laneTargets = new Dictionary<EliteDrumSourceDefinition, int>();
+            if (policy >= CURRENT_POLICY)
+            {
+                var routing = difficulty.EliteCymbalLaneRouting;
+                if (routing == null || routing.Policy != policy || routing.PairChoice != pair.ChoiceId)
+                {
+                    routing = new EliteDrumsCymbalLaneRouting(pair.ChoiceId, policy,
+                        PlanLaneTargets(difficulty, keeper, displaced, destination));
+                    difficulty.SetEliteCymbalLaneRouting(routing);
+                }
+                laneTargets = routing.Targets;
+            }
             var chords = new List<EliteDrumNote>();
             foreach (var onset in difficulty.Notes.SelectMany(n => n.ChildNotes.Prepend(n)).GroupBy(n => n.Tick))
             {
@@ -44,10 +57,14 @@ namespace YARG.Core.Chart
                 EliteDrumNote? parent = null;
                 foreach (var original in onset)
                 {
-                    bool expanded = expand && original.OriginalPad == displaced;
-                    int target = expanded ? destination : original.OriginalPad == displaced ? keeper : original.OriginalPad;
+                    bool secondary = original.OriginalPad == displaced;
+                    int target = secondary ? expand ? destination : keeper : original.OriginalPad;
+                    if (secondary)
+                        foreach (var source in original.SourceDefinitions)
+                            if (laneTargets.TryGetValue(source, out int reserved)) { target = reserved; break; }
+                    bool expanded = secondary && target != keeper;
                     var note = new EliteDrumNote(target, original.Dynamics,
-                        expanded && destination == (int)EliteDrumPad.HiHat ? EliteDrumsHatState.Indifferent : original.HatState,
+                        expanded && target == (int)EliteDrumPad.HiHat ? EliteDrumsHatState.Indifferent : original.HatState,
                         original.HatPedalType, original.IsFlam, original.DrumFlags, original.Flags,
                         original.ChannelFlag, original.Time, original.Tick, original.IsDoubleKick,
                         original.SourceDefinition, original.IsFlatFlam, original.IsAuthoredFlam,
@@ -60,7 +77,7 @@ namespace YARG.Core.Chart
             }
             difficulty.Notes.Clear();
             difficulty.Notes.AddRange(chords);
-            if (policy == CURRENT_POLICY) EliteDrumsPlayableLaneSegments.CollapsePhysicalDuplicates(difficulty);
+            if (policy >= PHYSICAL_UNION_POLICY) EliteDrumsPlayableLaneSegments.CollapsePhysicalDuplicates(difficulty);
             // Relink without the generic control-flag rebuild, which would erase the
             // player's chosen activation flags. Physical duplicates may have collapsed.
             for (int i = 0; i < difficulty.Notes.Count; i++)
@@ -70,6 +87,51 @@ namespace YARG.Core.Chart
                     note.NextNote = i + 1 < difficulty.Notes.Count ? difficulty.Notes[i + 1] : null;
                 }
             DrumPlaybackPreparer.NormalizeEliteFlams(difficulty);
+        }
+
+        // A roll reserves one target for its complete surviving span. Looking ahead
+        // prevents a later primary roll from moving an already-visible secondary strip.
+        // Connected secondary records share the reservation, avoiding target changes
+        // inside overlapping/touching phrases. Ordinary notes keep onset-based routing.
+        private static Dictionary<EliteDrumSourceDefinition, int> PlanLaneTargets(
+            InstrumentDifficulty<EliteDrumNote> chart, int primary, int secondary, int destination)
+        {
+            var intervals = EliteDrumsPlayableLaneSegments.Resolve(chart)
+                .GroupBy(segment => segment.AuthoredRecord).Select(group => (
+                    Record: group.Key, Pad: (int)group.Key.AuthoredPad,
+                    Start: group.Min(segment => segment.Members[0].Tick),
+                    End: group.Max(segment => segment.Members[^1].Tick))).ToArray();
+            var secondaryLanes = intervals.Where(lane => lane.Pad == secondary)
+                .OrderBy(lane => lane.Start).ThenBy(lane => lane.End).ToArray();
+            var notes = chart.Notes.SelectMany(note => note.ChildNotes.Prepend(note)).ToArray();
+            int otherCymbal = new[] { (int)EliteDrumPad.LeftCrash, (int)EliteDrumPad.Ride, (int)EliteDrumPad.RightCrash }
+                .Single(pad => pad != primary && pad != secondary);
+            var result = new Dictionary<EliteDrumSourceDefinition, int>();
+            for (int first = 0; first < secondaryLanes.Length;)
+            {
+                uint start = secondaryLanes[first].Start, end = secondaryLanes[first].End;
+                int last = first + 1;
+                while (last < secondaryLanes.Length && secondaryLanes[last].Start <= end)
+                    end = Math.Max(end, secondaryLanes[last++].End);
+                if (intervals.Any(lane => lane.Pad == primary && lane.Start <= end && lane.End >= start))
+                {
+                    var secondaryTicks = secondaryLanes.Skip(first).Take(last - first)
+                        .SelectMany(lane => lane.Record.MemberSources).Select(source => source.StartTick).ToHashSet();
+                    bool Occupied(int pad) =>
+                        intervals.Any(lane => lane.Pad == pad && lane.Start <= end && lane.End >= start) ||
+                        notes.Any(note => note.OriginalPad == pad && secondaryTicks.Contains(note.Tick));
+                    int alternative = destination == (int)EliteDrumPad.HiHat ? otherCymbal : (int)EliteDrumPad.HiHat;
+                    // Keep the whole strip stable. If both alternatives have other
+                    // rolls, use hi-hat and the established physical-union policy.
+                    // A noncoincident ordinary note remains a separate judgment and
+                    // does not reserve a continuous strip of its own.
+                    int target = !Occupied(destination) ? destination : !Occupied(alternative) ? alternative : (int)EliteDrumPad.HiHat;
+                    for (int index = first; index < last; index++)
+                        foreach (var source in secondaryLanes[index].Record.MemberSources) result[source] = target;
+                }
+                first = last;
+            }
+            return result;
         }
 
         public static EliteDrumsAction NormalizeAction(EliteDrumsAction action, EliteDrumsLayoutPreset? layout,

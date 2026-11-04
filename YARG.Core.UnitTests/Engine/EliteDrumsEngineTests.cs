@@ -137,9 +137,9 @@ public class EliteDrumsEngineTests
         Press(engine, 1, EliteDrumsAction.EliteOpenHiHat);
         engine.SetSpeed(0.001);
         Press(engine, 1.01, EliteDrumsAction.EliteClosedHiHat);
-        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(50));
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(25));
         Press(engine, 1.02, EliteDrumsAction.EliteSizzleHiHat);
-        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(100));
+        Assert.That(engine.EngineStats.NoteScore, Is.EqualTo(75));
     }
 
     [Test]
@@ -248,7 +248,7 @@ public class EliteDrumsEngineTests
         {
             Assert.That(note.WasHit, Is.EqualTo(shouldHit));
             Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(shouldHit ? 1 : 0));
-            Assert.That(engine.EngineStats.CommittedScore, Is.EqualTo(shouldHit ? 50 : 0));
+            Assert.That(engine.EngineStats.CommittedScore, Is.EqualTo(shouldHit ? (hat == EliteDrumNote.EliteDrumsHatState.Open ? 25 : 50) : 0));
         });
     }
 

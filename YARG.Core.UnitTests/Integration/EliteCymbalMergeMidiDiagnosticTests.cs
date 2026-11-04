@@ -19,8 +19,9 @@ public sealed class EliteCymbalMergeMidiDiagnosticTests
 {
     private static System.Collections.Generic.IEnumerable<TestCaseData> MergeCases()
     {
-        foreach (string choice in EliteCymbalPrimaryTests.Choices)
-            yield return new TestCaseData(choice, EliteDrumsCymbalProjection.CURRENT_POLICY);
+        foreach (byte policy in new[] { EliteDrumsCymbalProjection.CURRENT_POLICY, EliteDrumsCymbalProjection.PHYSICAL_UNION_POLICY })
+            foreach (string choice in EliteCymbalPrimaryTests.Choices)
+                yield return new TestCaseData(choice, policy);
         foreach (string id in new[] { "left-crash+ride", "left-crash+right-crash", "ride+right-crash" })
             yield return new TestCaseData(id, EliteDrumsCymbalProjection.UNORDERED_POLICY);
     }
@@ -53,8 +54,17 @@ public sealed class EliteCymbalMergeMidiDiagnosticTests
             n.OriginalPad is (int)EliteDrumPad.LeftCrash or (int)EliteDrumPad.Ride or (int)EliteDrumPad.RightCrash).ToArray();
         Assert.That(overlap.GroupBy(n => n.OriginalPad).Select(g => (g.Key, g.Count())).OrderBy(g => g.Key),
             Is.EqualTo(new[] { ((int)EliteDrumPad.LeftCrash, 33), ((int)EliteDrumPad.Ride, 17), ((int)EliteDrumPad.RightCrash, 16) }.OrderBy(g => g.Item1)));
-        Assert.That(overlap.Any(n => n.IsCymbalExpanded), Is.False, "Overlapping lane intervals never manufacture simultaneous onsets.");
-        Assert.That(overlap.Select(n => n.Pad).Distinct().Count(), Is.EqualTo(2));
+        bool durationAware = policy >= EliteDrumsCymbalProjection.CURRENT_POLICY;
+        Assert.That(overlap.Any(n => n.IsCymbalExpanded), Is.EqualTo(durationAware));
+        Assert.That(overlap.Select(n => n.Pad).Distinct().Count(), Is.EqualTo(durationAware ? 3 : 2));
+        if (durationAware && pair == "ride>left-crash")
+        {
+            foreach (var range in new[] { (142640u, 147840u), (148320u, 149360u), (160080u, 172320u) })
+                Assert.That(playable.Where(n => n.OriginalPad == (int)EliteDrumPad.LeftCrash &&
+                    n.Tick >= range.Item1 && n.Tick <= range.Item2).Select(n => n.Pad),
+                    Is.Not.Empty.And.All.EqualTo((int)EliteDrumPad.HiHat),
+                    "Each reported left-crash roll must use hi-hat from its first member, including before the incoming ride.");
+        }
         var profile = NativeEliteReplayFixture.Profile(Instrument.EliteDrums);
         profile.IsBot = true;
         profile.AutoHiHatPedal = false;
@@ -65,7 +75,7 @@ public sealed class EliteCymbalMergeMidiDiagnosticTests
             template.NoStarPowerOverlap, template.EnableLanes, eliteCymbalMergePolicy: policy);
         parameters.SongSpeed = 1;
         var rawSegments = EliteDrumsPlayableLaneSegments.Resolve(notes);
-        var physicalSegments = policy == EliteDrumsCymbalProjection.CURRENT_POLICY ?
+        var physicalSegments = policy >= EliteDrumsCymbalProjection.PHYSICAL_UNION_POLICY ?
             EliteDrumsPlayableLaneSegments.ResolvePhysical(notes) : rawSegments;
         Assert.That(physicalSegments.Count, Is.LessThanOrEqualTo(rawSegments.Count));
         var physicalByPad = string.Join(",", physicalSegments.GroupBy(segment => segment.Pad)
@@ -85,6 +95,6 @@ public sealed class EliteCymbalMergeMidiDiagnosticTests
         Assert.That(result.Passed, Is.True, result.StatLog);
         Assert.That(original.Notes.SelectMany(n => n.ChildNotes.Prepend(n)).Select(n => (n.Pad, n.Tick, n.Time,
             n.Dynamics, n.IsAuthoredFlam, n.IsDoubleKick, n.SourceDefinition)), Is.EqualTo(sourceSnapshot));
-        TestContext.Progress.WriteLine($"{pair},policy={policy}: source={originals.Length}, playable={playable.Length}, aliases={playable.Sum(n => n.SourceDefinitions.Count)}, overlap={overlap.Length}, projectedPads=2, expansion=0, rawStrips={rawSegments.Count}, physicalStrips={physicalSegments.Count}, stripsByPad={physicalByPad}, botHits={engine.EngineStats.NotesHit}, replay=pass");
+        TestContext.Progress.WriteLine($"{pair},policy={policy}: source={originals.Length}, playable={playable.Length}, aliases={playable.Sum(n => n.SourceDefinitions.Count)}, overlap={overlap.Length}, projectedPads={overlap.Select(n => n.Pad).Distinct().Count()}, expanded={overlap.Count(n => n.IsCymbalExpanded)}, rawStrips={rawSegments.Count}, physicalStrips={physicalSegments.Count}, stripsByPad={physicalByPad}, botHits={engine.EngineStats.NotesHit}, replay=pass");
     }
 }

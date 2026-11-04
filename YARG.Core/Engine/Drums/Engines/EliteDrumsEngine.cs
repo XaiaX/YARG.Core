@@ -71,7 +71,7 @@ namespace YARG.Core.Engine.Drums.Engines
                 {
                     double window = EngineParameters.HitWindow.CalculateHitWindow(GetAverageNoteDistance(note));
                     return (EngineParameters.HitWindow.GetFrontEnd(window), EngineParameters.HitWindow.GetBackEnd(window));
-                }, _cymbalPair != null && engineParameters.EliteCymbalMergePolicy == EliteDrumsCymbalProjection.CURRENT_POLICY);
+                }, _cymbalPair != null && engineParameters.EliteCymbalMergePolicy >= EliteDrumsCymbalProjection.PHYSICAL_UNION_POLICY);
             EngineStats.OptionalPedalAccuracyEnabled = autoHiHatPedal;
             // Invisible pedal terminators are chart control events, not playable notes.
             foreach (var parent in Notes)
@@ -99,7 +99,9 @@ namespace YARG.Core.Engine.Drums.Engines
                 }
             }
             EngineStats.TotalChords = EngineStats.TotalNotes;
-            GetWaitCountdowns(Notes);
+            InitializeHiHatSustains(chart, syncTrack);
+            GetWaitCountdowns(Notes, note => _hiHatGenerators.TryGetValue(note, out var sustain)
+                ? (sustain.EndTime, sustain.EndTick) : (note.TimeEnd, note.TickEnd));
         }
 
         private static InstrumentDifficulty<EliteDrumNote> PrepareCymbals(
@@ -119,6 +121,7 @@ namespace YARG.Core.Engine.Drums.Engines
             _authoredLanes?.Reset();
             _pendingFlams?.Clear();
             ResetHiHatClosures();
+            ResetHiHatSustains();
             base.Reset(keepCurrentButtons);
         }
 
@@ -294,6 +297,11 @@ namespace YARG.Core.Engine.Drums.Engines
             _processingPhysicalInput = true;
             var action = EliteDrumsCymbalProjection.NormalizeAction(input.GetAction<EliteDrumsAction>(), _cymbalPair);
             _closureDecision = ResolveHiHatClosure(input);
+            // Pair decisions may have been reserved before an intervening open
+            // hit activated a tail. Reconsider the pedal when it is consumed.
+            if (_closureDecision == ClosureDecision.Ignore && action == EliteDrumsAction.EliteStomp &&
+                EngineParameters.EliteHiHatSustains >= 2 && ActiveHiHatSustain != null)
+                _closureDecision = ClosureDecision.Normal;
             if (_closureDecision == ClosureDecision.Ignore)
             {
                 _ignoredClosureInput = input;
@@ -314,20 +322,24 @@ namespace YARG.Core.Engine.Drums.Engines
 
         protected override void UpdateHitLogic(double time)
         {
+            AdvanceHiHatSustain(time);
             UpdateBot(time);
             if (_ignoredClosureInput is { } ignored)
                 OnPadHit?.Invoke(ignored.GetAction<EliteDrumsAction>(), false, false, true,
                     DrumNoteType.Neutral, ignored.Integer == 1 ? 1f : ignored.Axis);
             if (IsHiHatClosurePedalOverhit && _action is { } fault)
             {
-                OnPadHit?.Invoke(fault, false, false, false, DrumNoteType.Neutral, _velocity.GetValueOrDefault());
-                Overhit();
+                if (!TryBreakHiHatSustain(fault))
+                {
+                    OnPadHit?.Invoke(fault, false, false, false, DrumNoteType.Neutral, _velocity.GetValueOrDefault());
+                    Overhit();
+                }
             }
             else if (NoteIndex < Notes.Count)
             {
                 CheckForNoteHit();
             }
-            else if (_action is { } action && !TryFlamFollowUp(action))
+            else if (_action is { } action && !TryFlamFollowUp(action) && !TryBreakHiHatSustain(action))
             {
                 // Preserve harmless freestyle feedback after the final note (and
                 // on an empty chart); there is no note left to adjudicate or overhit.
@@ -434,17 +446,21 @@ namespace YARG.Core.Engine.Drums.Engines
             if (_action is { } action)
             {
                 if (TryFlamFollowUp(action)) return;
+                // Roll proximity can forgive an overhit, but a real pedal closure
+                // outside the playable roll still stops the remaining sustain score.
+                if (EngineParameters.EliteHiHatSustains >= 2 && TryBreakHiHatSustain(action)) return;
                 if (TryAuthoredPad(action, out int pad) &&
                     _authoredLanes.ProtectStrike(pad, CurrentTime))
                 {
                     OnPadHit?.Invoke(action, false, false, true, DrumNoteType.Neutral, _velocity.GetValueOrDefault());
                     return;
                 }
+                // Only unmatched inputs can break a sustain: actual note judging,
+                // including optional-pedal eligibility, has already had priority.
+                if (TryBreakHiHatSustain(action)) return;
                 OnPadHit?.Invoke(action, false, false, false, DrumNoteType.Neutral, _velocity.GetValueOrDefault());
                 // Pedal motion is free outside an active hi-hat sustain. A charted
                 // pedal gem still misses normally if no matching strike arrives.
-                // Sustain enforcement is not implemented yet; do not penalize an
-                // unmatched stomp/splash as an ordinary drum overhit.
                 if (action is EliteDrumsAction.EliteStomp or EliteDrumsAction.EliteSplash) return;
                 Overhit();
             }
@@ -534,9 +550,10 @@ namespace YARG.Core.Engine.Drums.Engines
 
         public void Overhit()
         {
-            if (NoteIndex == 0 || NoteIndex >= Notes.Count || IsWaitCountdownActive || IsCodaActive) return;
+            if ((!IsHiHatSustainOverhit && (NoteIndex == 0 || NoteIndex >= Notes.Count || IsWaitCountdownActive)) ||
+                IsCodaActive) return;
             if (CodaHasStarted) Codas[CurrentCodaIndex].Overhit();
-            if (!Notes[NoteIndex].IsStarPowerStart) StripStarPower(Notes[NoteIndex]);
+            if (NoteIndex < Notes.Count && !Notes[NoteIndex].IsStarPowerStart) StripStarPower(Notes[NoteIndex]);
             ResetCombo();
             if (_processingPhysicalInput) _faultInInputGroup = true;
             else _authoredLanes.LatchBarrier(CurrentTime);
@@ -551,6 +568,7 @@ namespace YARG.Core.Engine.Drums.Engines
         {
             if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator) return;
             note.SetHitState(true, false);
+            HitHiHatSustain(note);
             // Every real hit consumes this pad exclusively, including score-free coda
             // notes which return before the ordinary note lifecycle below.
             _pendingFlams.Remove(note.Pad);
@@ -648,7 +666,7 @@ namespace YARG.Core.Engine.Drums.Engines
 
         protected override void AddScore(EliteDrumNote note)
         {
-            AwardFlamUnit();
+            if (!StartHiHatSustainScore(note)) AwardFlamUnit();
             // Bot completion is deliberately not a synthetic physical follow-up.
             if (IsScoringFlam(note) && (IsFlatHandFlam(note) || IsBot)) AwardFlamUnit();
         }

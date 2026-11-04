@@ -119,8 +119,8 @@ public sealed class YargProfileFlamLayoutTests
         profile.Serialize(writer);
         writer.Write(0x12345678);
         var bytes = memory.ToArray();
-        Assert.That(BitConverter.ToInt32(bytes), Is.EqualTo(19));
-        Assert.That(ReplayIO.REPLAY_VERSIONS.CURRENT, Is.EqualTo(25));
+        Assert.That(BitConverter.ToInt32(bytes), Is.EqualTo(20));
+        Assert.That(ReplayIO.REPLAY_VERSIONS.CURRENT, Is.EqualTo(26));
         using var array = FixedArray<byte>.Alloc(bytes.Length);
         bytes.CopyTo(array.Span);
         var stream = new FixedArrayStream(array);
@@ -133,8 +133,8 @@ public sealed class YargProfileFlamLayoutTests
     public void Version17ProfileDefaultsToExplicitVWithoutConsumingTheNextFrame()
     {
         byte[] bytes = Serialize(new YargProfile());
-        Assert.That(BitConverter.ToInt32(bytes), Is.EqualTo(19));
-        Array.Resize(ref bytes, bytes.Length - 2);
+        Assert.That(BitConverter.ToInt32(bytes), Is.EqualTo(20));
+        Array.Resize(ref bytes, bytes.Length - 4);
         BitConverter.GetBytes(17).CopyTo(bytes, 0);
         using var memory = new MemoryStream();
         memory.Write(bytes);
@@ -154,8 +154,8 @@ public sealed class YargProfileFlamLayoutTests
     public void InvalidBinaryLayoutByteIsRejected()
     {
         var bytes = Serialize(new YargProfile());
-        Assert.That(BitConverter.ToInt32(bytes), Is.EqualTo(19));
-        bytes[^2] = 255;
+        Assert.That(BitConverter.ToInt32(bytes), Is.EqualTo(20));
+        bytes[^4] = 255;
         using var array = FixedArray<byte>.Alloc(bytes.Length);
         bytes.CopyTo(array.Span);
         var stream = new FixedArrayStream(array);

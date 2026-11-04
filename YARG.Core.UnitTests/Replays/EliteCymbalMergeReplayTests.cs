@@ -152,7 +152,7 @@ public sealed class EliteCymbalMergeReplayTests
         using var memory = new MemoryStream();
         using var writer = new BinaryWriter(memory);
         parameters.Serialize(writer);
-        memory.SetLength(memory.Length - 1);
+        memory.SetLength(memory.Length - 2); // Remove v25 cymbal policy and v26 sustain policy.
         memory.Position = memory.Length;
         writer.Write(0x12345678);
         var bytes = memory.ToArray();
@@ -183,7 +183,7 @@ public sealed class EliteCymbalMergeReplayTests
         Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(1));
     }
 
-    [TestCase(3)]
+    [TestCase(4)]
     [TestCase(255)]
     public void UnsupportedPolicyIsRejectedBeforeMutatingPlayerNotes(int policy)
     {
@@ -196,7 +196,7 @@ public sealed class EliteCymbalMergeReplayTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void Version19ProfilePreferenceRoundTripsAndVersion18DefaultsOff(bool keep)
+    public void CurrentProfilePreferenceRoundTripsAndVersion18DefaultsOff(bool keep)
     {
         using var memory = new MemoryStream();
         using var writer = new BinaryWriter(memory);
@@ -209,7 +209,7 @@ public sealed class EliteCymbalMergeReplayTests
             Assert.That(new YargProfile(ref stream).KeepOriginalCymbalColors, Is.EqualTo(keep));
             Assert.That(stream.Remaining, Is.Zero);
         }
-        memory.SetLength(memory.Length - 1);
+        memory.SetLength(memory.Length - 3);
         memory.Position = memory.Length;
         writer.Write(0x12345678);
         bytes = memory.ToArray();

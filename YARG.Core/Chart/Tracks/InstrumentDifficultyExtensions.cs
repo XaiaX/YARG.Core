@@ -822,20 +822,12 @@ namespace YARG.Core.Chart
             }
         }
 
-        /// <summary>
-        /// Removes native Elite hi-hat hits and/or playable pedal notes without deleting
-        /// invisible pedal terminators, which mark drum-fill boundaries.
-        /// </summary>
-        public static void RemoveEliteHiHatNotes(this InstrumentDifficulty<EliteDrumNote> difficulty,
-            bool removeHiHat, bool removePedal)
+        /// <summary>Remove playable hi-hat pedals and make retained cymbal hits indifferent.</summary>
+        public static void RemoveEliteHiHatPedalNotes(this InstrumentDifficulty<EliteDrumNote> difficulty)
         {
-            if (!removeHiHat && !removePedal) return;
-            if (removePedal) difficulty.NativeElitePedalsFiltered = true;
-
+            difficulty.NativeElitePedalsFiltered = true;
             bool ShouldRemove(EliteDrumNote note) =>
-                (removeHiHat && note.Pad == (int) EliteDrumNote.EliteDrumPad.HiHat) ||
-                (removePedal && note.Pad == (int) EliteDrumNote.EliteDrumPad.HatPedal &&
-                    !note.IsInvisibleTerminator);
+                note.Pad == (int)EliteDrumNote.EliteDrumPad.HatPedal && !note.IsInvisibleTerminator;
 
             for (int i = difficulty.Notes.Count - 1; i >= 0; i--)
             {
@@ -843,55 +835,31 @@ namespace YARG.Core.Chart
                 var surviving = new List<EliteDrumNote>();
                 foreach (var member in note.AllNotes)
                 {
-                    if (!ShouldRemove(member)) surviving.Add(member);
+                    if (ShouldRemove(member)) continue;
+                    if (member.Pad == (int)EliteDrumNote.EliteDrumPad.HiHat)
+                        member.HatState = EliteDrumNote.EliteDrumsHatState.Indifferent;
+                    surviving.Add(member);
                 }
                 if (surviving.Count == 0)
                 {
                     difficulty.Notes.RemoveAt(i);
                     continue;
                 }
-
-                if (surviving.Count == note.ChildNotes.Count + 1)
-                {
-                    if (removePedal)
-                    {
-                        foreach (var member in surviving)
-                        {
-                            if (member.Pad == (int) EliteDrumNote.EliteDrumPad.HiHat)
-                                member.HatState = EliteDrumNote.EliteDrumsHatState.Indifferent;
-                        }
-                    }
-                    continue;
-                }
+                if (surviving.Count == note.ChildNotes.Count + 1) continue;
 
                 var replacement = surviving[0].CloneWithoutChildNotes();
-                // Phrase/activation/coda boundaries may have been attached to the
-                // removed parent. Preserve these per-tick control flags on the new
-                // parent without changing the surviving member's pad identity.
+                // A removed pedal parent can own phrase/activation/coda boundaries.
                 if (ShouldRemove(note))
                 {
                     const NoteFlags BOUNDARY = NoteFlags.StarPowerStart | NoteFlags.StarPowerEnd |
                         NoteFlags.SoloStart | NoteFlags.SoloEnd | NoteFlags.CodaStart |
                         NoteFlags.CodaEnd | NoteFlags.BigRockEnding;
                     replacement.ActivateFlag(note.Flags & BOUNDARY);
-                    if (note.IsStarPowerActivator)
-                        replacement.ActivateFlag(DrumNoteFlags.StarPowerActivator);
+                    if (note.IsStarPowerActivator) replacement.ActivateFlag(DrumNoteFlags.StarPowerActivator);
                 }
-                foreach (var child in surviving.Skip(1))
-                {
-                    replacement.AddChildNote(child.CloneWithoutChildNotes());
-                }
-                if (removePedal)
-                {
-                    foreach (var member in replacement.AllNotes)
-                    {
-                        if (member.Pad == (int) EliteDrumNote.EliteDrumPad.HiHat)
-                            member.HatState = EliteDrumNote.EliteDrumsHatState.Indifferent;
-                    }
-                }
+                foreach (var child in surviving.Skip(1)) replacement.AddChildNote(child.CloneWithoutChildNotes());
                 difficulty.Notes[i] = replacement;
             }
-
             for (int i = 0; i < difficulty.Notes.Count; i++)
             {
                 difficulty.Notes[i].PreviousNote = i > 0 ? difficulty.Notes[i - 1] : null;

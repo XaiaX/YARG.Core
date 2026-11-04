@@ -1,4 +1,5 @@
-﻿using System;
+﻿// pattern: Functional Core
+using System;
 using System.Collections.Generic;
 using YARG.Core.Extensions;
 using YARG.Core.Engine.Drums;
@@ -56,6 +57,11 @@ namespace YARG.Core.Chart
         /// <summary>Native Elite Drums authored pad-lane phrases and their source-gem membership.</summary>
         public IReadOnlyList<EliteDrumNativeAuthoredLaneRecord> EliteDrumNativeAuthoredLaneRecords { get; private set; }
             = Array.Empty<EliteDrumNativeAuthoredLaneRecord>();
+
+        /// <summary>Full-song cymbal reservations; practice must retain the unsliced routing context.</summary>
+        public EliteDrumsCymbalLaneRouting? EliteCymbalLaneRouting { get; private set; }
+
+        public void SetEliteCymbalLaneRouting(EliteDrumsCymbalLaneRouting? routing) => EliteCymbalLaneRouting = routing;
 
         /// <summary>Set only on a native gameplay clone whose authored pedal gems were intentionally filtered.</summary>
         public bool NativeElitePedalsFiltered { get; internal set; }
@@ -127,6 +133,7 @@ namespace YARG.Core.Chart
             EliteDrumNativeAuthoredLaneRecords = new List<EliteDrumNativeAuthoredLaneRecord>(
                 other.EliteDrumNativeAuthoredLaneRecords).AsReadOnly();
             NativeElitePedalsFiltered = other.NativeElitePedalsFiltered;
+            EliteCymbalLaneRouting = other.EliteCymbalLaneRouting;
         }
 
         /// <summary>

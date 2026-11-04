@@ -29,7 +29,7 @@ namespace YARG.Core.Game
         /// 17 appends the Elite Drums layout identity plus an optional resolved-layout
         /// content snapshot; older versions read as the built-in Compact layout.
         /// </remarks>
-        private const int PROFILE_VERSION = 19;
+        private const int PROFILE_VERSION = 20;
 
         public int Version;
 
@@ -97,6 +97,10 @@ namespace YARG.Core.Game
         public Guid EliteDrumsLayout;
         /// <summary>Local display preference; never changes targets, score category, or shared layout data.</summary>
         public bool KeepOriginalCymbalColors;
+        /// <summary>Display only: constrain the hi-hat tail to its receptor's column.</summary>
+        public bool OneFretHiHatSustains;
+        /// <summary>Display only: hide hi-hat tails and sustained receptor effects.</summary>
+        public bool HideHiHatSustains;
 
         /// <summary>
         /// The selected instrument.
@@ -175,7 +179,11 @@ namespace YARG.Core.Game
         /// <summary>Initialize live MIDI preferences once; never called by binary replay decoding.</summary>
         public void InitializeLiveMidiDrumModifiers()
         {
-            if (GameMode != GameMode.EliteDrums || _midiDrumModifierVersion >= 1) return;
+            if (GameMode != GameMode.EliteDrums) return;
+            // The unused cymbal-removal option was retired before release.
+            _savedModifiers &= ~Modifier.NoHiHat;
+            CurrentModifiers &= ~Modifier.NoHiHat;
+            if (_midiDrumModifierVersion >= 1) return;
             const Modifier preferences = Modifier.EnableEliteUpconversion | Modifier.Enable2xKicks |
                 Modifier.PreferEliteDowncharts;
             _savedModifiers = (_savedModifiers & ~preferences) | Modifier.EnableEliteUpconversion;
@@ -584,6 +592,8 @@ namespace YARG.Core.Game
                 FlamLayout = layout;
             }
             KeepOriginalCymbalColors = Version >= 19 && stream.ReadBoolean();
+            OneFretHiHatSustains = Version >= 20 && stream.ReadBoolean();
+            HideHiHatSustains = Version >= 20 && stream.ReadBoolean();
         }
 
         /// <summary>
@@ -841,8 +851,7 @@ namespace YARG.Core.Game
                     if (track is InstrumentDifficulty<EliteDrumNote> eliteDrumsTrack && IsNativeEliteDrums)
                     {
                         if (IsModifierActive(Modifier.NoKicks)) eliteDrumsTrack.RemoveEliteKickDrumNotes();
-                        if (IsModifierActive(Modifier.NoHiHat) || NoHiHatPedal)
-                            eliteDrumsTrack.RemoveEliteHiHatNotes(IsModifierActive(Modifier.NoHiHat), NoHiHatPedal);
+                        if (NoHiHatPedal) eliteDrumsTrack.RemoveEliteHiHatPedalNotes();
                         if (IsModifierActive(Modifier.NoDynamics)) eliteDrumsTrack.RemoveEliteDynamics();
                         break;
                     }
@@ -1079,6 +1088,8 @@ namespace YARG.Core.Game
             writer.Write((byte) FlamLayout);
             // Version 19 appends the local merged-cymbal color preference.
             writer.Write(KeepOriginalCymbalColors);
+            writer.Write(OneFretHiHatSustains);
+            writer.Write(HideHiHatSustains);
         }
 
         private static DrumsHighwayItem[] DEFAULT_FOUR_LANE_ORDERING = new DrumsHighwayItem[] {

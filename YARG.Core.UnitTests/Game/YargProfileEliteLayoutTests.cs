@@ -142,7 +142,7 @@ public sealed class YargProfileEliteLayoutTests
         var snapshot = restored.ReplayEliteDrumsLayout!;
         Assert.Multiple(() =>
         {
-            Assert.That(restored.Version, Is.EqualTo(19));
+            Assert.That(restored.Version, Is.EqualTo(20));
             Assert.That(restored.EliteDrumsLayout, Is.EqualTo(CUSTOM_LAYOUT_ID));
             Assert.That(snapshot.Id, Is.EqualTo(CUSTOM_LAYOUT_ID));
             Assert.That(snapshot.Name, Is.EqualTo("My layout"));
@@ -284,8 +284,8 @@ public sealed class YargProfileEliteLayoutTests
         }
 
         // v18/v19 append flam/color bytes after v17's 16-byte GUID and presence flag.
-        // Strip all four additions and relabel the actual historical prefix as v16.
-        var v16Bytes = ms.ToArray()[..^19];
+        // v20 appends two sustain-display flags. Strip the additions and relabel the actual historical prefix as v16.
+        var v16Bytes = ms.ToArray()[..^21];
         BitConverter.GetBytes(16).CopyTo(v16Bytes, 0);
 
         using var buffer = FixedArray<byte>.Alloc(v16Bytes.Length);
@@ -427,8 +427,8 @@ public sealed class YargProfileEliteLayoutTests
         }
 
         // Keep these corruption tests on the actual v17 snapshot wire layout.
-        // Current v19 adds flam-layout and cymbal-color bytes after the snapshot block.
-        var bytes = ms.ToArray()[..^2];
+        // Current v20 adds flam-layout, cymbal-color, and two sustain-display bytes after the snapshot block.
+        var bytes = ms.ToArray()[..^4];
         BitConverter.GetBytes(17).CopyTo(bytes, 0);
         bytes[^1] = presence;
         return bytes;

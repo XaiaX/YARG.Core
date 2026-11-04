@@ -22,6 +22,7 @@ namespace YARG.Core.Engine.Drums
         public const float DEFAULT_ENTRY_GRACE_MULTIPLIER = 2f;
         public const double DEFAULT_HI_HAT_CLOSURE_WINDOW = .030;
 
+        public readonly byte EliteHiHatSustains;
         public readonly bool HiHatClosureSuppression;
         /// <summary>Physical seconds, before song-speed conversion.</summary>
         public readonly double HiHatClosureWindow;
@@ -59,9 +60,12 @@ namespace YARG.Core.Engine.Drums
             float entryGraceMultiplier = DEFAULT_ENTRY_GRACE_MULTIPLIER,
             bool hiHatClosureSuppression = false, double hiHatClosureWindow = DEFAULT_HI_HAT_CLOSURE_WINDOW,
             byte classicArticulationRuleset = CURRENT_CLASSIC_ARTICULATIONS,
-            byte eliteCymbalMergePolicy = EliteDrumsCymbalProjection.CURRENT_POLICY)
+            byte eliteCymbalMergePolicy = EliteDrumsCymbalProjection.CURRENT_POLICY,
+            byte eliteHiHatSustains = 2)
             : base(hitWindow, maxMultiplier, 0, 0, starMultiplierThresholds, soloBonusStarMultiplierThresholds, enableLanes)
         {
+            EliteHiHatSustains = eliteHiHatSustains;
+            if (eliteHiHatSustains > 2) throw new ArgumentOutOfRangeException(nameof(eliteHiHatSustains));
             Mode = mode;
             VelocityThreshold = 0.35f;
             SituationalVelocityWindow = 1.5f;
@@ -118,6 +122,8 @@ namespace YARG.Core.Engine.Drums
             EliteCymbalMergePolicy = version >= ReplayIO.ELITE_CYMBAL_MERGES_MIN
                 ? stream.ReadByte() : EliteDrumsCymbalProjection.LEGACY_POLICY;
             EliteDrumsCymbalProjection.ValidatePolicy(EliteCymbalMergePolicy);
+            EliteHiHatSustains = version >= ReplayIO.HI_HAT_SUSTAINS_MIN ? stream.ReadByte() : (byte)0;
+            if (EliteHiHatSustains > 2) throw new InvalidDataException("Unsupported hi-hat sustain ruleset.");
         }
 
         public override void Serialize(BinaryWriter writer)
@@ -134,6 +140,7 @@ namespace YARG.Core.Engine.Drums
             writer.Write(HiHatClosureWindow);
             writer.Write(ClassicArticulationRuleset);
             writer.Write(EliteCymbalMergePolicy);
+            writer.Write(EliteHiHatSustains);
         }
 
         private void ValidateClassicArticulations()
