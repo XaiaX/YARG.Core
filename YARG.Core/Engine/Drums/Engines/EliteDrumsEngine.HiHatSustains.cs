@@ -13,6 +13,8 @@ namespace YARG.Core.Engine.Drums.Engines
         public EliteHiHatSustain? ActiveHiHatSustain { get; private set; }
         public bool IsHiHatSustainOverhit { get; private set; }
         public bool IsHiHatSustainRelease { get; private set; }
+        /// <summary>Raised after a ringing interval becomes active, with its activation engine time.</summary>
+        public Action<EliteHiHatSustain, double>? OnHiHatSustainStarted;
         public Action<EliteHiHatSustain, bool>? OnHiHatSustainEnded;
         private readonly List<(double Start, double End)> _hiHatPedalRolls = new();
         private readonly Dictionary<EliteDrumNote, EliteHiHatSustain> _hiHatGenerators = new();
@@ -94,17 +96,20 @@ namespace YARG.Core.Engine.Drums.Engines
             OnHiHatSustainEnded?.Invoke(active, broken);
         }
 
-        private void HitHiHatSustain(EliteDrumNote note)
+        private EliteHiHatSustain? HitHiHatSustain(EliteDrumNote note)
         {
             if (_hiHatGenerators.TryGetValue(note, out var sustain) && CurrentTime < sustain.EndTime)
             {
-                if (ActiveHiHatSustain != null && !ReferenceEquals(ActiveHiHatSustain, sustain))
+                bool started = !ReferenceEquals(ActiveHiHatSustain, sustain);
+                if (ActiveHiHatSustain != null && started)
                     EndHiHatSustain(false);
                 _brokenHiHatSustains.Remove(sustain);
                 ActiveHiHatSustain = sustain;
+                return started ? sustain : null;
             }
             else if (EliteHiHatSustain.IsTerminator(note))
                 EndHiHatSustain(false);
+            return null;
         }
 
         private double HiHatSustainEarlyEnd(EliteHiHatSustain sustain)

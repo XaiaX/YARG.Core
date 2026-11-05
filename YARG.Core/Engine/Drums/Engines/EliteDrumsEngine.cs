@@ -568,7 +568,7 @@ namespace YARG.Core.Engine.Drums.Engines
         {
             if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator) return;
             note.SetHitState(true, false);
-            HitHiHatSustain(note);
+            var startedHiHatSustain = HitHiHatSustain(note);
             // Every real hit consumes this pad exclusively, including score-free coda
             // notes which return before the ordinary note lifecycle below.
             _pendingFlams.Remove(note.Pad);
@@ -579,6 +579,10 @@ namespace YARG.Core.Engine.Drums.Engines
                 return;
             }
             SkipPreviousNotes(note.ParentOrSelf);
+            // A skipped miss must reset visual inheritance before this new
+            // activation starts it again. Skip handling may also replace the active interval.
+            if (startedHiHatSustain != null && ReferenceEquals(ActiveHiHatSustain, startedHiHatSustain))
+                OnHiHatSustainStarted?.Invoke(startedHiHatSustain, CurrentTime);
             if (note.IsStarPower && EngineStats.IsStarPowerActive && EngineParameters.NoStarPowerOverlap)
                 StripStarPower(note);
             if (note.IsStarPowerEnd && note.ParentOrSelf.WasFullyHit())
