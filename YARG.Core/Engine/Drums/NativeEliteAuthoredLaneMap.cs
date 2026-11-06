@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using YARG.Core.Chart;
+using YARG.Core.Diagnostics;
 
 namespace YARG.Core.Engine.Drums
 {
@@ -38,6 +39,7 @@ namespace YARG.Core.Engine.Drums
             double laneProximityProtectionWindow,
             Func<EliteDrumNote, (double FrontEnd, double BackEnd)> ordinaryWindow, bool unionPhysicalTargets = false)
         {
+            using var timing = TargetedPerformance.Measure(TargetedOperation.LaneMapBuild);
             if (double.IsNaN(laneAutohitWindow) || double.IsInfinity(laneAutohitWindow) || laneAutohitWindow < 0)
                 throw new ArgumentOutOfRangeException(nameof(laneAutohitWindow));
             if (double.IsNaN(laneProximityProtectionWindow) || double.IsInfinity(laneProximityProtectionWindow) || laneProximityProtectionWindow < 0)
@@ -176,9 +178,11 @@ namespace YARG.Core.Engine.Drums
 
         public double? NextContinuationDeadline(EliteDrumNote note, double handDeadline)
         {
-            if (!_members.TryGetValue(note, out var lanes)) return null;
+            bool member = _members.TryGetValue(note, out var lanes);
+            TargetedPerformance.Current?.RecordLaneLookup(member);
+            if (!member) return null;
             double? earliest = null;
-            foreach (var lane in lanes)
+            foreach (var lane in lanes!)
             {
                 if (ReferenceEquals(lane.Members[0], note) || !lane.Entered || !lane.EnteredTargets.Contains(note.Pad) ||
                     lane.Members[^1].WasHit || lane.Members[^1].WasMissed) continue;

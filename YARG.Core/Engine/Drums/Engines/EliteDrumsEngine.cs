@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using YARG.Core.Chart;
+using YARG.Core.Diagnostics;
 using YARG.Core.Input;
 using YARG.Core.Game;
 using YARG.Core.Utility;
@@ -129,18 +130,26 @@ namespace YARG.Core.Engine.Drums.Engines
 
         protected override void GenerateQueuedUpdates(double nextTime)
         {
+            using var timing = TargetedPerformance.Measure(TargetedOperation.RollSchedule);
+            var diagnostics = TargetedPerformance.Current;
+            long examined = 0, queued = 0;
             base.GenerateQueuedUpdates(nextTime);
             if (_authoredLanes is null) return;
             foreach (var parent in Notes)
             {
                 foreach (var note in parent.AllNotes)
                 {
+                    if (diagnostics != null) examined++;
                     if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator) continue;
                     var deadline = AuthoredContinuationDeadline(note);
                     if (deadline is { } when && when > CurrentTime && when < nextTime)
+                    {
                         QueueUpdateTime(when, "native authored-lane cadence");
+                        if (diagnostics != null) queued++;
+                    }
                 }
             }
+            diagnostics?.RecordScheduling(examined, queued);
         }
 
         private double? AuthoredContinuationDeadline(EliteDrumNote note)
@@ -179,12 +188,16 @@ namespace YARG.Core.Engine.Drums.Engines
 
         private void ResolveAuthoredCadence(double time, EliteDrumsAction? physicalAction = null)
         {
+            using var timing = TargetedPerformance.Measure(TargetedOperation.RollResolve);
+            var diagnostics = TargetedPerformance.Current;
+            long examined = 0;
             if (NoteIndex >= Notes.Count) return;
             foreach (var parent in Notes)
             {
                 if (parent.Time > time) break;
                 foreach (var note in parent.AllNotes)
                 {
+                    if (diagnostics != null) examined++;
                     if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator ||
                         (IsBot && note.Time <= time && IsNoteInWindow(note, time)) ||
                         (_autoHiHatPedal && IsPlayablePedal(note)) ||
@@ -193,10 +206,14 @@ namespace YARG.Core.Engine.Drums.Engines
                             IsNoteInWindow(note, time)) ||
                         time < cadence || !_authoredLanes.CanContinue(note, time)) continue;
                     _resolvingAuthoredContinuation = true;
-                    try { HitNote(note); }
+                    try
+                    {
+                        HitNote(note);
+                    }
                     finally { _resolvingAuthoredContinuation = false; }
                 }
             }
+            diagnostics?.RecordResolution(examined);
         }
 
         private static bool IsPlayablePedal(EliteDrumNote note) =>
@@ -568,6 +585,7 @@ namespace YARG.Core.Engine.Drums.Engines
         {
             if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator) return;
             note.SetHitState(true, false);
+            if (_resolvingAuthoredContinuation) TargetedPerformance.Current?.RecordContinuation();
             var startedHiHatSustain = HitHiHatSustain(note);
             // Every real hit consumes this pad exclusively, including score-free coda
             // notes which return before the ordinary note lifecycle below.
