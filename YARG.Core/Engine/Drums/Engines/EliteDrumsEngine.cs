@@ -56,6 +56,13 @@ namespace YARG.Core.Engine.Drums.Engines
         private readonly bool _autoHiHatPedal;
         private readonly EliteDrumsCymbalPair? _cymbalPair;
         private readonly NativeEliteAuthoredLaneMap _authoredLanes;
+        // Preserve chart parent/child order and identity, including projected/chord members.
+        // Only membership is prepared at load; deadlines and coverage are evaluated live.
+        private readonly List<(EliteDrumNote Note, double ParentTime)> _rollCandidates = new();
+        // Array-backed unresolved chain: removal is O(1), with no gameplay allocations.
+        private int[] _nextRollCandidate = Array.Empty<int>();
+        private double[] _earliestRemainingRollTime = Array.Empty<double>();
+        private int _firstRollCandidate;
         private EliteDrumsAction? _action;
         private float? _velocity;
 
@@ -75,10 +82,13 @@ namespace YARG.Core.Engine.Drums.Engines
                 }, _cymbalPair != null && engineParameters.EliteCymbalMergePolicy >= EliteDrumsCymbalProjection.PHYSICAL_UNION_POLICY);
             EngineStats.OptionalPedalAccuracyEnabled = autoHiHatPedal;
             // Invisible pedal terminators are chart control events, not playable notes.
+            var indexed = new HashSet<EliteDrumNote>();
             foreach (var parent in Notes)
             {
                 foreach (var note in parent.AllNotes)
                 {
+                    if (_authoredLanes.Contains(note) && indexed.Add(note))
+                        _rollCandidates.Add((note, parent.Time));
                     if (note.IsInvisibleTerminator)
                     {
                         // BaseEngine already excludes BRE parents from the denominator.
@@ -99,6 +109,17 @@ namespace YARG.Core.Engine.Drums.Engines
                     }
                 }
             }
+            _nextRollCandidate = new int[_rollCandidates.Count];
+            _earliestRemainingRollTime = new double[_rollCandidates.Count];
+            double earliest = double.PositiveInfinity;
+            for (int i = _rollCandidates.Count - 1; i >= 0; i--)
+            {
+                // Use a suffix minimum rather than assuming every child's seconds
+                // match its parent. No continuation deadline precedes its note time.
+                earliest = Math.Min(earliest, _rollCandidates[i].Note.Time);
+                _earliestRemainingRollTime[i] = earliest;
+            }
+            ResetRollCandidates();
             EngineStats.TotalChords = EngineStats.TotalNotes;
             InitializeHiHatSustains(chart, syncTrack);
             GetWaitCountdowns(Notes, note => _hiHatGenerators.TryGetValue(note, out var sustain)
@@ -120,10 +141,25 @@ namespace YARG.Core.Engine.Drums.Engines
             _faultInInputGroup = false;
             _resolvingAuthoredContinuation = false;
             _authoredLanes?.Reset();
+            ResetRollCandidates();
             _pendingFlams?.Clear();
             ResetHiHatClosures();
             ResetHiHatSustains();
             base.Reset(keepCurrentButtons);
+        }
+
+        private void ResetRollCandidates()
+        {
+            _firstRollCandidate = 0;
+            // Base construction calls Reset before the derived fields exist.
+            if (_nextRollCandidate is null) return;
+            for (int i = 0; i < _nextRollCandidate.Length; i++) _nextRollCandidate[i] = i + 1;
+        }
+
+        private void RetireRollCandidate(int previous, int index)
+        {
+            if (previous < 0) _firstRollCandidate = _nextRollCandidate[index];
+            else _nextRollCandidate[previous] = _nextRollCandidate[index];
         }
 
         protected override bool DrainSameTimestampInputs => true;
@@ -135,18 +171,23 @@ namespace YARG.Core.Engine.Drums.Engines
             long examined = 0, queued = 0;
             base.GenerateQueuedUpdates(nextTime);
             if (_authoredLanes is null) return;
-            foreach (var parent in Notes)
+            for (int index = _firstRollCandidate, previous = -1; index < _rollCandidates.Count;
+                index = _nextRollCandidate[index])
             {
-                foreach (var note in parent.AllNotes)
+                if (_earliestRemainingRollTime[index] >= nextTime) break;
+                var note = _rollCandidates[index].Note;
+                if (diagnostics != null) examined++;
+                if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator)
                 {
-                    if (diagnostics != null) examined++;
-                    if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator) continue;
-                    var deadline = AuthoredContinuationDeadline(note);
-                    if (deadline is { } when && when > CurrentTime && when < nextTime)
-                    {
-                        QueueUpdateTime(when, "native authored-lane cadence");
-                        if (diagnostics != null) queued++;
-                    }
+                    RetireRollCandidate(previous, index);
+                    continue;
+                }
+                previous = index;
+                var deadline = AuthoredContinuationDeadline(note);
+                if (deadline is { } when && when > CurrentTime && when < nextTime)
+                {
+                    QueueUpdateTime(when, "native authored-lane cadence");
+                    if (diagnostics != null) queued++;
                 }
             }
             diagnostics?.RecordScheduling(examined, queued);
@@ -192,26 +233,31 @@ namespace YARG.Core.Engine.Drums.Engines
             var diagnostics = TargetedPerformance.Current;
             long examined = 0;
             if (NoteIndex >= Notes.Count) return;
-            foreach (var parent in Notes)
+            for (int index = _firstRollCandidate, previous = -1; index < _rollCandidates.Count;
+                index = _nextRollCandidate[index])
             {
-                if (parent.Time > time) break;
-                foreach (var note in parent.AllNotes)
+                var candidate = _rollCandidates[index];
+                if (candidate.ParentTime > time) break;
+                var note = candidate.Note;
+                if (diagnostics != null) examined++;
+                if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator)
                 {
-                    if (diagnostics != null) examined++;
-                    if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator ||
-                        (IsBot && note.Time <= time && IsNoteInWindow(note, time)) ||
-                        (_autoHiHatPedal && IsPlayablePedal(note)) ||
-                        AuthoredContinuationDeadline(note) is not { } cadence ||
-                        (physicalAction is { } action && Matches(action, note) &&
-                            IsNoteInWindow(note, time)) ||
-                        time < cadence || !_authoredLanes.CanContinue(note, time)) continue;
-                    _resolvingAuthoredContinuation = true;
-                    try
-                    {
-                        HitNote(note);
-                    }
-                    finally { _resolvingAuthoredContinuation = false; }
+                    RetireRollCandidate(previous, index);
+                    continue;
                 }
+                previous = index;
+                if ((IsBot && note.Time <= time && IsNoteInWindow(note, time)) ||
+                    (_autoHiHatPedal && IsPlayablePedal(note)) ||
+                    AuthoredContinuationDeadline(note) is not { } cadence ||
+                    (physicalAction is { } action && Matches(action, note) &&
+                        IsNoteInWindow(note, time)) ||
+                    time < cadence || !_authoredLanes.CanContinue(note, time)) continue;
+                _resolvingAuthoredContinuation = true;
+                try
+                {
+                    HitNote(note);
+                }
+                finally { _resolvingAuthoredContinuation = false; }
             }
             diagnostics?.RecordResolution(examined);
         }

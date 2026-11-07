@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
+using YARG.Core.Diagnostics;
 
 namespace YARG.Core.Audio
 {
@@ -236,14 +238,40 @@ namespace YARG.Core.Audio
         /// </remarks>
         public SyncPosition GetSyncPosition()
         {
+            var wait = TargetedPerformance.Measure(TargetedOperation.AudioClockMixerLock);
             lock (this)
             {
+                wait.Dispose();
                 if (_disposed)
                 {
                     return default;
                 }
                 return GetSyncPosition_Internal();
             }
+        }
+
+        public bool TryGetSyncPosition(out SyncPosition position)
+        {
+            position = default;
+            bool acquired;
+            using (TargetedPerformance.Measure(TargetedOperation.AudioClockMixerLock))
+                acquired = Monitor.TryEnter(this);
+            if (!acquired) return false;
+
+            try
+            {
+                return !_disposed && TryGetSyncPosition_Internal(out position);
+            }
+            finally
+            {
+                Monitor.Exit(this);
+            }
+        }
+
+        protected virtual bool TryGetSyncPosition_Internal(out SyncPosition position)
+        {
+            position = GetSyncPosition_Internal();
+            return true;
         }
 
         /// <summary>

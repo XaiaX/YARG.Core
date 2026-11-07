@@ -26,6 +26,9 @@ namespace YARG.Core.Diagnostics
         public static TimingScope Measure(TargetedOperation operation)
             => _current == null ? default : new TimingScope(_current, operation);
 
+        public static TimingScope MeasureWithContext(TargetedOperation operation, int context)
+            => _current == null ? default : new TimingScope(_current, operation, context);
+
         public static TargetedPerformanceSnapshot TakeSnapshot()
         {
             var result = _current?.Drain() ?? default;
@@ -39,18 +42,20 @@ namespace YARG.Core.Diagnostics
             private readonly Collector? _collector;
             private readonly TargetedOperation _operation;
             private readonly long _start;
+            private readonly int _context;
 
-            internal TimingScope(Collector collector, TargetedOperation operation)
+            internal TimingScope(Collector collector, TargetedOperation operation, int context = 0)
             {
                 _collector = collector;
                 _operation = operation;
+                _context = context;
                 _start = Stopwatch.GetTimestamp();
             }
 
             public void Dispose()
             {
                 if (_collector != null)
-                    _collector.Record(_operation, Stopwatch.GetTimestamp() - _start);
+                    _collector.Record(_operation, Stopwatch.GetTimestamp() - _start, _start, _context);
             }
         }
 
@@ -79,17 +84,60 @@ namespace YARG.Core.Diagnostics
                 if (member) _pending.LaneMembers++;
             }
 
-            internal void Record(TargetedOperation operation, long ticks)
+            public void RecordFirstElementEnable() => _pending.FirstElementEnables++;
+            public void RecordFirstNoteGroupInitialization() => _pending.FirstNoteGroupInitializations++;
+
+            public void RecordAudioClockNative(in AudioClockNativeTiming sample)
+                => _pending.AudioClockNative.Add(sample);
+
+            internal void Record(TargetedOperation operation, long ticks, long start, int context)
             {
                 switch (operation)
                 {
-                    case TargetedOperation.RollSchedule: _pending.RollSchedule.Add(ticks); break;
-                    case TargetedOperation.RollResolve: _pending.RollResolve.Add(ticks); break;
-                    case TargetedOperation.LaneMapBuild: _pending.LaneMapBuild.Add(ticks); break;
-                    case TargetedOperation.HiHatActivation: _pending.HiHatActivation.Add(ticks); break;
-                    case TargetedOperation.HiHatDiscovery: _pending.HiHatDiscovery.Add(ticks); break;
-                    case TargetedOperation.PoolPrewarm: _pending.PoolPrewarm.Add(ticks); break;
-                    case TargetedOperation.PoolCreate: _pending.PoolCreate.Add(ticks); break;
+                    case TargetedOperation.RollSchedule: _pending.RollSchedule.Add(ticks, start, context); break;
+                    case TargetedOperation.RollResolve: _pending.RollResolve.Add(ticks, start, context); break;
+                    case TargetedOperation.LaneMapBuild: _pending.LaneMapBuild.Add(ticks, start, context); break;
+                    case TargetedOperation.HiHatActivation: _pending.HiHatActivation.Add(ticks, start, context); break;
+                    case TargetedOperation.HiHatDiscovery: _pending.HiHatDiscovery.Add(ticks, start, context); break;
+                    case TargetedOperation.PoolPrewarm: _pending.PoolPrewarm.Add(ticks, start, context); break;
+                    case TargetedOperation.PoolCreate: _pending.PoolCreate.Add(ticks, start, context); break;
+                    case TargetedOperation.NoteSpawn: _pending.NoteSpawn.Add(ticks, start, context); break;
+                    case TargetedOperation.ElementEnable: _pending.ElementEnable.Add(ticks, start, context); break;
+                    case TargetedOperation.ElementSetActive: _pending.ElementSetActive.Add(ticks, start, context); break;
+                    case TargetedOperation.ElementInitialize: _pending.ElementInitialize.Add(ticks, start, context); break;
+                    case TargetedOperation.ElementFirstVisualUpdate: _pending.ElementFirstVisualUpdate.Add(ticks, start, context); break;
+                    case TargetedOperation.NoteGroupInitialize: _pending.NoteGroupInitialize.Add(ticks, start, context); break;
+                    case TargetedOperation.MaterialAccess: _pending.MaterialAccess.Add(ticks, start, context); break;
+                    case TargetedOperation.NoteGroupSetActive: _pending.NoteGroupSetActive.Add(ticks, start, context); break;
+                    case TargetedOperation.PedalMeshBuild: _pending.PedalMeshBuild.Add(ticks, start, context); break;
+                    case TargetedOperation.GameplayAwake: _pending.GameplayAwake.Add(ticks, start, context); break;
+                    case TargetedOperation.GameplayManagerDiscovery: _pending.GameplayManagerDiscovery.Add(ticks, start, context); break;
+                    case TargetedOperation.EngineUpdate: _pending.EngineUpdate.Add(ticks, start, context); break;
+                    case TargetedOperation.EliteDrumHit: _pending.EliteDrumHit.Add(ticks, start, context); break;
+                    case TargetedOperation.ClassicDrumHit: _pending.ClassicDrumHit.Add(ticks, start, context); break;
+                    case TargetedOperation.DrumHitBookkeeping: _pending.DrumHitBookkeeping.Add(ticks, start, context); break;
+                    case TargetedOperation.DrumHitGemReturn: _pending.DrumHitGemReturn.Add(ticks, start, context); break;
+                    case TargetedOperation.EliteHitFeedback: _pending.EliteHitFeedback.Add(ticks, start, context); break;
+                    case TargetedOperation.ClassicHitFeedback: _pending.ClassicHitFeedback.Add(ticks, start, context); break;
+                    case TargetedOperation.FretHitAnimator: _pending.FretHitAnimator.Add(ticks, start, context); break;
+                    case TargetedOperation.FretHitColor: _pending.FretHitColor.Add(ticks, start, context); break;
+                    case TargetedOperation.FretHitEffect: _pending.FretHitEffect.Add(ticks, start, context); break;
+                    case TargetedOperation.HitParticlePlay: _pending.HitParticlePlay.Add(ticks, start, context); break;
+                    case TargetedOperation.HitLightPlay: _pending.HitLightPlay.Add(ticks, start, context); break;
+                    case TargetedOperation.GameManagerUpdate: _pending.GameManagerUpdate.Add(ticks, start, context); break;
+                    case TargetedOperation.SongRunnerUpdate: _pending.SongRunnerUpdate.Add(ticks, start, context); break;
+                    case TargetedOperation.AudioSynchronize: _pending.AudioSynchronize.Add(ticks, start, context); break;
+                    case TargetedOperation.AudioClockQuery: _pending.AudioClockQuery.Add(ticks, start, context); break;
+                    case TargetedOperation.AudioClockCorrection: _pending.AudioClockCorrection.Add(ticks, start, context); break;
+                    case TargetedOperation.GameplaySpeedUpdate: _pending.GameplaySpeedUpdate.Add(ticks, start, context); break;
+                    case TargetedOperation.GameplayBeatEvents: _pending.GameplayBeatEvents.Add(ticks, start, context); break;
+                    case TargetedOperation.GameplayCrowdEvents: _pending.GameplayCrowdEvents.Add(ticks, start, context); break;
+                    case TargetedOperation.GameplayPlayerUpdate: _pending.GameplayPlayerUpdate.Add(ticks, start, context); break;
+                    case TargetedOperation.GameplayScoreUpdate: _pending.GameplayScoreUpdate.Add(ticks, start, context); break;
+                    case TargetedOperation.GameplaySongEnd: _pending.GameplaySongEnd.Add(ticks, start, context); break;
+                    case TargetedOperation.AudioClockMixerLock: _pending.AudioClockMixerLock.Add(ticks, start, context); break;
+                    case TargetedOperation.AudioClockNativeQuery: _pending.AudioClockNativeQuery.Add(ticks, start, context); break;
+                    case TargetedOperation.AudioClockBassConvert: _pending.AudioClockBassConvert.Add(ticks, start, context); break;
                 }
             }
 

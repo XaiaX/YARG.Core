@@ -73,6 +73,9 @@ namespace YARG.Core.Engine.Drums
                     segment.EndTime + ordinaryWindow(segment.Members[^1]).BackEnd)));
         }
 
+        // Membership is immutable for this projected chart; cadence/entry state is not.
+        public bool Contains(EliteDrumNote note) => _members.ContainsKey(note);
+
         public void Reset()
         {
             foreach (var lane in _lanes)
