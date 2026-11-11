@@ -360,6 +360,13 @@ namespace YARG.Core.Engine.Drums.Engines
             _processingPhysicalInput = true;
             var action = EliteDrumsCymbalProjection.NormalizeAction(input.GetAction<EliteDrumsAction>(), _cymbalPair);
             _closureDecision = ResolveHiHatClosure(input);
+            if (_closureDecision == ClosureDecision.Duplicate) return;
+            if (action == EliteDrumsAction.EliteHiHatPosition)
+            {
+                if (!EngineParameters.HiHatClosureSuppression || input.Integer != 1) return;
+                action = EliteDrumsAction.EliteStomp;
+                input = GameInput.Create(input.Time, action, true);
+            }
             // Pair decisions may have been reserved before an intervening open
             // hit activated a tail. Reconsider the pedal when it is consumed.
             if (_closureDecision == ClosureDecision.Ignore && action == EliteDrumsAction.EliteStomp &&

@@ -33,6 +33,7 @@ public class EliteDrumsBeginnerTests
     {
         foreach (var action in Enum.GetValues<EliteDrumsAction>())
         {
+            if (action == EliteDrumsAction.EliteHiHatPosition) continue;
             var note = Note();
             var engine = Engine(Chart(note));
             var input = action is EliteDrumsAction.EliteStomp or EliteDrumsAction.EliteSplash
@@ -53,6 +54,7 @@ public class EliteDrumsBeginnerTests
             GameInput.Create(1, EliteDrumsAction.EliteSnare, float.NaN),
             GameInput.Create(1, EliteDrumsAction.EliteSnare, float.PositiveInfinity),
             GameInput.Create(1, EliteDrumsAction.EliteSnare, -1f),
+            GameInput.Create(1, EliteDrumsAction.EliteHiHatPosition, true),
             new GameInput(1, 99, 1f), GameInput.Create(1, MenuAction.Start, true)];
         foreach (var inputValue in inputs)
         {

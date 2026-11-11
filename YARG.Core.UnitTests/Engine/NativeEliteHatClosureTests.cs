@@ -13,6 +13,8 @@ namespace YARG.Core.UnitTests.Engine;
 
 public sealed class NativeEliteHatClosureTests
 {
+    private const EliteDrumsAction Position = (EliteDrumsAction)14;
+
     private static EliteDrumNote Note(EliteDrumPad pad, double time,
         EliteDrumsHatState state = EliteDrumsHatState.Indifferent) =>
         new(pad, DrumNoteType.Neutral, state, EliteDrumsHatPedalType.Stomp, false,
@@ -49,6 +51,74 @@ public sealed class NativeEliteHatClosureTests
     {
         var input = GameInput.Create(time, action, value);
         engine.QueueInput(ref input);
+    }
+
+    [TestCase("CNS")]
+    [TestCase("CSN")]
+    [TestCase("NCS")]
+    [TestCase("NSC")]
+    [TestCase("SCN")]
+    [TestCase("SNC")]
+    public void ControllerAndNoteProduceOnePedalClosure(string order)
+    {
+        var engine = Create(true, Note(EliteDrumPad.HiHat, 1, EliteDrumsHatState.Open));
+        int pairs = 0, pedalFeedback = 0;
+        double pairedPedalTime = -1;
+        engine.OnHiHatClosurePair += pair => { pairs++; pairedPedalTime = pair.PedalInput.Time; };
+        engine.OnPadHit += (action, _, _, _, _, _) =>
+        {
+            if (action == EliteDrumsAction.EliteStomp) pedalFeedback++;
+        };
+        for (int i = 0; i < order.Length; i++)
+        {
+            double time = 1 + i * .008;
+            if (order[i] == 'C')
+            {
+                var edge = GameInput.Create(time, Position, true);
+                engine.QueueInput(ref edge);
+            }
+            else
+                Queue(engine, time, order[i] == 'N' ? EliteDrumsAction.EliteStomp : EliteDrumsAction.EliteClosedHiHat);
+            engine.Update(time);
+        }
+        engine.Update(1.1);
+        Assert.That(pairs, Is.EqualTo(1));
+        Assert.That(pairedPedalTime, Is.EqualTo(order[0] == 'S' ? 1.008 : 1));
+        Assert.That(pedalFeedback, Is.EqualTo(1));
+        Assert.That(engine.EngineStats.OverhitsByAction.Keys,
+            Is.EquivalentTo(new[] { (int)EliteDrumsAction.EliteStomp }));
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ControllerOnlyCanPlayChartedStompWithForgivenessEnabled(bool enabled)
+    {
+        var stomp = Note(EliteDrumPad.HatPedal, 1);
+        var engine = Create(enabled, stomp);
+        var edge = GameInput.Create(1, Position, true);
+        engine.QueueInput(ref edge);
+        Queue(engine, 1.018, EliteDrumsAction.EliteClosedHiHat);
+        engine.Update(1.1);
+        Assert.That(stomp.WasHit, Is.EqualTo(enabled));
+        Assert.That(engine.EngineStats.Overhits, Is.EqualTo(enabled ? 0 : 1));
+    }
+
+    [Test]
+    public void TwoHandStrikesCannotClaimBothSignalsFromOnePedalClosure()
+    {
+        var engine = Create(true);
+        int pairs = 0;
+        double pairedHatTime = -1;
+        engine.OnHiHatClosurePair += pair => { pairs++; pairedHatTime = pair.ClosedHatInput.Time; };
+        Queue(engine, 1, EliteDrumsAction.EliteClosedHiHat);
+        Queue(engine, 1.004, EliteDrumsAction.EliteClosedHiHat);
+        var edge = GameInput.Create(1.028, Position, true);
+        engine.QueueInput(ref edge);
+        Queue(engine, 1.032, EliteDrumsAction.EliteStomp);
+        engine.Update(1.2);
+        Assert.That(pairs, Is.EqualTo(1));
+        Assert.That(pairedHatTime, Is.EqualTo(1));
+        Assert.That(engine.EngineStats.OverhitsByAction[(int)EliteDrumsAction.EliteClosedHiHat], Is.EqualTo(1));
     }
 
     [TestCase(false)]

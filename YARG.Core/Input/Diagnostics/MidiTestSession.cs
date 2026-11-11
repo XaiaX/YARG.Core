@@ -120,12 +120,17 @@ namespace YARG.Core.Input.Diagnostics
             binding.IsController && binding.IsPedal && binding.PortId == address.PortId &&
             binding.Number == address.Number && (binding.Channel == -1 || binding.Channel == address.Channel);
 
+        private static bool IsPositionBinding(MidiTestBinding binding) =>
+            binding.Action == (int)EliteDrumsAction.EliteHiHatPosition;
+
         private MidiTestAddress? FindAutomaticPedalController()
         {
             var mappings = _configuration.Bindings.Where(binding => binding.IsController && binding.IsPedal &&
                 _configuration.Endpoints.Any(endpoint => endpoint.PortId == binding.PortId &&
                     (endpoint.Channel == -1 || binding.Channel == -1 || endpoint.Channel == binding.Channel)))
                 .ToArray();
+            if (mappings.Any(IsPositionBinding))
+                mappings = mappings.Where(IsPositionBinding).ToArray();
             if (mappings.Length == 0) return null;
             MidiTestAddress? selected = null;
             foreach (var address in _observedControllers)
@@ -140,17 +145,19 @@ namespace YARG.Core.Input.Diagnostics
 
         private bool? GetPedalClosed(MidiTestAddress address, int value)
         {
+            bool usePosition = _configuration.Bindings.Any(binding =>
+                IsPositionBinding(binding) && MatchesController(binding, address));
             MidiTestBinding? first = null;
             foreach (var binding in _configuration.Bindings)
             {
-                if (!MatchesController(binding, address)) continue;
+                if (!MatchesController(binding, address) || IsPositionBinding(binding) != usePosition) continue;
                 if (first is { } previous && (previous.Inverted != binding.Inverted ||
                     previous.PressPoint != binding.PressPoint)) return null;
                 first = binding;
             }
             if (first is not { } mapping) return null;
-            // SingleButtonBinding negates an inverted control; it does not complement 0..1.
-            float normalized = value / 127f * (mapping.Inverted ? -1 : 1);
+            float normalized = value / 127f;
+            if (mapping.Inverted) normalized = usePosition ? 1f - normalized : -normalized;
             return normalized >= mapping.PressPoint;
         }
     }

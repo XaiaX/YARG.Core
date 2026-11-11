@@ -318,6 +318,9 @@
         WildcardPad = 13,
 
 
+        /// <summary>Calibrated MIDI CC crossing into the closed hi-hat range.</summary>
+        EliteHiHatPosition = 14,
+
         /// <summary>4L Drums red drum hit velocity</summary>
         FourLaneRedDrum = 100,
         /// <summary>4L Drums yellow drum hit velocity</summary>

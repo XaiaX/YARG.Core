@@ -73,9 +73,12 @@ public sealed class NativeEliteHatClosureReplayTests
     public void InvalidWindowIsRejected(double window) =>
         Assert.That(() => Parameters(true, window), Throws.TypeOf<InvalidDataException>());
 
-    [TestCase(1.02, 1)]
-    [TestCase(1.05, 2)]
-    public void ReplayPreservesLiveSnapshotHorizonIncludingPendingFinalInputs(double savedAt, int hits)
+    [TestCase(1.02, 1, false)]
+    [TestCase(1.05, 2, false)]
+    [TestCase(1.02, 1, true)]
+    [TestCase(1.05, 2, true)]
+    public void ReplayPreservesLiveSnapshotHorizonIncludingPendingFinalInputs(double savedAt, int hits,
+        bool withPosition)
     {
         var chart = NativeEliteReplayFixture.Chart();
         var first = NativeEliteReplayFixture.EliteNote(EliteDrumPad.Snare, .5);
@@ -86,9 +89,12 @@ public sealed class NativeEliteHatClosureReplayTests
         chart.EliteDrums.AddDifficulty(Difficulty.Expert,
             new(Instrument.EliteDrums, Difficulty.Expert, new() { first, stomp, later }, new(), new()));
         var parameters = Parameters(true);
-        var inputs = new[] { GameInput.Create(.5, EliteDrumsAction.EliteSnare, .8f),
-            GameInput.Create(1, EliteDrumsAction.EliteClosedHiHat, .4f),
-            GameInput.Create(1.02, EliteDrumsAction.EliteStomp, .6f) };
+        var snareInput = GameInput.Create(.5, EliteDrumsAction.EliteSnare, .8f);
+        var closedInput = GameInput.Create(1, EliteDrumsAction.EliteClosedHiHat, .4f);
+        var stompInput = GameInput.Create(1.02, EliteDrumsAction.EliteStomp, .6f);
+        var inputs = withPosition
+            ? new[] { snareInput, closedInput, GameInput.Create(1.018, (EliteDrumsAction)14, true), stompInput }
+            : new[] { snareInput, closedInput, stompInput };
         var engine = new EliteDrumsEngine(chart.EliteDrums.GetDifficulty(Difficulty.Expert).Clone(),
             chart.SyncTrack, parameters, false, true);
         engine.SetSpeed(1);
@@ -97,6 +103,8 @@ public sealed class NativeEliteHatClosureReplayTests
         // not prematurely resolve a pair whose companion could arrive on resume.
         engine.Update(savedAt);
         Assert.That(engine.EngineStats.NotesHit, Is.EqualTo(hits));
+        if (withPosition && hits == 2)
+            Assert.That(engine.EngineStats.Overhits, Is.Zero);
         var data = NativeEliteReplayFixture.RoundTrip(NativeEliteReplayFixture.Data(
             NativeEliteReplayFixture.Profile(Instrument.EliteDrums), parameters, engine.EngineStats, inputs));
         Assert.That(((DrumsEngineParameters)data.Frames[0].EngineParameters).HiHatClosureSuppression, Is.True);

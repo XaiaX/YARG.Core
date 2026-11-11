@@ -8,8 +8,9 @@ namespace YARG.Core.Engine.Drums.Engines
 {
     public partial class EliteDrumsEngine
     {
-        private enum ClosureDecision { Normal, Ignore, PedalFault }
+        private enum ClosureDecision { Normal, Ignore, PedalFault, Duplicate }
         private readonly Dictionary<long, ClosureDecision> _closureCompanions = new();
+        private readonly HashSet<long> _pedalsWithDuplicate = new();
         private long _closureInputSequence;
         private ClosureDecision _closureDecision;
         private GameInput? _ignoredClosureInput;
@@ -24,6 +25,7 @@ namespace YARG.Core.Engine.Drums.Engines
         private void ResetHiHatClosures()
         {
             _closureCompanions?.Clear();
+            _pedalsWithDuplicate?.Clear();
             _closureInputSequence = 0;
             _closureDecision = ClosureDecision.Normal;
             _ignoredClosureInput = null;
@@ -32,29 +34,63 @@ namespace YARG.Core.Engine.Drums.Engines
         private static bool IsClosureInput(GameInput input)
         {
             var action = input.GetAction<EliteDrumsAction>();
+            if (action == EliteDrumsAction.EliteHiHatPosition) return input.Integer == 1;
             if (action is not (EliteDrumsAction.EliteStomp or EliteDrumsAction.EliteClosedHiHat)) return false;
             if (action == EliteDrumsAction.EliteStomp && input.Integer == 1) return true;
             return input.Integer != 1 && input.Axis > 0 && !float.IsNaN(input.Axis) && !float.IsInfinity(input.Axis);
+        }
+
+        private static bool IsPedalClosure(GameInput input) => IsClosureInput(input) &&
+            input.GetAction<EliteDrumsAction>() != EliteDrumsAction.EliteClosedHiHat;
+
+        private bool ReserveDuplicatePedal(GameInput pedal, long pedalSequence, long currentSequence,
+            double availableUntil)
+        {
+            var otherSource = pedal.GetAction<EliteDrumsAction>() == EliteDrumsAction.EliteStomp
+                ? EliteDrumsAction.EliteHiHatPosition : EliteDrumsAction.EliteStomp;
+            long sequence = currentSequence;
+            foreach (var candidate in InputQueue)
+            {
+                sequence++;
+                if (candidate.Time > availableUntil) break;
+                if (sequence <= pedalSequence || candidate.GetAction<EliteDrumsAction>() != otherSource ||
+                    !IsClosureInput(candidate) || _closureCompanions.ContainsKey(sequence))
+                    continue;
+
+                _closureCompanions.Add(sequence, ClosureDecision.Duplicate);
+                return true;
+            }
+            return false;
         }
 
         private ClosureDecision ResolveHiHatClosure(GameInput input)
         {
             if (!EngineParameters.HiHatClosureSuppression || IsBot) return ClosureDecision.Normal;
             long sequence = _closureInputSequence++;
-            if (_closureCompanions.TryGetValue(sequence, out var reserved))
-            {
-                _closureCompanions.Remove(sequence);
-                return reserved;
-            }
-            if (!IsClosureInput(input)) return ClosureDecision.Normal;
+            _closureCompanions.Remove(sequence, out var reserved);
+            if (reserved == ClosureDecision.Duplicate || !IsClosureInput(input)) return reserved;
+
+            double availableUntil = input.Time + InputProcessingDelay;
+            bool firstIsPedal = IsPedalClosure(input);
+            if (firstIsPedal && !_pedalsWithDuplicate.Remove(sequence))
+                ReserveDuplicatePedal(input, sequence, sequence, availableUntil);
+            if (reserved != ClosureDecision.Normal) return reserved;
+
             long companionSequence = sequence;
             foreach (var companion in InputQueue)
             {
                 companionSequence++;
-                if (companion.Time > input.Time + InputProcessingDelay) break;
-                if (_closureCompanions.ContainsKey(companionSequence) || !IsClosureInput(companion) ||
-                    companion.Action == input.Action) continue;
-                bool firstIsPedal = input.GetAction<EliteDrumsAction>() == EliteDrumsAction.EliteStomp;
+                if (companion.Time > availableUntil) break;
+                if (!IsClosureInput(companion) || IsPedalClosure(companion) == firstIsPedal) continue;
+                bool alreadyReserved = _closureCompanions.TryGetValue(companionSequence, out var decision);
+                if (decision == ClosureDecision.Duplicate) continue;
+                // A second strike must skip the redundant pedal source even if the first
+                // strike reserved the primary before the redundant event arrived.
+                if (!firstIsPedal && !_pedalsWithDuplicate.Contains(companionSequence) &&
+                    ReserveDuplicatePedal(companion, companionSequence, sequence, availableUntil))
+                    _pedalsWithDuplicate.Add(companionSequence);
+                if (alreadyReserved) continue;
+
                 var pedal = firstIsPedal ? input : companion;
                 var closed = firstIsPedal ? companion : input;
                 var disposition = ClassifyHiHatClosure(pedal.Time, closed.Time);
