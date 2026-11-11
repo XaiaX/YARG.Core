@@ -1,3 +1,4 @@
+// pattern: Functional Core
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -90,7 +91,8 @@ namespace YARG.Core.Engine.Vocals.Engines
         private readonly VocalsPart[] _allParts;
         private readonly bool[] _partHasContent;
         private readonly int[][] _partPhraseIndices;
-        private readonly bool[,] _partPhraseHasVocalContent;
+        private readonly uint[,] _partPhraseVocalTicks;
+        private readonly uint[] _masterPhraseVocalTicks;
         private readonly CountInTimelineEntry[][] _countInTimelines;
         // Merged contiguous non-percussion child runs per lane. Kept separately from the
         // count-in descriptors because PartInCurrentVocalRun is a run-presence query, not
@@ -133,9 +135,6 @@ namespace YARG.Core.Engine.Vocals.Engines
         // Sub-engines (one per mic, composition)
         private readonly YargFreeVocalsEngine[] _subEngines;
 
-        // Per-phrase tracking for the coordinator's own phrase-end logic
-        private uint? _coordinatorPhraseTicksTotal;
-
         // Percussion notes this coordinator has already scored or missed. Tracked locally
         // instead of via VocalNote.WasHit/WasMissed: the note objects are shared with the
         // sub-engines and other players' engines, so setting hit/miss state on them leaks
@@ -160,12 +159,20 @@ namespace YARG.Core.Engine.Vocals.Engines
             _allParts = allParts.ToArray();
             _partHasContent = new bool[partCount];
             _partPhraseIndices = new int[partCount][];
-            _partPhraseHasVocalContent = new bool[partCount, Notes.Count];
+            _partPhraseVocalTicks = new uint[partCount, Notes.Count];
+            _masterPhraseVocalTicks = new uint[Notes.Count];
             for (int i = 0; i < Notes.Count; i++)
             {
                 for (int j = 0; j < partCount; j++)
-                    _partPhraseHasVocalContent[j, i] = GetTicksInPhraseForPart(_allParts[j], Notes[i]) > 0u;
+                {
+                    uint ticks = GetTicksInPhraseForPart(_allParts[j], Notes[i]);
+                    _partPhraseVocalTicks[j, i] = ticks;
+                    _masterPhraseVocalTicks[i] += ticks;
+                }
             }
+            (BaseScore, BaseNoteScore) = CalculateVocalChartScores(i => _masterPhraseVocalTicks[i] > 0u);
+            StarScoreThresholds = PopulateStarScoreThresholds(engineParameters.StarMultiplierThresholds,
+                engineParameters.SoloBonusStarMultiplierThresholds, BaseScore, EngineStats.MaxSoloBonusPoints);
             _denominatorPulseTicks = BuildDenominatorPulseTicks();
             _countInTimelines = new CountInTimelineEntry[partCount][];
             _partVocalRuns = new (long Start, long End)[partCount][];
@@ -224,7 +231,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                 var phraseIndices = new List<int>();
                 for (int i = 0; i < Notes.Count; i++)
                 {
-                    if (GetTicksInPhraseForPart(_allParts[j], Notes[i]) > 0u)
+                    if (_partPhraseVocalTicks[j, i] > 0u)
                         phraseIndices.Add(i);
                 }
                 _partPhraseIndices[j] = phraseIndices.ToArray();
@@ -263,10 +270,10 @@ namespace YARG.Core.Engine.Vocals.Engines
         /// </summary>
         public bool PartInCurrentMasterPhraseWithContent(int partIndex)
         {
-            if (partIndex < 0 || partIndex >= _partPhraseHasVocalContent.GetLength(0)) return false;
+            if (partIndex < 0 || partIndex >= _partPhraseVocalTicks.GetLength(0)) return false;
             int phraseIndex = NoteIndex;
-            return phraseIndex >= 0 && phraseIndex < _partPhraseHasVocalContent.GetLength(1)
-                && _partPhraseHasVocalContent[partIndex, phraseIndex];
+            return phraseIndex >= 0 && phraseIndex < _partPhraseVocalTicks.GetLength(1)
+                && _partPhraseVocalTicks[partIndex, phraseIndex] > 0u;
         }
 
         /// <summary>True only while a non-percussion child run is active at the current tick.</summary>
@@ -433,7 +440,7 @@ namespace YARG.Core.Engine.Vocals.Engines
                 long target = runs[runIndex].start;
 
                 bool eligible = phraseIndex == 0
-                    || !_partPhraseHasVocalContent[partIndex, phraseIndex - 1];
+                    || _partPhraseVocalTicks[partIndex, phraseIndex - 1] == 0u;
                 if (!eligible) continue;
 
                 long start;
@@ -648,15 +655,13 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Populate per-part tick totals for the current phrase. The coordinator's
             // phrase total sums across ALL harmony parts — not just Parts[0]/HARM1 — so
             // phrases that only have HARM2/HARM3 notes are not treated as empty.
-            uint allPartsTotal = 0;
             for (int j = 0; j < _allParts.Length; j++)
             {
-                _phraseTicksTotalPerPart[j] = GetTicksInPhraseForPart(_allParts[j]);
-                allPartsTotal += _phraseTicksTotalPerPart[j];
+                _phraseTicksTotalPerPart[j] = _partPhraseVocalTicks[j, NoteIndex];
             }
 
-            _coordinatorPhraseTicksTotal ??= allPartsTotal;
-            PhraseTicksTotal ??= _coordinatorPhraseTicksTotal;
+            uint phraseTicksTotal = _masterPhraseVocalTicks[NoteIndex];
+            PhraseTicksTotal ??= phraseTicksTotal;
 
             // Run the coordinator's per-tick ambiguity classifier
             AccumulateAmbiguityScoring();
@@ -686,13 +691,11 @@ namespace YARG.Core.Engine.Vocals.Engines
             // Check for end of phrase
             if (CurrentTick > phrase.TickEnd)
             {
-                bool hasNotes = _coordinatorPhraseTicksTotal.Value != 0;
                 bool isLastPhrase = NoteIndex == Notes.Count - 1;
-                uint phraseTicksTotal = _coordinatorPhraseTicksTotal.Value;
 
                 if (phraseTicksTotal == 0)
                 {
-                    HitNote(phrase);
+                    HitNote(phrase, phraseTicksTotal);
                     // Fire OnPhraseHit so _phrasePercents stays aligned with
                     // _phraseGrades/_phrasePartResults (populated by the
                     // OnPartyVocalsPhrase handler below).
@@ -791,7 +794,7 @@ namespace YARG.Core.Engine.Vocals.Engines
             if (hit)
             {
                 EngineStats.TicksHit += phraseTicksTotal;
-                HitNote(phrase);
+                HitNote(phrase, phraseTicksTotal);
             }
             else
             {
@@ -809,7 +812,6 @@ namespace YARG.Core.Engine.Vocals.Engines
         {
             PhraseTicksHit = 0;
             PhraseTicksTotal = null;
-            _coordinatorPhraseTicksTotal = null;
 
             Array.Clear(_micPartHits, 0, _micPartHits.Length);
             Array.Clear(_lastWindowSnapshot, 0, _lastWindowSnapshot.Length);
@@ -993,12 +995,8 @@ namespace YARG.Core.Engine.Vocals.Engines
 
         #region Helpers
 
-        private uint GetTicksInPhraseForPart(VocalsPart part) =>
-            GetTicksInPhraseForPart(part, Notes[NoteIndex]);
-
-        private uint GetTicksInPhraseForPart(VocalsPart part, VocalNote masterPhrase)
+        private static uint GetTicksInPhraseForPart(VocalsPart part, VocalNote masterPhrase)
         {
-            uint masterStart = masterPhrase.Tick;
             uint masterEnd = masterPhrase.TickEnd;
 
             uint totalTime = 0;
@@ -1006,12 +1004,10 @@ namespace YARG.Core.Engine.Vocals.Engines
             {
                 var phraseNote = partPhrase.PhraseParentNote;
                 if (phraseNote.Tick >= masterEnd) break;
-                if (phraseNote.TickEnd <= masterStart) continue;
-
                 foreach (var noteInPhrase in phraseNote.ChildNotes)
                 {
-                    if (noteInPhrase.IsPercussion || noteInPhrase.Tick >= masterEnd
-                        || noteInPhrase.TotalTickEnd <= masterStart) continue;
+                    if (noteInPhrase.Tick >= masterEnd) break;
+                    if (noteInPhrase.IsPercussion) continue;
 
                     // Clamp against the master phrase, not the source phrase. This counts
                     // only the overlap and avoids dropping a carried note at the boundary.
