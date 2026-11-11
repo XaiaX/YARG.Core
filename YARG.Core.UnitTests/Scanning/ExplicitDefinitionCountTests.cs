@@ -182,8 +182,9 @@ public sealed class ExplicitDefinitionCountTests
         string replacement = Source("replacement", "(missing)\n(other)");
         using var candidate = Scan(SongScanScope.Updates, replacement, deferred: true);
         Counts(candidate, 2, 0);
-        File.WriteAllText(replacement, "(changed)");
-        Assert.Throws<IOException>(() => candidate.Commit());
+        CacheHandler.BeforeCacheCommit = () => throw new IOException("Cannot publish cache");
+        try { Assert.Throws<IOException>(() => candidate.Commit()); }
+        finally { CacheHandler.BeforeCacheCommit = null; }
         Assert.That(File.ReadAllBytes(_cache), Is.EqualTo(previous));
         using var quick = Scan(SongScanScope.All, updates, quick: true);
         Counts(quick, 1, 0);

@@ -1,5 +1,6 @@
 // pattern: Mixed (needs refactoring)
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -18,6 +19,7 @@ namespace YARG.Core.Song.Cache
         private SongSourceConfiguration? explicitSources;
         private readonly List<BaseDescriptor> baseDescriptors = new();
         private HashSet<string>? rebuildNodes;
+        private ScanAssetCapture? scanAssets;
         private Inventory? appliedInventory;
         private LegacySongHashCache legacySongHashes = new();
         private readonly Dictionary<string, SupplementPackage> scanPackages = new(SongSourceConfiguration.PathComparer);
@@ -31,10 +33,10 @@ namespace YARG.Core.Song.Cache
             public string Path = string.Empty;
             public long Length;
             public DateTime Modified;
-            public static Dependency Capture(string path)
+            public static Dependency Capture(string path) => Capture(new FileInfo(path));
+            public static Dependency Capture(FileInfo info)
             {
-                var info = new FileInfo(path);
-                return new Dependency { Path = path, Length = info.Exists ? info.Length : -1,
+                return new Dependency { Path = info.FullName, Length = info.Exists ? info.Length : -1,
                     Modified = info.Exists ? AbridgedFileInfo.NormalizedLastWrite(info) : default };
             }
             public bool Valid() { var now = Capture(Path); return Length == now.Length && Modified == now.Modified; }
@@ -52,18 +54,6 @@ namespace YARG.Core.Song.Cache
             public List<Dependency> Dependencies = new();
             public Dictionary<string, string> MidiHashes = new();
             public Dictionary<string, List<string>> NodeAssets = new();
-            public bool MidiContentValid(bool finalCheck = false)
-            {
-                if (PackageManifest != null) return PackageValid();
-                int completed = 0;
-                foreach (var pair in MidiHashes)
-                {
-                    Report(finalCheck ? "Final verification — MIDI contents..." : "Checking MIDI contents...", pair.Key, completed, MidiHashes.Count);
-                    if (!File.Exists(pair.Key) || Fingerprint(File.ReadAllBytes(pair.Key)) != pair.Value) return false;
-                    Report(finalCheck ? "Final verification — MIDI contents..." : "Checking MIDI contents...", pair.Key, ++completed, MidiHashes.Count);
-                }
-                return true;
-            }
             private bool PackageValid()
             {
                 using var package = SupplementPackage.Open(Path);
@@ -77,21 +67,35 @@ namespace YARG.Core.Song.Cache
                         SongSourceConfiguration.PathComparer == StringComparer.OrdinalIgnoreCase ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)).All(d =>
                         d.Valid() && (!MidiHashes.TryGetValue(d.Path, out var hash) ||
                             File.Exists(d.Path) && Fingerprint(File.ReadAllBytes(d.Path)) == hash)));
-            public bool Valid(bool finalCheck = false)
+        }
+
+        // Shared by the validation and rebuild stages. Lazy values prevent concurrent
+        // rebuilds of the same node from opening the same asset more than once.
+        internal sealed class ScanAssetCapture
+        {
+            private readonly ConcurrentDictionary<string, Lazy<FileInfo>> _files = new(SongSourceConfiguration.PathComparer);
+            private readonly ConcurrentDictionary<string, Lazy<byte[]>> _midis = new(SongSourceConfiguration.PathComparer);
+            private readonly ConcurrentDictionary<string, Lazy<ScanResult?>> _moggs = new(SongSourceConfiguration.PathComparer);
+
+            internal FileInfo FileMetadata(string path) => _files.GetOrAdd(path, p => new Lazy<FileInfo>(() =>
             {
-                if (string.IsNullOrEmpty(Path)) return true;
-                if (PackageManifest != null) return PackageValid();
-                Report(finalCheck ? "Final verification — dependencies..." : "Checking source dependencies...", Path, 0, Dependencies.Count);
-                if (!File.Exists(Path) || !Data.SequenceEqual(File.ReadAllBytes(Path))) return false;
-                int completed = 0;
-                foreach (var dependency in Dependencies)
+                var info = new FileInfo(p);
+                _ = info.Exists; // Populate the metadata before sharing the FileInfo.
+                return info;
+            })).Value;
+
+            internal byte[] ReadMidi(string path) => _midis.GetOrAdd(path,
+                p => new Lazy<byte[]>(() => File.ReadAllBytes(p))).Value;
+
+            internal ScanResult? ReadMogg(string path, Func<Stream?> open) => _moggs.GetOrAdd(path,
+                _ => new Lazy<ScanResult?>(() =>
                 {
-                    Report(finalCheck ? "Final verification — dependencies..." : "Checking source dependencies...", dependency.Path, completed, Dependencies.Count);
-                    if (!dependency.Valid()) return false;
-                    Report(finalCheck ? "Final verification — dependencies..." : "Checking source dependencies...", dependency.Path, ++completed, Dependencies.Count);
-                }
-                return true;
-            }
+                    using var stream = open();
+                    return stream == null ? null : RBCONEntry.ValidateMoggHeader(stream);
+                })).Value;
+
+            internal ScanResult? ReadLooseMogg(string path) =>
+                ReadMogg(path, () => FileMetadata(path).Exists ? File.OpenRead(path) : null);
         }
         private sealed class BaseDescriptor
         {
@@ -137,7 +141,7 @@ namespace YARG.Core.Song.Cache
             if (explicitSources == null || rebuildNodes != null) return;
             string identity = group.Type == CONEntryGroup.CONEntryType.PackedCONEntry ? group.Root.FullName : Path.Combine(group.Root.FullName, CONEntryGroup.SONGS_DTA);
             var descriptor = new BaseDescriptor { Root = group.Root.FullName,
-                Type = group.Type, Playlist = group.DefaultPlaylist, Identity = Dependency.Capture(identity),
+                Type = group.Type, Playlist = group.DefaultPlaylist, Identity = Dependency.Capture(scanAssets!.FileMetadata(identity)),
                 Nodes = group.Select(n => n.Key).ToList(), Listings = (group as PackedCONEntryGroup)?.Listings };
             if (group.Type != CONEntryGroup.CONEntryType.PackedCONEntry)
                 foreach (var node in group)
@@ -148,15 +152,15 @@ namespace YARG.Core.Song.Cache
                         var dta = DTAEntry.Create(node.Key, container);
                         if (dta.Location == null) continue;
                         string relative = dta.Location.StartsWith("songs/", StringComparison.Ordinal) ? dta.Location.Substring(6) : dta.Location;
-                        dependencies.Add(Dependency.Capture(Path.Combine(group.Root.FullName, relative +
-                            (group.Type == CONEntryGroup.CONEntryType.UnpackedPKGEntry ? ".mid.edat" : ".mid"))));
+                        dependencies.Add(Dependency.Capture(scanAssets!.FileMetadata(Path.Combine(group.Root.FullName, relative +
+                            (group.Type == CONEntryGroup.CONEntryType.UnpackedPKGEntry ? ".mid.edat" : ".mid")))));
                     }
                     descriptor.Midi[node.Key] = dependencies;
                 }
             lock (baseDescriptors) baseDescriptors.Add(descriptor);
         }
 
-        private SourceSnapshot LoadExplicitSource(string path, bool updates, SourceSnapshot? applied = null)
+        private SourceSnapshot LoadExplicitSource(string path, bool updates, HashSet<string> installedNodes, SourceSnapshot? applied = null)
         {
             var snapshot = new SourceSnapshot { Path = path, Label = updates ? "Updates" : "Upgrades" };
             if (path.Length == 0) return snapshot;
@@ -174,7 +178,40 @@ namespace YARG.Core.Song.Cache
             if (applied?.PackageManifest != null && applied.PackageManifest != snapshot.PackageManifest)
                 throw new IOException("Applied package changed. Scan its source again.");
             snapshot.Report("Reading source definitions...", path);
-            snapshot.Data = applied?.Data ?? package?.DtaBytes ?? File.ReadAllBytes(path);
+            snapshot.Data = package?.DtaBytes ?? File.ReadAllBytes(path);
+            if (applied != null)
+            {
+                if (package == null && !applied.Data.SequenceEqual(snapshot.Data))
+                    throw new IOException("Applied " + snapshot.Label + " source changed. Scan its source again.");
+                snapshot.Dependencies = applied.Dependencies;
+                snapshot.MidiHashes = applied.MidiHashes;
+                snapshot.NodeAssets = applied.NodeAssets;
+                int checkedCount = 0;
+                foreach (var dependency in applied.Dependencies)
+                {
+                    snapshot.Report("Checking applied source dependencies...", dependency.Path, checkedCount++, applied.Dependencies.Count);
+                    var current = Dependency.Capture(scanAssets!.FileMetadata(dependency.Path));
+                    if (current.Length != dependency.Length || current.Modified != dependency.Modified)
+                        throw new IOException("Applied " + snapshot.Label + " source changed. Scan its source again: " + dependency.Path);
+                }
+            }
+
+            var recorded = new HashSet<string>(snapshot.Dependencies.Select(d => d.Path), SongSourceConfiguration.PathComparer);
+            Dependency CaptureAsset(string assetPath)
+            {
+                var dependency = Dependency.Capture(scanAssets!.FileMetadata(assetPath));
+                if (applied == null && recorded.Add(dependency.Path)) snapshot.Dependencies.Add(dependency);
+                return dependency;
+            }
+
+            DateTime? CaptureUpdateMidi(string node)
+            {
+                if (!installedNodes.Contains(node)) return null;
+                string assetPath = Path.Combine(Path.GetDirectoryName(path)!, node, node + "_update.mid");
+                var dependency = CaptureAsset(assetPath);
+                return dependency.Length < 0 ? null : dependency.Modified;
+            }
+
             string definition = System.Text.Encoding.UTF8.GetString(snapshot.Data).TrimStart('\uFEFF');
             string uncommented = string.Join("\n", definition.Replace('\r', '\n').Split('\n').Select(line => line.Split(';')[0]));
             if (string.IsNullOrWhiteSpace(uncommented)) return snapshot;
@@ -183,56 +220,41 @@ namespace YARG.Core.Song.Cache
             // Parsing is performed by the existing production DTA readers and entry constructors.
             if (updates)
             {
-                if (!CONUpdateGroup.Create(Path.GetDirectoryName(path)!, new FileInfo(path), out var group, snapshot.Data, package))
+                if (!CONUpdateGroup.Create(Path.GetDirectoryName(path)!, scanAssets!.FileMetadata(path), out var group, snapshot.Data, package, CaptureUpdateMidi))
                     throw new IOException("Cannot parse Updates DTA: " + path);
                 group.ExplicitSource = true;
                 updateGroups.Add(group);
                 snapshot.Nodes.AddRange(group.Updates.Keys);
                 snapshot.DefinitionCount = group.Updates.Values.Sum(node => node.Containers.Count);
-                foreach (string node in snapshot.Nodes.Where(_ => package == null))
+                if (package == null && applied == null)
                 {
-                    snapshot.Report("Finding source assets...", path, snapshot.Dependencies.Count / 5, snapshot.Nodes.Count);
-                    string directory = Path.Combine(Path.GetDirectoryName(path)!, node);
-                    snapshot.Dependencies.Add(Dependency.Capture(Path.Combine(directory, node + "_update.mid")));
-                    snapshot.Dependencies.Add(Dependency.Capture(Path.Combine(directory, node + "_update.mogg")));
-                    snapshot.Dependencies.Add(Dependency.Capture(Path.Combine(directory, node + ".voc")));
-                    snapshot.Dependencies.Add(Dependency.Capture(Path.Combine(directory, "gen", node + "_keep.png_xbox")));
-                    snapshot.Dependencies.Add(Dependency.Capture(Path.Combine(directory, "gen", node + ".milo_xbox")));
-                    // Update definitions may supply only metadata, including disc_update nodes.
-                    // Record absent assets too, so applied snapshots still detect later changes.
+                    var matched = snapshot.Nodes.Where(installedNodes.Contains).ToArray();
+                    for (int i = 0; i < matched.Length; i++)
+                    {
+                        string node = matched[i];
+                        string directory = Path.Combine(Path.GetDirectoryName(path)!, node);
+                        snapshot.Report("Finding source assets...", directory, i, matched.Length);
+                        CaptureAsset(Path.Combine(directory, node + "_update.mogg"));
+                        CaptureAsset(Path.Combine(directory, node + ".voc"));
+                        CaptureAsset(Path.Combine(directory, "gen", node + "_keep.png_xbox"));
+                        CaptureAsset(Path.Combine(directory, "gen", node + ".milo_xbox"));
+                    }
                 }
             }
             else
             {
-                var group = UnpackedCONUpgradeGroup.CreateExplicit(new FileInfo(path), snapshot.Data, package);
+                var group = UnpackedCONUpgradeGroup.CreateExplicit(scanAssets!.FileMetadata(path), snapshot.Data, package,
+                    midiPath =>
+                    {
+                        var dependency = CaptureAsset(midiPath);
+                        return dependency.Length < 0 ? null : dependency.Modified;
+                    });
                 unpackedUpgradeGroups.Add(group);
-                // Include definitions without a MIDI, so removals and unmatched nodes remain observable.
-                using var data = FixedArray<byte>.Alloc(snapshot.Data.Length);
-                snapshot.Data.AsSpan().CopyTo(data.Span);
-                var text = YARGDTAReader.Create(data);
-                while (YARGDTAReader.StartNode(ref text))
-                {
-                    snapshot.Nodes.Add(YARGDTAReader.GetNameOfNode(ref text, true));
-                    YARGDTAReader.EndNode(ref text);
-                }
-                snapshot.DefinitionCount = snapshot.Nodes.Count;
-                foreach (string node in snapshot.Nodes.Where(_ => package == null))
-                {
-                    snapshot.Report("Finding source assets...", path, snapshot.Dependencies.Count, snapshot.Nodes.Count);
-                    snapshot.Dependencies.Add(Dependency.Capture(Path.Combine(Path.GetDirectoryName(path)!, node + RBProUpgrade.UPGRADES_MIDI_EXT)));
-                }
+                snapshot.Nodes.AddRange(group.Upgrades.Keys);
+                snapshot.DefinitionCount = group.DefinitionCount;
             }
-            if (applied != null)
-            {
-                snapshot.Dependencies = applied.Dependencies;
-                snapshot.MidiHashes = applied.MidiHashes;
-                snapshot.NodeAssets = applied.NodeAssets;
-            }
-            else
-            {
-                ValidateSelectedAssets(snapshot, snapshot.Dependencies, captureMidiHashes: true);
-            }
-            if (!snapshot.Valid()) throw new IOException("Source changed while being read: " + path);
+
+            if (applied == null) ValidateSelectedAssets(snapshot, snapshot.Dependencies, captureMidiHashes: true);
             return snapshot;
         }
 
@@ -277,12 +299,6 @@ namespace YARG.Core.Song.Cache
                     prior.Updates.Label = "Updates";
                     prior.Upgrades.Label = "Upgrades";
                 }
-                if (partial && prior != null)
-                {
-                    var other = scope == SongScanScope.Updates ? prior.Upgrades : prior.Updates;
-                    if (!other.Valid()) throw new IOException("Applied " + (scope == SongScanScope.Updates ? "Upgrades" : "Updates") +
-                        " source changed or disappeared. Scan that section or Scan All before continuing.");
-                }
                 // Startup trusts the applied inventory. External edits are picked up by
                 // explicit scans; per-song validation still guards playback of stale assets.
                 if (tryQuickScan && !partial && prior != null &&
@@ -300,16 +316,25 @@ namespace YARG.Core.Song.Cache
                 var applied = partial && prior != null ? new SongSourceConfiguration(sources.SongFolders,
                     scope == SongScanScope.Updates ? sources.UpdatesDtaPath : prior.Updates.Path,
                     scope == SongScanScope.Upgrades ? sources.UpgradesDtaPath : prior.Upgrades.Path) : sources;
-                using var handler = new CacheHandler(applied.SongFolders.ToList(), false) { explicitSources = applied, appliedInventory = prior };
+                using var handler = new CacheHandler(applied.SongFolders.ToList(), false) { explicitSources = applied, appliedInventory = prior, scanAssets = new ScanAssetCapture() };
                 handler.legacySongHashes = LegacySongHashCache.Import(prior?.LegacySongHashes);
                 var next = new Inventory { Roots = applied.SongFolders.ToList(), FullPlaylists = fullDirectoryPlaylists };
                 if (prior != null) next.ExcludedRoots.AddRange(prior.ExcludedRoots);
                 foreach (string path in new[] { applied.UpdatesDtaPath, applied.UpgradesDtaPath })
                     if (path.Length > 0 && !SupplementalAssetSource.IsPackage(path) && !next.ExcludedRoots.Contains(Path.GetDirectoryName(path)!)) next.ExcludedRoots.Add(Path.GetDirectoryName(path)!);
                 handler.excludedSupplementRoots.UnionWith(next.ExcludedRoots);
-                next.Updates = handler.LoadExplicitSource(applied.UpdatesDtaPath, true,
+                // Match against discovered base definitions, including songs an update could make playable.
+                if (!partial)
+                {
+                    _progress.Stage = ScanStage.LoadingSongs;
+                    handler.DiscoverEntries(fullDirectoryPlaylists);
+                }
+                var installedNodes = new HashSet<string>(partial
+                    ? prior!.Bases.SelectMany(b => b.Nodes)
+                    : handler.conEntryGroups.SelectMany(group => group.Select(node => node.Key)));
+                next.Updates = handler.LoadExplicitSource(applied.UpdatesDtaPath, true, installedNodes,
                     partial && scope == SongScanScope.Upgrades ? prior!.Updates : null);
-                next.Upgrades = handler.LoadExplicitSource(applied.UpgradesDtaPath, false,
+                next.Upgrades = handler.LoadExplicitSource(applied.UpgradesDtaPath, false, installedNodes,
                     partial && scope == SongScanScope.Updates ? prior!.Upgrades : null);
                 int affected = 0;
                 if (partial && prior != null)
@@ -330,16 +355,23 @@ namespace YARG.Core.Song.Cache
                             if (cached != null) handler.conEntryGroups.Add(cached);
                             continue;
                         }
-                        if (!descriptor.Identity.Valid() || descriptor.Midi.Where(p => handler.rebuildNodes.Contains(p.Key)).SelectMany(p => p.Value).Any(d => !d.Valid())) throw new FullScanRequiredException("An affected base package changed or disappeared. Run Scan All.");
+                        bool Changed(Dependency dependency)
+                        {
+                            var captured = Dependency.Capture(handler.scanAssets!.FileMetadata(dependency.Path));
+                            return captured.Length != dependency.Length || captured.Modified != dependency.Modified;
+                        }
+                        if (Changed(descriptor.Identity) || descriptor.Midi.Where(p => handler.rebuildNodes.Contains(p.Key))
+                            .SelectMany(p => p.Value).Any(Changed))
+                            throw new FullScanRequiredException("An affected base package changed or disappeared. Run Scan All.");
                         ScanObservation?.Invoke("base:" + descriptor.Root);
                         CONEntryGroup? group;
                         if (descriptor.Type == CONEntryGroup.CONEntryType.PackedCONEntry)
-                            group = handler.CreateCONGroup(new FileInfo(descriptor.Root), descriptor.Playlist).Entries;
+                            group = handler.CreateCONGroup(handler.scanAssets!.FileMetadata(descriptor.Root), descriptor.Playlist).Entries;
                         else
                         {
                             bool ok = descriptor.Type == CONEntryGroup.CONEntryType.UnpackedPKGEntry
-                                ? UnpackedPKGEntryGroup.Create(descriptor.Root, new FileInfo(descriptor.Identity.Path), descriptor.Playlist, out group!)
-                                : UnpackedCONEntryGroup.Create(descriptor.Root, new FileInfo(descriptor.Identity.Path), descriptor.Playlist, out group!);
+                                ? UnpackedPKGEntryGroup.Create(descriptor.Root, handler.scanAssets!.FileMetadata(descriptor.Identity.Path), descriptor.Playlist, out group!)
+                                : UnpackedCONEntryGroup.Create(descriptor.Root, handler.scanAssets!.FileMetadata(descriptor.Identity.Path), descriptor.Playlist, out group!);
                             if (ok) handler.conEntryGroups.Add(group!);
                         }
                         if (group == null) throw new FullScanRequiredException("An affected base package cannot be opened. Run Scan All.");
@@ -358,15 +390,11 @@ namespace YARG.Core.Song.Cache
                 {
                     ClearSourceValidation();
                     _progress.Stage = ScanStage.LoadingSongs;
-                    handler.FindNewEntries(fullDirectoryPlaylists);
+                    handler.BuildCONEntries();
                     next.Bases = handler.baseDescriptors;
                     affected = next.Bases.Sum(b => b.Nodes.Count);
                 }
-                CompleteUpdateAssetManifest(next.Updates, handler.cache, next.Bases, scope == SongScanScope.Upgrades);
-                if (!next.Updates.Valid() || !next.Upgrades.Valid()) throw new IOException("Supplemental files changed during scanning. Scan the changed section again.");
-                if (partial && next.Bases.Where(b => b.Nodes.Any(handler.rebuildNodes!.Contains)).Any(b => !b.Identity.Valid() ||
-                    b.Midi.Where(p => handler.rebuildNodes!.Contains(p.Key)).SelectMany(p => p.Value).Any(d => !d.Valid())))
-                    throw new FullScanRequiredException("An affected base package changed during scanning. Run Scan All.");
+                handler.CompleteUpdateAssetManifest(next.Updates, next.Bases, installedNodes, scope == SongScanScope.Upgrades);
                 payload ??= TemporaryPath(cacheLocation);
                 ClearSourceValidation();
                 _progress.Stage = ScanStage.WritingCache;
@@ -385,34 +413,20 @@ namespace YARG.Core.Song.Cache
                     output.Flush();
                     ((FileStream)output.BaseStream).Flush(true);
                 }
-                var affectedNodes = handler.rebuildNodes;
-                var commitBases = next.Bases.Where(b => !partial || b.Nodes.Any(affectedNodes!.Contains)).ToArray();
                 string retainedCandidate = candidate;
                 var diagnosticEntries = handler.badSongs.ToArray();
                 string? diagnosticText = diagnosticEntries.Length == 0 ? null :
                     string.Join(Environment.NewLine, diagnosticEntries.Select(p => p.Key + ": " + p.Value));
                 AttachValidation(handler.cache, next);
                 var result = new SongScanResult(SongScanStatus.Success, handler.cache, string.Empty, applied, affected,
-                    next.Updates.Nodes.Concat(next.Upgrades.Nodes).Distinct().Count(n => !next.Bases.Any(b => b.Nodes.Contains(n))),
+                    next.Updates.Nodes.Concat(next.Upgrades.Nodes).Distinct().Count(n => !installedNodes.Contains(n)),
                     next.Updates.DefinitionCount, next.Upgrades.DefinitionCount);
                 result.SetCandidate(() =>
                 {
-                    try
-                    {
-                        ReportSourceValidation("Checking library before publication...", string.Empty);
-                        BeforeCacheCommit?.Invoke();
-                        if (commitBases.Any(b => !b.Identity.Valid() ||
-                            b.Midi.Where(p => !partial || affectedNodes!.Contains(p.Key)).SelectMany(p => p.Value).Any(d => !d.Valid())))
-                            throw new IOException("An affected base package changed before publication. Run Scan All.");
-                        if ((scope != SongScanScope.Upgrades && !next.Updates.MidiContentValid(finalCheck: true)) ||
-                            (scope != SongScanScope.Updates && !next.Upgrades.MidiContentValid(finalCheck: true)))
-                            throw new IOException("Selected source MIDI changed during scanning. Scan again.");
-                        if (!next.Updates.Valid(finalCheck: true) || !next.Upgrades.Valid(finalCheck: true)) throw new IOException("Supplemental files changed before publication. Scan again.");
-                        if (File.Exists(cacheLocation)) File.Replace(retainedCandidate, cacheLocation, null);
-                        else File.Move(retainedCandidate, cacheLocation);
-                        WriteExplicitDiagnostics(badSongsLocation, diagnosticText);
-                    }
-                    finally { ClearSourceValidation(); }
+                    BeforeCacheCommit?.Invoke();
+                    if (File.Exists(cacheLocation)) File.Replace(retainedCandidate, cacheLocation, null);
+                    else File.Move(retainedCandidate, cacheLocation);
+                    WriteExplicitDiagnostics(badSongsLocation, diagnosticText);
                 }, () => CleanupTemporary(retainedCandidate));
                 try
                 {
@@ -448,16 +462,19 @@ namespace YARG.Core.Song.Cache
                 if (candidate != null) CleanupTemporary(candidate);
             }
         }
-        private static void CompleteUpdateAssetManifest(SourceSnapshot source, SongCache cache, List<BaseDescriptor> bases, bool validateAppliedPathsOnly)
+        private void CompleteUpdateAssetManifest(SourceSnapshot source, List<BaseDescriptor> bases, HashSet<string> installedNodes, bool validateAppliedPathsOnly)
         {
             if (source.Path.Length == 0 || source.PackageManifest != null) return;
             int completed = 0;
             var newDependencies = new List<Dependency>();
-            foreach (string node in source.Nodes)
+            var matched = source.Nodes.Where(installedNodes.Contains).ToArray();
+            var effectiveSubnames = cache.Entries.Values.SelectMany(v => v).OfType<RBCONEntry>()
+                .ToLookup(e => e.NodeName, e => e.AssetSubName, StringComparer.Ordinal);
+            var recorded = new HashSet<string>(source.Dependencies.Select(d => d.Path), SongSourceConfiguration.PathComparer);
+            foreach (string node in matched)
             {
-                source.Report("Checking update asset paths...", source.Path, completed++, source.Nodes.Count);
-                var subnames = new HashSet<string>(cache.Entries.Values.SelectMany(v => v).OfType<RBCONEntry>()
-                    .Where(e => e.NodeName == node).Select(e => e.AssetSubName), StringComparer.Ordinal);
+                source.Report("Checking update asset paths...", source.Path, completed++, matched.Length);
+                var subnames = new HashSet<string>(effectiveSubnames[node], StringComparer.Ordinal);
                 foreach (var descriptor in bases)
                     if (descriptor.Midi.TryGetValue(node, out var midis))
                         foreach (var midi in midis) subnames.Add(System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(midi.Path)!));
@@ -473,15 +490,15 @@ namespace YARG.Core.Song.Cache
                 if (validateAppliedPathsOnly)
                 {
                     if (paths.Any(path => !source.NodeAssets.TryGetValue(node, out var appliedPaths) ||
-                        !appliedPaths.Contains(path) || !source.Dependencies.Any(d => SongSourceConfiguration.PathComparer.Equals(d.Path, path))))
+                        !appliedPaths.Contains(path) || !recorded.Contains(path)))
                         throw new IOException("Upgrades changes runtime asset paths used by applied Updates. Run Scan Updates or Scan All before applying this location change.");
                     continue;
                 }
                 source.NodeAssets[node] = paths;
                 foreach (string path in paths)
-                    if (!source.Dependencies.Any(d => SongSourceConfiguration.PathComparer.Equals(d.Path, path)))
+                    if (recorded.Add(path))
                     {
-                        var dependency = Dependency.Capture(path);
+                        var dependency = Dependency.Capture(scanAssets!.FileMetadata(path));
                         source.Dependencies.Add(dependency);
                         newDependencies.Add(dependency);
                     }
@@ -503,10 +520,12 @@ namespace YARG.Core.Song.Cache
             error == ScanResult.InvalidResolution_Update || error == ScanResult.InvalidResolution_Upgrade ||
             error == ScanResult.MultipleMidiTrackNames_Update || error == ScanResult.MultipleMidiTrackNames_Upgrade;
 
-        private static void ValidateSelectedAssets(SourceSnapshot source, IEnumerable<Dependency> selectedDependencies,
+        private void ValidateSelectedAssets(SourceSnapshot source, IEnumerable<Dependency> selectedDependencies,
             bool captureMidiHashes = false)
         {
-            var dependencies = selectedDependencies.Where(d => d.Length >= 0).ToArray();
+            var dependencies = selectedDependencies.Where(d => d.Length >= 0 &&
+                (d.Path.EndsWith(".mid", StringComparison.OrdinalIgnoreCase) ||
+                 d.Path.EndsWith(".mogg", StringComparison.OrdinalIgnoreCase))).ToArray();
             int completed = 0;
             foreach (var dependency in dependencies)
             {
@@ -515,7 +534,8 @@ namespace YARG.Core.Song.Cache
                 {
                     if (dependency.Path.EndsWith(".mid", StringComparison.OrdinalIgnoreCase))
                     {
-                        using var data = FixedArray.LoadFile(dependency.Path);
+                        var bytes = scanAssets!.ReadMidi(dependency.Path);
+                        using var data = SupplementalAssetSource.ToFixedArray(bytes);
                         var parts = AvailableParts.Default;
                         var drums = DrumsType.ProDrums;
                         var result = SongEntry.ParseMidi(data, ref parts, ref drums);
@@ -525,15 +545,12 @@ namespace YARG.Core.Song.Cache
                         if (captureMidiHashes)
                         {
                             // Fingerprint the bytes already validated, without reopening the file.
-                            stream.Position = 0;
-                            using var sha = SHA256.Create();
-                            source.MidiHashes[dependency.Path] = BitConverter.ToString(sha.ComputeHash(stream));
+                            source.MidiHashes[dependency.Path] = Fingerprint(bytes);
                         }
                     }
                     else if (dependency.Path.EndsWith(".mogg", StringComparison.OrdinalIgnoreCase))
                     {
-                        using var stream = File.OpenRead(dependency.Path);
-                        var result = RBCONEntry.ValidateMoggHeader(stream);
+                        var result = scanAssets!.ReadLooseMogg(dependency.Path);
                         if (result != ScanResult.Success) throw new InvalidDataException(result.ToString());
                     }
                 }

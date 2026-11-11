@@ -124,7 +124,10 @@ namespace YARG.Core.Song.Cache
             }
         }
 
-        internal static UnpackedCONUpgradeGroup CreateExplicit(FileInfo dtaInfo, byte[] sourceData, SupplementPackage? package = null)
+        internal int DefinitionCount { get; private set; }
+
+        internal static UnpackedCONUpgradeGroup CreateExplicit(FileInfo dtaInfo, byte[] sourceData,
+            SupplementPackage? package, Func<string, DateTime?> captureMidi)
         {
             var group = new UnpackedCONUpgradeGroup
             {
@@ -139,10 +142,14 @@ namespace YARG.Core.Song.Cache
                 while (YARGDTAReader.StartNode(ref text))
                 {
                     string name = YARGDTAReader.GetNameOfNode(ref text, true);
-                    var midi = new FileInfo(Path.Combine(dtaInfo.DirectoryName!, name + RBProUpgrade.UPGRADES_MIDI_EXT));
-                    if (package == null ? !midi.Exists : !package.ContainsAsset(name + RBProUpgrade.UPGRADES_MIDI_EXT))
-                        throw new FileNotFoundException("Upgrade MIDI missing: " + midi.FullName);
-                    group._upgrades[name] = (text, new UnpackedRBProUpgrade(name, package == null ? AbridgedFileInfo.NormalizedLastWrite(midi) : group._root.LastWriteTime, group._root, dtaInfo.FullName)
+                    group.DefinitionCount++;
+                    string relative = name + RBProUpgrade.UPGRADES_MIDI_EXT;
+                    string midiPath = Path.Combine(dtaInfo.DirectoryName!, relative);
+                    DateTime? modified = package == null ? captureMidi(midiPath) :
+                        package.ContainsAsset(relative) ? group._root.LastWriteTime : null;
+                    if (!modified.HasValue)
+                        throw new FileNotFoundException("Upgrade MIDI missing: " + midiPath);
+                    group._upgrades[name] = (text, new UnpackedRBProUpgrade(name, modified.Value, group._root, dtaInfo.FullName)
                     { ExpectedPackageManifest = package?.ManifestHash });
                     YARGDTAReader.EndNode(ref text);
                 }

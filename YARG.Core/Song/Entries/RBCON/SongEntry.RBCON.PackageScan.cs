@@ -56,15 +56,16 @@ namespace YARG.Core.Song
             public void Dispose() { if (_ownsBytes) _bytes?.Dispose(); _package?.Dispose(); }
         }
 
-        private ScanInput CreateScanInput(string dtaPath, string relative)
+        private ScanInput CreateScanInput(string dtaPath, string relative, CacheHandler.ScanAssetCapture? scanAssets)
         {
-            if (!SupplementalAssetSource.IsPackage(dtaPath)) return new ScanInput(() => LoadSupplementAsset(dtaPath, relative));
+            if (!SupplementalAssetSource.IsPackage(dtaPath)) return new ScanInput(() => LoadScanMidi(Path.Combine(Path.GetDirectoryName(dtaPath)!, relative), scanAssets));
             var package = OpenSupplementPackage(dtaPath);
             try { return new ScanInput(package, relative.Replace('\\', '/')); }
             catch { package.Dispose(); throw; }
         }
 
-        private static ScanResult ScanPackagedMidis(RBCONEntry entry, FixedArray<byte> mainMidi, LegacySongHashCache? hashCache)
+        private static ScanResult ScanPackagedMidis(RBCONEntry entry, FixedArray<byte> mainMidi, LegacySongHashCache? hashCache,
+            CacheHandler.ScanAssetCapture? scanAssets)
         {
             using var main = new ScanInput(mainMidi);
             var updates = new List<ScanInput>();
@@ -73,15 +74,15 @@ namespace YARG.Core.Song
             {
                 foreach (var layer in entry._updateLayers)
                 {
-                    if (!AbridgedFileInfo.Validate(layer.DtaPath, layer.Root.LastWriteTime))
+                    if (scanAssets == null && !AbridgedFileInfo.Validate(layer.DtaPath, layer.Root.LastWriteTime))
                         throw new SupplementalPackageException("Supplemental source changed during scanning.");
                     if (layer.Midi.HasValue)
                     {
                         string relative = entry._nodeName + "/" + entry._nodeName + "_update.mid";
-                        if (!SupplementalAssetSource.IsPackage(layer.DtaPath) &&
+                        if (scanAssets == null && !SupplementalAssetSource.IsPackage(layer.DtaPath) &&
                             !AbridgedFileInfo.Validate(Path.Combine(layer.Root.FullName, relative), layer.Midi.Value))
                             return ScanResult.PossibleCorruption;
-                        updates.Add(entry.CreateScanInput(layer.DtaPath, relative));
+                        updates.Add(entry.CreateScanInput(layer.DtaPath, relative, scanAssets));
                     }
                 }
                 if (entry._updateLayers.Length == 0 && entry._updateMidiLastWrite.HasValue)
@@ -90,9 +91,9 @@ namespace YARG.Core.Song
                     updates.Add(new ScanInput(() => FixedArray.LoadFile(legacy)));
                 }
                 if (entry._upgrade is UnpackedRBProUpgrade unpacked && SupplementalAssetSource.IsPackage(unpacked.DtaPath))
-                    upgrade = entry.CreateScanInput(unpacked.DtaPath, unpacked.RelativePath);
+                    upgrade = entry.CreateScanInput(unpacked.DtaPath, unpacked.RelativePath, scanAssets);
                 else if (entry._upgrade != null)
-                    upgrade = new ScanInput(() => entry._upgrade.LoadUpgradeMidi() ?? throw new FileNotFoundException("Upgrade MIDI missing."));
+                    upgrade = new ScanInput(() => LoadScanUpgradeMidi(entry._upgrade, scanAssets) ?? throw new FileNotFoundException("Upgrade MIDI missing."));
 
                 var initialParts = entry._parts;
                 ScanExpected<long> resolution = default;

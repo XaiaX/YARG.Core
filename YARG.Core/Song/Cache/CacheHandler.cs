@@ -366,14 +366,18 @@ namespace YARG.Core.Song.Cache
         /// </summary>
         private void FindNewEntries(bool fullDirectoryPlaylists)
         {
+            DiscoverEntries(fullDirectoryPlaylists);
+            BuildCONEntries();
+        }
+
+        private void DiscoverEntries(bool fullDirectoryPlaylists)
+        {
             var tracker = new PlaylistTracker(fullDirectoryPlaylists, null);
             Parallel.ForEach(iniGroups, group =>
             {
                 var dirInfo = new DirectoryInfo(group.Directory);
                 ScanDirectory(dirInfo, group, tracker);
             });
-
-            BuildCONEntries();
         }
 
         private void BuildCONEntries()
@@ -391,6 +395,7 @@ namespace YARG.Core.Song.Cache
                     {
                         HashCache = legacySongHashes,
                         ScanPackages = scanPackages,
+                        ScanAssets = scanAssets,
                         UpdateDta = mods.UpdateDTA,
                         UpgradeDta = mods.UpgradeDTA,
                         Root = group.Root,

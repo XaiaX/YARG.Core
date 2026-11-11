@@ -211,19 +211,18 @@ public sealed class PackedExplicitSourceTests
     }
 
     [Test]
-    public void PackageReplacementBeforePublicationLeavesAppliedCacheIntact()
+    public void PackageReplacementBeforePublicationDoesNotReopenPackage()
     {
         string directory = Path.Combine(_root, "updates"); Directory.CreateDirectory(directory);
         string dta = Path.Combine(directory, "songs_updates.dta"); File.WriteAllText(dta, Dta("First title"));
         string package = Path.Combine(_root, "updates.yargup"); WriteYargup(dta, "updates", package);
         var old = Scan(update: package);
-        byte[] cache = File.ReadAllBytes(CachePath);
         using var pending = CacheHandler.RunScan(SongScanScope.Updates,
             new SongSourceConfiguration(new[] { _library }, package, null), false, CachePath, BadSongsPath, false, deferCommit: true);
         Assert.That(pending.Status, Is.EqualTo(SongScanStatus.Success));
         File.WriteAllText(dta, Dta("Second title")); File.Delete(package); WriteYargup(dta, "updates", package);
-        Assert.Throws<IOException>(() => pending.Commit());
-        Assert.That(File.ReadAllBytes(CachePath), Is.EqualTo(cache));
+        pending.Commit();
+        Assert.That(Scan(update: package, quick: true).Name.ToString(), Is.EqualTo("First title"));
         Assert.That(old.LoadChart(), Is.Null);
         var refreshed = Scan(SongScanScope.Updates, package);
         Assert.That(refreshed.Name.ToString(), Is.EqualTo("Second title"));

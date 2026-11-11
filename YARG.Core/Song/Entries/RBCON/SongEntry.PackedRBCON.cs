@@ -215,7 +215,7 @@ namespace YARG.Core.Song
                     return new ScanUnexpected(location.Error);
                 }
                 entry._subName = location.Value[6..location.Value.IndexOf('/', 6)];
-                var updateMoggResult = entry.ValidateUpdateMogg();
+                var updateMoggResult = entry.ValidateUpdateMogg(parameters.ScanAssets, out bool hasUpdateMogg);
                 if (updateMoggResult != ScanResult.Success)
                 {
                     return new ScanUnexpected(updateMoggResult);
@@ -226,8 +226,6 @@ namespace YARG.Core.Song
                     return new ScanUnexpected(ScanResult.MissingCONMidi);
                 }
 
-                using var selectedUpdateMogg = entry.LoadUpdateMoggStream();
-                bool hasUpdateMogg = selectedUpdateMogg != null;
                 if (!listings.FindListing(location.Value + ".mogg", out entry._moggListing) && !hasUpdateMogg)
                 {
                     return new ScanUnexpected(ScanResult.MoggError);
@@ -249,7 +247,7 @@ namespace YARG.Core.Song
                     mainMidi = CONFileStream.LoadFile(stream, entry._midiListing);
                 }
 
-                var result = ScanMidis(entry, mainMidi, parameters.HashCache);
+                var result = ScanMidis(entry, mainMidi, parameters.HashCache, parameters.ScanAssets);
                 mainMidi.Dispose();
                 if (result != ScanResult.Success)
                 {

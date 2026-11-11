@@ -76,7 +76,7 @@ namespace YARG.Core.Song.Cache
 
         private CONUpdateGroup() { }
 
-        public static bool Create(string directory, FileInfo dtaInfo, out CONUpdateGroup group, byte[]? sourceData = null, SupplementPackage? package = null)
+        public static bool Create(string directory, FileInfo dtaInfo, out CONUpdateGroup group, byte[]? sourceData = null, SupplementPackage? package = null, Func<string, DateTime?>? captureMidi = null)
         {
             try
             {
@@ -96,13 +96,20 @@ namespace YARG.Core.Song.Cache
                     if (!group._updates.TryGetValue(name, out var node))
                     {
                         DateTime? lastWriteTime = null;
-                        var info = new FileInfo(Path.Combine(group._root.FullName, name, name + "_update.mid"));
                         if (package != null)
                         {
                             if (package.ContainsAsset(name + "/" + name + "_update.mid"))
                                 lastWriteTime = group._root.LastWriteTime;
                         }
-                        else if (info.Exists) lastWriteTime = AbridgedFileInfo.NormalizedLastWrite(info);
+                        else if (captureMidi != null)
+                        {
+                            lastWriteTime = captureMidi(name);
+                        }
+                        else
+                        {
+                            var info = new FileInfo(Path.Combine(group._root.FullName, name, name + "_update.mid"));
+                            if (info.Exists) lastWriteTime = AbridgedFileInfo.NormalizedLastWrite(info);
+                        }
                         group._updates.Add(name, node = (new List<YARGTextContainer<byte>>(), lastWriteTime));
                     }
                     node.Containers.Add(container);

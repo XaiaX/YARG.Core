@@ -568,21 +568,51 @@ public sealed class CacheHandlerIntegrationTests
     }
 
     [Test]
-    public void UpdateMidiIsValidatedOnceBeforeFinalVerification()
+    public void RebuildUsesMidiCapturedDuringAssetValidation()
     {
+        SuccessfulEntry(Explicit(SongScanScope.All));
         string root = AddUpdate("selected", "Selected", "PART GUITAR", true);
+        string path = Path.Combine(root, RBCONEntry.SONGUPDATES_DTA);
         string midi = Path.Combine(root, NODE, NODE + "_update.mid");
-        int validations = 0;
-        CacheHandler.ScanObservation = operation =>
+        var expected = SuccessfulEntry(Explicit(SongScanScope.Updates, path));
+
+        CacheHandler.ScanObservation = _ =>
         {
             var progress = CacheHandler.SourceValidation;
-            if (progress?.File == midi && progress.Phase.Contains("Validating source assets") && progress.Completed == 0)
-                validations++;
+            if (progress?.File == midi && progress.Phase.Contains("Validating source assets") && progress.Completed > 0)
+                File.Delete(midi);
         };
         try
         {
-            SuccessfulEntry(Explicit(SongScanScope.All, Path.Combine(root, RBCONEntry.SONGUPDATES_DTA)));
-            Assert.That(validations, Is.EqualTo(1));
+            var rebuilt = SuccessfulEntry(Explicit(SongScanScope.Updates, path));
+            Assert.That(File.Exists(midi), Is.False);
+            Assert.That(rebuilt.Hash, Is.EqualTo(expected.Hash));
+        }
+        finally { CacheHandler.ScanObservation = null; }
+    }
+
+    [TestCase(SongScanScope.Updates)]
+    [TestCase(SongScanScope.All)]
+    public void ScanDoesNotOpenUnmatchedUpdateMidi(SongScanScope scope)
+    {
+        SuccessfulEntry(Explicit(SongScanScope.All));
+        string root = AddUpdate("selected", "Selected", "PART GUITAR", true);
+        string path = Path.Combine(root, RBCONEntry.SONGUPDATES_DTA);
+        File.AppendAllText(path, "\n(unmatched)");
+        string unmatched = Path.Combine(root, "unmatched");
+        Directory.CreateDirectory(unmatched);
+        string midi = Path.Combine(unmatched, "unmatched_update.mid");
+        File.Copy(Path.Combine(root, NODE, NODE + "_update.mid"), midi);
+
+        bool observed = false;
+        CacheHandler.ScanObservation = operation => observed |= operation == "source-validation:" + midi;
+        try
+        {
+            using var result = Explicit(scope, path);
+            AssertEntry(SuccessfulEntry(result), "Selected", true);
+            Assert.That(result.UpdatesDefinitionCount, Is.EqualTo(2));
+            Assert.That(result.UnmatchedCount, Is.EqualTo(1));
+            Assert.That(observed, Is.False);
         }
         finally { CacheHandler.ScanObservation = null; }
     }
@@ -687,18 +717,17 @@ public sealed class CacheHandlerIntegrationTests
 
     [TestCase(false)]
     [TestCase(true)]
-    public void DeferredCommitRevalidatesBeforeReplacingCache(bool mutateBase)
+    public void DeferredCommitPublishesCapturedScan(bool mutateBase)
     {
         SuccessfulEntry(Explicit(SongScanScope.All));
-        byte[] before = File.ReadAllBytes(_cachePath);
         string root = AddUpdate("selected", "Selected", "PART GUITAR", true);
         string path = Path.Combine(root, RBCONEntry.SONGUPDATES_DTA);
         using var result = Explicit(SongScanScope.Updates, path, deferred: true);
         SuccessfulEntry(result);
         if (mutateBase) File.SetLastWriteTimeUtc(Path.Combine(_library, "songs", NODE, NODE + ".mid"), DateTime.UtcNow.AddMinutes(2));
         else File.WriteAllText(path, Dta("Changed"));
-        Assert.Throws<IOException>(() => result.Commit());
-        Assert.That(File.ReadAllBytes(_cachePath), Is.EqualTo(before));
+        result.Commit();
+        AssertEntry(SuccessfulEntry(Explicit(SongScanScope.All, path, quick: true)), "Selected", true);
     }
 
     [Test]

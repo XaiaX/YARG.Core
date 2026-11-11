@@ -35,22 +35,22 @@ namespace YARG.Core.Song
                 }
 
                 entry._subName = location.Value[6..location.Value.IndexOf('/', 6)];
-                var updateMoggResult = entry.ValidateUpdateMogg();
+                var updateMoggResult = entry.ValidateUpdateMogg(parameters.ScanAssets, out bool hasUpdateMogg);
                 if (updateMoggResult != ScanResult.Success)
                 {
                     return new ScanUnexpected(updateMoggResult);
                 }
 
                 string songDirectory = Path.Combine(parameters.Root.FullName, entry._subName);
-                var midiInfo = new FileInfo(Path.Combine(songDirectory, entry._subName + ".mid"));
+                string midiPath = Path.Combine(songDirectory, entry._subName + ".mid");
+                var midiInfo = parameters.ScanAssets?.FileMetadata(midiPath) ?? new FileInfo(midiPath);
                 if (!midiInfo.Exists)
                 {
                     return new ScanUnexpected(ScanResult.MissingCONMidi);
                 }
 
                 string moggPath = Path.Combine(songDirectory, entry._subName + ".mogg");
-                using var selectedUpdateMogg = entry.LoadUpdateMoggStream();
-                if (selectedUpdateMogg == null && File.Exists(moggPath))
+                if (!hasUpdateMogg && File.Exists(moggPath))
                 {
                     using var moggStream = new FileStream(moggPath, FileMode.Open, FileAccess.Read, FileShare.Read, 1);
                     var moggResult = ValidateMoggHeader(moggStream);
@@ -59,14 +59,14 @@ namespace YARG.Core.Song
                         return new ScanUnexpected(moggResult);
                     }
                 }
-                else if (selectedUpdateMogg == null)
+                else if (!hasUpdateMogg)
                 {
                     return new ScanUnexpected(ScanResult.MoggError);
                 }
 
                 using var mainMidi = FixedArray.LoadFile(midiInfo.FullName);
 
-                var result = ScanMidis(entry, mainMidi, parameters.HashCache);
+                var result = ScanMidis(entry, mainMidi, parameters.HashCache, parameters.ScanAssets);
                 if (result != ScanResult.Success)
                 {
                     return new ScanUnexpected(result);

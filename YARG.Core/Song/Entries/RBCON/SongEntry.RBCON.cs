@@ -29,6 +29,7 @@ namespace YARG.Core.Song
         public string DefaultPlaylist;
         public DTAEntry BaseDta;
         public LegacySongHashCache? HashCache;
+        public CacheHandler.ScanAssetCapture? ScanAssets;
         public IReadOnlyDictionary<string, SupplementPackage>? ScanPackages;
 
     }
@@ -657,11 +658,12 @@ namespace YARG.Core.Song
             return location;
         }
 
-        private protected static ScanResult ScanMidis(RBCONEntry entry, FixedArray<byte> mainMidi, LegacySongHashCache? hashCache)
+        private protected static ScanResult ScanMidis(RBCONEntry entry, FixedArray<byte> mainMidi, LegacySongHashCache? hashCache,
+            CacheHandler.ScanAssetCapture? scanAssets)
         {
             if (entry._updateLayers.Any(layer => SupplementalAssetSource.IsPackage(layer.DtaPath)) ||
                 entry._upgrade is UnpackedRBProUpgrade unpacked && SupplementalAssetSource.IsPackage(unpacked.DtaPath))
-                return ScanPackagedMidis(entry, mainMidi, hashCache);
+                return ScanPackagedMidis(entry, mainMidi, hashCache, scanAssets);
             var updateMidi = default(FixedArray<byte>);
             var layeredMidis = new List<FixedArray<byte>>();
             var upgradeMidi = default(FixedArray<byte>);
@@ -669,7 +671,7 @@ namespace YARG.Core.Song
             {
                 if (entry._upgrade != null)
                 {
-                    upgradeMidi = entry._upgrade.LoadUpgradeMidi();
+                    upgradeMidi = LoadScanUpgradeMidi(entry._upgrade, scanAssets);
                     if (upgradeMidi == null)
                     {
                         throw new FileNotFoundException("Upgrade midi not located");
@@ -680,25 +682,25 @@ namespace YARG.Core.Song
                 {
                     foreach (var layer in entry._updateLayers)
                     {
-                        if (!AbridgedFileInfo.Validate(layer.DtaPath, layer.Root.LastWriteTime))
+                        if (scanAssets == null && !AbridgedFileInfo.Validate(layer.DtaPath, layer.Root.LastWriteTime))
                         {
                             return ScanResult.PossibleCorruption;
                         }
                         if (layer.Midi.HasValue)
                         {
                             string filename = Path.Combine(layer.Root.FullName, entry._nodeName, entry._nodeName + "_update.mid");
-                            if (!SupplementalAssetSource.IsPackage(layer.DtaPath) && !AbridgedFileInfo.Validate(filename, layer.Midi.Value))
+                            if (scanAssets == null && !AbridgedFileInfo.Validate(filename, layer.Midi.Value))
                             {
                                 return ScanResult.PossibleCorruption;
                             }
-                            layeredMidis.Add(entry.LoadSupplementAsset(layer.DtaPath, Path.Combine(entry._nodeName, entry._nodeName + "_update.mid")));
+                            layeredMidis.Add(LoadScanMidi(filename, scanAssets));
                         }
                     }
                 }
                 else if (entry._updateMidiLastWrite.HasValue)
                 {
                     string updateFile = Path.Combine(entry._updateDirectoryAndDtaLastWrite!.Value.FullName, entry._nodeName, entry._nodeName + "_update.mid");
-                    updateMidi = FixedArray.LoadFile(updateFile);
+                    updateMidi = LoadScanMidi(updateFile, scanAssets);
                 }
 
                 var scanUpdates = new List<FixedArray<byte>>();
@@ -763,6 +765,16 @@ namespace YARG.Core.Song
             }
         }
 
+        private static FixedArray<byte> LoadScanMidi(string path, CacheHandler.ScanAssetCapture? scanAssets) =>
+            scanAssets == null ? FixedArray.LoadFile(path) : SupplementalAssetSource.ToFixedArray(scanAssets.ReadMidi(path));
+
+        private static FixedArray<byte>? LoadScanUpgradeMidi(RBProUpgrade upgrade, CacheHandler.ScanAssetCapture? scanAssets)
+        {
+            if (scanAssets != null && upgrade is UnpackedRBProUpgrade loose && !SupplementalAssetSource.IsPackage(loose.DtaPath))
+                return LoadScanMidi(Path.Combine(Path.GetDirectoryName(loose.DtaPath)!, loose.RelativePath), scanAssets);
+            return upgrade.LoadUpgradeMidi();
+        }
+
         private Stream? OpenUpdateAsset(params string[] relativePath)
         {
             if (SupplementalValidation != null && !SupplementalValidation()) return null;
@@ -795,15 +807,37 @@ namespace YARG.Core.Song
             return SupplementalAssetSource.ToFixedArray(buffer.ToArray());
         }
 
-        private protected ScanResult ValidateUpdateMogg()
+        private protected ScanResult ValidateUpdateMogg(CacheHandler.ScanAssetCapture? scanAssets, out bool present)
         {
-            using var stream = LoadUpdateMoggStream();
-            if (stream == null)
+            ScanResult? result = null;
+            if (scanAssets == null)
             {
-                return ScanResult.Success;
+                using var stream = LoadUpdateMoggStream();
+                if (stream != null) result = ValidateMoggHeader(stream);
             }
-            var result = ValidateMoggHeader(stream);
-            return result == ScanResult.MoggError ? ScanResult.MoggError_Update : result;
+            else
+            {
+                string relative = _subName + "/" + _subName + "_update.mogg";
+                for (int i = _updateLayers.Length - 1; i >= 0; i--)
+                {
+                    var layer = _updateLayers[i];
+                    if (SupplementalAssetSource.IsPackage(layer.DtaPath))
+                    {
+                        result = scanAssets.ReadMogg(Path.Combine(layer.DtaPath, relative), () =>
+                        {
+                            using var package = OpenSupplementPackage(layer.DtaPath);
+                            return package.Package.ContainsAsset(relative) ? SupplementalAssetSource.Open(package.Package, relative) : null;
+                        });
+                    }
+                    else
+                    {
+                        result = scanAssets.ReadLooseMogg(Path.Combine(layer.Root.FullName, relative));
+                    }
+                    if (result.HasValue) break;
+                }
+            }
+            present = result.HasValue;
+            return result == ScanResult.MoggError ? ScanResult.MoggError_Update : result ?? ScanResult.Success;
         }
 
         protected Stream? LoadUpdateMoggStream()
