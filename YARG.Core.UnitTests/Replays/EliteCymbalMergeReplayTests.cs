@@ -152,7 +152,7 @@ public sealed class EliteCymbalMergeReplayTests
         using var memory = new MemoryStream();
         using var writer = new BinaryWriter(memory);
         parameters.Serialize(writer);
-        memory.SetLength(memory.Length - 2); // Remove v25 cymbal policy and v26 sustain policy.
+        memory.SetLength(memory.Length - 4); // Remove the cymbal, sustain and experimental scoring policies.
         memory.Position = memory.Length;
         writer.Write(0x12345678);
         var bytes = memory.ToArray();

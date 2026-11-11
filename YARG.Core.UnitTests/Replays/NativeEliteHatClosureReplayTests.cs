@@ -53,7 +53,7 @@ public sealed class NativeEliteHatClosureReplayTests
         using var memory = new MemoryStream();
         using var writer = new BinaryWriter(memory);
         Parameters(true).Serialize(writer);
-        memory.SetLength(memory.Length - 12); // v23/v25/v26 add ruleset/pair/sustain-policy bytes after v22's bool and double.
+        memory.SetLength(memory.Length - 14); // Remove the v22 closure fields and later policy fields.
         memory.Position = memory.Length;
         writer.Write(0x12345678);
         using var array = FixedArray<byte>.Alloc((int)memory.Length);

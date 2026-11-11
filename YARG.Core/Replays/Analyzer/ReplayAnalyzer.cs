@@ -719,6 +719,7 @@ namespace YARG.Core.Replays.Analyzer
 
             builder.AppendLine("Drums:");
             FormatStat("Overhits", original.Overhits, result.Overhits, ref builder);
+            FormatStat("Misarticulated hi-hats", original.MisarticulatedHiHats, result.MisarticulatedHiHats, ref builder);
             FormatStat("Ghosts hit correctly", original.GhostsHit, result.GhostsHit, ref builder);
             FormatStat("Ghosts hit incorrectly",
                 original.TotalGhosts - original.GhostsHit,
@@ -730,6 +731,7 @@ namespace YARG.Core.Replays.Analyzer
             FormatStat("Score from dynamics", original.DynamicsBonus, result.DynamicsBonus, ref builder);
 
             return original.Overhits == result.Overhits &&
+                original.MisarticulatedHiHats == result.MisarticulatedHiHats &&
                 original.GhostsHit == result.GhostsHit &&
                 original.TotalGhosts == result.TotalGhosts &&
                 original.AccentsHit == result.AccentsHit &&

@@ -120,7 +120,7 @@ public sealed class YargProfileFlamLayoutTests
         writer.Write(0x12345678);
         var bytes = memory.ToArray();
         Assert.That(BitConverter.ToInt32(bytes), Is.EqualTo(20));
-        Assert.That(ReplayIO.REPLAY_VERSIONS.CURRENT, Is.EqualTo(26));
+        Assert.That(ReplayIO.REPLAY_VERSIONS.CURRENT, Is.EqualTo(27));
         using var array = FixedArray<byte>.Alloc(bytes.Length);
         bytes.CopyTo(array.Span);
         var stream = new FixedArrayStream(array);

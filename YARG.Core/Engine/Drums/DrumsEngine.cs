@@ -704,7 +704,8 @@ namespace YARG.Core.Engine.Drums
             }
 
             var comboBeforeMiss = BaseStats.Combo;
-            ResetCombo();
+            if (!EngineParameters.AlternateGhostScoring || !note.IsGhost)
+                ResetCombo();
             TraceEliteLane($"OnNoteMissed tick={note.Tick} pad={note.Pad} origin={note.ConversionOrigin?.ToString() ?? "none"} " +
                 $"combo={comboBeforeMiss}->{BaseStats.Combo} currentTick={CurrentTick}");
 

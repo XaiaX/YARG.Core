@@ -73,7 +73,7 @@ public sealed class EliteHiHatSustainReplayTests
         using var memory = new MemoryStream();
         using var writer = new BinaryWriter(memory);
         NativeEliteReplayFixture.Parameters().Serialize(writer);
-        memory.SetLength(memory.Length - 1);
+        memory.SetLength(memory.Length - 3);
         memory.Position = memory.Length;
         writer.Write(0x12345678);
         using var array = FixedArray<byte>.Alloc((int)memory.Length);

@@ -43,7 +43,8 @@ namespace YARG.Core.Replays
         /// Replays written by the YOLO line at its forked versions 15-17 are not readable;
         /// they are rejected by deserialization validation rather than a version gate.
         /// </remarks>
-        public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 26);
+        public static readonly (int OLD_MIN, int METADATA_MIN, int DATA_MIN, int CURRENT) REPLAY_VERSIONS = (4, 6, 9, 27);
+        public const int EXPERIMENTAL_DRUM_SCORING_MIN = 27;
         public const int HI_HAT_SUSTAINS_MIN = 26;
         public const int ELITE_CYMBAL_MERGES_MIN = 25;
         public const int HI_HAT_CLOSURE_MIN = 22;
@@ -60,7 +61,7 @@ namespace YARG.Core.Replays
         // recordings retain their original kick/adjacent-pad chart interpretation.
         // V2 adds optional kick-flam scoring and removes classic kick velocity obligations.
         // v25 freezes merged-cymbal playable targets and equivalent physical inputs.
-        private const int ENGINE_VERSION = 12;
+        private const int ENGINE_VERSION = 13;
 
         public static (ReplayReadResult Result, ReplayInfo Info, ReplayData Data) TryDeserialize(string path, ReplayReadOptions replayOptions)
         {

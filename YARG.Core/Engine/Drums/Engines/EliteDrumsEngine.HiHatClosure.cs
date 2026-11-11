@@ -122,14 +122,16 @@ namespace YARG.Core.Engine.Drums.Engines
                     if (note.Pad == (int)EliteDrumNote.EliteDrumPad.HatPedal && note.IsStomp &&
                         IsNoteInWindow(note, out _, pedalTime)) stomp = true;
                     if (!IsNoteInWindow(note, out _, closedTime)) continue;
-                    if (Matches(EliteDrumsAction.EliteClosedHiHat, note)) cymbal = true;
+                    if (Matches(EliteDrumsAction.EliteClosedHiHat, note) ||
+                        HiHatArticulationDivisor(EliteDrumsAction.EliteClosedHiHat, note) > 1) cymbal = true;
                     if (note.Pad == (int)EliteDrumNote.EliteDrumPad.HiHat && note.IsOpen) open = true;
                 }
             }
             // A valid second flam strike is still a cymbal target after its head was hit.
             if (_pendingFlams.TryGetValue((int)EliteDrumNote.EliteDrumPad.HiHat, out var flam) &&
                 closedTime >= flam.Start && closedTime <= flam.End &&
-                Matches(EliteDrumsAction.EliteClosedHiHat, flam.Note)) cymbal = true;
+                (Matches(EliteDrumsAction.EliteClosedHiHat, flam.Note) ||
+                    HiHatArticulationDivisor(EliteDrumsAction.EliteClosedHiHat, flam.Note) > 1)) cymbal = true;
             if (stomp) return cymbal ? HiHatClosureDisposition.Both : HiHatClosureDisposition.Stomp;
             if (cymbal) return HiHatClosureDisposition.Cymbal;
             return open || WouldBreakHiHatSustain(pedalTime)

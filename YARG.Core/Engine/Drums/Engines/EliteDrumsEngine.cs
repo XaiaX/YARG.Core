@@ -27,7 +27,7 @@ namespace YARG.Core.Engine.Drums.Engines
 
         private static bool IsFlatHandFlam(EliteDrumNote note) => note.IsHandFlam && note.IsFlatFlam;
 
-        private bool TryFlamFollowUp(EliteDrumsAction action)
+        private bool TryFlamFollowUp(EliteDrumsAction action, bool allowMisarticulated = true)
         {
             if (!TryAuthoredPad(action, out int pad) || !_pendingFlams.TryGetValue(pad, out var pending))
                 return false;
@@ -37,18 +37,26 @@ namespace YARG.Core.Engine.Drums.Engines
                 _pendingFlams.Remove(pad);
                 return false;
             }
-            if (CurrentTime < pending.Start || !Matches(action, note)) return false;
+            int divisor = HiHatArticulationDivisor(action, note);
+            if (CurrentTime < pending.Start ||
+                (divisor > 1 ? !allowMisarticulated : !Matches(action, note))) return false;
             _pendingFlams.Remove(pad);
             bool bonus = !IsFlatHandFlam(note);
-            if (bonus) AwardFlamUnit();
-            OnFlamFollowUp?.Invoke(note, action, _velocity.GetValueOrDefault(), bonus);
+            if (bonus)
+            {
+                AwardFlamUnit(POINTS_PER_NOTE / divisor);
+                if (divisor > 1) EngineStats.MisarticulatedHiHats++;
+            }
+            IsJudgingMisarticulatedHiHat = bonus && divisor > 1;
+            try { OnFlamFollowUp?.Invoke(note, action, _velocity.GetValueOrDefault(), bonus); }
+            finally { IsJudgingMisarticulatedHiHat = false; }
             return true;
         }
 
-        private void AwardFlamUnit()
+        private void AwardFlamUnit(int points = POINTS_PER_NOTE)
         {
-            AddScore(POINTS_PER_NOTE);
-            EngineStats.NoteScore += POINTS_PER_NOTE;
+            AddScore(points);
+            EngineStats.NoteScore += points;
         }
         /// <summary>Raised for a visible pedal resolved by accessibility assistance, not a physical strike.</summary>
         public Action<EliteDrumNote>? OnPedalAssisted;
@@ -431,6 +439,8 @@ namespace YARG.Core.Engine.Drums.Engines
 
         protected override void CheckForNoteHit()
         {
+            EliteDrumNote? partialHat = null;
+            int partialDivisor = 1;
             for (int i = NoteIndex; i < Notes.Count; i++)
             {
                 var parent = Notes[i];
@@ -438,28 +448,27 @@ namespace YARG.Core.Engine.Drums.Engines
                 bool stop = false;
                 // Resolve the requested pad before judging unrelated chord members:
                 // MIDI parent order is not physical input priority.
-                if (_action.HasValue)
+                if (_action is { } physicalAction)
                 {
                     foreach (var candidate in parent.AllNotes)
                     {
-                        if (candidate.WasHit || candidate.WasMissed || !CanNoteBeHit(candidate) ||
-                            !IsNoteInWindow(candidate) ||
+                        if (candidate.WasHit || candidate.WasMissed) continue;
+                        int divisor = HiHatArticulationDivisor(physicalAction, candidate);
+                        if ((divisor == 1 && !CanNoteBeHit(candidate)) || !IsNoteInWindow(candidate) ||
                             (_autoHiHatPedal && IsPlayablePedal(candidate) &&
                                 candidate.Time < CurrentTime)) continue;
-                        bool bonus = !candidate.IsBigRockEnding && ApplyVelocity(candidate);
-                        var hitAction = _action.Value;
-                        HitNote(candidate);
-                        OnPadHit?.Invoke(hitAction, true, bonus, false, candidate.Dynamics,
-                            _velocity.GetValueOrDefault());
-                        if (bonus)
+                        if (divisor > 1)
                         {
-                            int points = POINTS_PER_NOTE / 2;
-                            AddScore(points);
-                            EngineStats.DynamicsBonus += points;
-                            if (candidate.IsAccent) EngineStats.AccentsHit++;
-                            if (candidate.IsGhost) EngineStats.GhostsHit++;
+                            // Keep the first partial target while looking for an ordinary
+                            // matching hit within the existing timing windows.
+                            if (partialHat == null)
+                            {
+                                partialHat = candidate;
+                                partialDivisor = divisor;
+                            }
+                            continue;
                         }
-                        _action = null;
+                        ScorePhysicalHit(candidate, physicalAction, 1);
                         return;
                     }
                 }
@@ -515,7 +524,13 @@ namespace YARG.Core.Engine.Drums.Engines
             }
             if (_action is { } action)
             {
-                if (TryFlamFollowUp(action)) return;
+                bool canScorePartialHat = partialHat is { WasHit: false, WasMissed: false };
+                if (TryFlamFollowUp(action, allowMisarticulated: !canScorePartialHat)) return;
+                if (canScorePartialHat)
+                {
+                    ScorePhysicalHit(partialHat!, action, partialDivisor);
+                    return;
+                }
                 // Roll proximity can forgive an overhit, but a real pedal closure
                 // outside the playable roll still stops the remaining sustain score.
                 if (EngineParameters.EliteHiHatSustains >= 2 && TryBreakHiHatSustain(action)) return;
@@ -534,6 +549,22 @@ namespace YARG.Core.Engine.Drums.Engines
                 if (action is EliteDrumsAction.EliteStomp or EliteDrumsAction.EliteSplash) return;
                 Overhit();
             }
+        }
+
+        private void ScorePhysicalHit(EliteDrumNote note, EliteDrumsAction action, int articulationDivisor)
+        {
+            bool bonus = !note.IsBigRockEnding && ApplyVelocity(note);
+            HitNote(note, false, articulationDivisor);
+            OnPadHit?.Invoke(action, true, bonus, false, note.Dynamics, _velocity.GetValueOrDefault());
+            if (bonus)
+            {
+                int points = POINTS_PER_NOTE / 2 / articulationDivisor;
+                AddScore(points);
+                EngineStats.DynamicsBonus += points;
+                if (note.IsAccent) EngineStats.AccentsHit++;
+                if (note.IsGhost) EngineStats.GhostsHit++;
+            }
+            _action = null;
         }
 
         private static bool TryAuthoredPad(EliteDrumsAction action, out int pad)
@@ -634,12 +665,15 @@ namespace YARG.Core.Engine.Drums.Engines
 
         protected override void HitNote(EliteDrumNote note) => HitNote(note, false);
 
-        private void HitNote(EliteDrumNote note, bool activationAutoHit)
+        private void HitNote(EliteDrumNote note, bool activationAutoHit, int articulationDivisor = 1)
         {
             if (note.WasHit || note.WasMissed || note.IsInvisibleTerminator) return;
             note.SetHitState(true, false);
             if (_resolvingAuthoredContinuation) TargetedPerformance.Current?.RecordContinuation();
-            var startedHiHatSustain = HitHiHatSustain(note);
+            bool misarticulated = articulationDivisor > 1;
+            bool closedAsOpen = misarticulated && note.IsOpen && _action == EliteDrumsAction.EliteClosedHiHat;
+            var startedHiHatSustain = closedAsOpen ? null : HitHiHatSustain(note);
+            if (closedAsOpen) ForfeitHiHatSustain(note);
             // Every real hit consumes this pad exclusively, including score-free coda
             // notes which return before the ordinary note lifecycle below.
             _pendingFlams.Remove(note.Pad);
@@ -672,20 +706,31 @@ namespace YARG.Core.Engine.Drums.Engines
                 }
                 if (complete) ActivateStarPower();
             }
-            IncrementCombo();
+            if (misarticulated) EngineStats.MisarticulatedHiHats++;
+            else IncrementCombo();
             if (_autoHiHatPedal && IsPlayablePedal(note))
                 EngineStats.OptionalPedalHits++;
             else
                 EngineStats.IncrementNotesHit(note, CurrentTime);
             UpdateMultiplier();
-            AddScore(note);
+            AddGemScore(note, articulationDivisor, closedAsOpen);
             if (!activationAutoHit && IsScoringFlam(note) && !IsBot && !_resolvingAuthoredContinuation)
             {
                 double window = EngineParameters.HitWindow.CalculateHitWindow(GetAverageNoteDistance(note));
                 _pendingFlams[note.Pad] = (note, note.Time + EngineParameters.HitWindow.GetFrontEnd(window),
                     note.Time + EngineParameters.HitWindow.GetBackEnd(window));
             }
-            if (!activationAutoHit) OnNoteHit?.Invoke(NoteIndex, note);
+            if (!activationAutoHit)
+            {
+                IsJudgingMisarticulatedHiHat = misarticulated;
+                IsJudgingClosedAsOpen = closedAsOpen;
+                try { OnNoteHit?.Invoke(NoteIndex, note); }
+                finally
+                {
+                    IsJudgingMisarticulatedHiHat = false;
+                    IsJudgingClosedAsOpen = false;
+                }
+            }
             base.HitNote(note);
         }
 
@@ -723,7 +768,8 @@ namespace YARG.Core.Engine.Drums.Engines
             note.SetMissState(true, false);
             _authoredLanes.Miss(note);
             if (note.IsStarPower) StripStarPower(note);
-            ResetCombo();
+            if (!EngineParameters.AlternateGhostScoring || !note.IsGhost)
+                ResetCombo();
             UpdateMultiplier();
             OnNoteMissed?.Invoke(NoteIndex, note);
             base.MissNote(note);
@@ -739,11 +785,14 @@ namespace YARG.Core.Engine.Drums.Engines
                 : velocity > 1 - EngineParameters.VelocityThreshold;
         }
 
-        protected override void AddScore(EliteDrumNote note)
+        protected override void AddScore(EliteDrumNote note) => AddGemScore(note, 1, false);
+
+        private void AddGemScore(EliteDrumNote note, int articulationDivisor, bool closedAsOpen)
         {
-            if (!StartHiHatSustainScore(note)) AwardFlamUnit();
+            int unit = POINTS_PER_NOTE / articulationDivisor;
+            if (!StartHiHatSustainScore(note, articulationDivisor, closedAsOpen)) AwardFlamUnit(unit);
             // Bot completion is deliberately not a synthetic physical follow-up.
-            if (IsScoringFlam(note) && (IsFlatHandFlam(note) || IsBot)) AwardFlamUnit();
+            if (IsScoringFlam(note) && (IsFlatHandFlam(note) || IsBot)) AwardFlamUnit(unit);
         }
 
         protected override (int baseScore, int noteScore) CalculateChartScores()

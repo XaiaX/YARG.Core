@@ -36,8 +36,8 @@ public sealed class ClassicDrumArticulationReplayTests
         var stream = new FixedArrayStream(current);
         Assert.That(new DrumsEngineParameters(ref stream, ReplayIO.REPLAY_VERSIONS.CURRENT).ClassicArticulationRuleset,
             Is.EqualTo(ruleset));
-        using var old = FixedArray<byte>.Alloc(bytes.Length - 2);
-        bytes.AsSpan(0, bytes.Length - 2).CopyTo(old.Span);
+        using var old = FixedArray<byte>.Alloc(bytes.Length - 4);
+        bytes.AsSpan(0, bytes.Length - 4).CopyTo(old.Span);
         var oldStream = new FixedArrayStream(old);
         Assert.That(new DrumsEngineParameters(ref oldStream, 22).ClassicArticulationRuleset, Is.Zero);
     }

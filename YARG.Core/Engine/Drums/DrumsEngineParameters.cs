@@ -24,6 +24,8 @@ namespace YARG.Core.Engine.Drums
 
         public readonly byte EliteHiHatSustains;
         public readonly bool HiHatClosureSuppression;
+        public readonly bool LenientHiHatArticulation;
+        public readonly bool AlternateGhostScoring;
         /// <summary>Physical seconds, before song-speed conversion.</summary>
         public readonly double HiHatClosureWindow;
 
@@ -61,7 +63,7 @@ namespace YARG.Core.Engine.Drums
             bool hiHatClosureSuppression = false, double hiHatClosureWindow = DEFAULT_HI_HAT_CLOSURE_WINDOW,
             byte classicArticulationRuleset = CURRENT_CLASSIC_ARTICULATIONS,
             byte eliteCymbalMergePolicy = EliteDrumsCymbalProjection.CURRENT_POLICY,
-            byte eliteHiHatSustains = 2)
+            byte eliteHiHatSustains = 2, bool lenientHiHatArticulation = false, bool alternateGhostScoring = false)
             : base(hitWindow, maxMultiplier, 0, 0, starMultiplierThresholds, soloBonusStarMultiplierThresholds, enableLanes)
         {
             EliteHiHatSustains = eliteHiHatSustains;
@@ -73,6 +75,8 @@ namespace YARG.Core.Engine.Drums
             EliteFillRuleset = eliteFillRuleset;
             EntryGraceMultiplier = entryGraceMultiplier;
             HiHatClosureSuppression = hiHatClosureSuppression;
+            LenientHiHatArticulation = lenientHiHatArticulation;
+            AlternateGhostScoring = alternateGhostScoring;
             HiHatClosureWindow = hiHatClosureWindow;
             ClassicArticulationRuleset = classicArticulationRuleset;
             EliteCymbalMergePolicy = eliteCymbalMergePolicy;
@@ -124,6 +128,11 @@ namespace YARG.Core.Engine.Drums
             EliteDrumsCymbalProjection.ValidatePolicy(EliteCymbalMergePolicy);
             EliteHiHatSustains = version >= ReplayIO.HI_HAT_SUSTAINS_MIN ? stream.ReadByte() : (byte)0;
             if (EliteHiHatSustains > 2) throw new InvalidDataException("Unsupported hi-hat sustain ruleset.");
+            if (version >= ReplayIO.EXPERIMENTAL_DRUM_SCORING_MIN)
+            {
+                LenientHiHatArticulation = stream.ReadBoolean();
+                AlternateGhostScoring = stream.ReadBoolean();
+            }
         }
 
         public override void Serialize(BinaryWriter writer)
@@ -141,6 +150,8 @@ namespace YARG.Core.Engine.Drums
             writer.Write(ClassicArticulationRuleset);
             writer.Write(EliteCymbalMergePolicy);
             writer.Write(EliteHiHatSustains);
+            writer.Write(LenientHiHatArticulation);
+            writer.Write(AlternateGhostScoring);
         }
 
         private void ValidateClassicArticulations()

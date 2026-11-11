@@ -16,6 +16,9 @@ namespace YARG.Core.Engine.Drums
         /// <summary>Legacy ruleset-1 sustain faults, included in Overhits. Ruleset 2 never increments this.</summary>
         public int HiHatSustainBreaks;
 
+        /// <summary>Accepted hi-hat strikes that earned partial articulation credit.</summary>
+        public int MisarticulatedHiHats;
+
         /// <summary>
         /// Number of overhits which have occurred for each drum action.
         /// </summary>
@@ -58,7 +61,7 @@ namespace YARG.Core.Engine.Drums
         /// <summary>Whether native Elite optional pedal misses are excluded from full combo.</summary>
         public bool OptionalPedalAccuracyEnabled;
 
-        public override bool IsFullCombo => HiHatSustainBreaks == 0 && (OptionalPedalAccuracyEnabled
+        public override bool IsFullCombo => HiHatSustainBreaks == 0 && MisarticulatedHiHats == 0 && (OptionalPedalAccuracyEnabled
             ? NotesMissed == 0
             : base.IsFullCombo);
 
@@ -70,6 +73,7 @@ namespace YARG.Core.Engine.Drums
         {
             Overhits = stats.Overhits;
             HiHatSustainBreaks = stats.HiHatSustainBreaks;
+            MisarticulatedHiHats = stats.MisarticulatedHiHats;
             foreach (var (action, count) in stats.OverhitsByAction)
             {
                 OverhitsByAction[action] = count;
@@ -104,6 +108,8 @@ namespace YARG.Core.Engine.Drums
             }
             if (version >= ReplayIO.HI_HAT_SUSTAINS_MIN)
                 HiHatSustainBreaks = stream.Read<int>(Endianness.Little);
+            if (version >= ReplayIO.EXPERIMENTAL_DRUM_SCORING_MIN)
+                MisarticulatedHiHats = stream.Read<int>(Endianness.Little);
         }
 
         public override void Reset()
@@ -111,6 +117,7 @@ namespace YARG.Core.Engine.Drums
             base.Reset();
             Overhits = 0;
             HiHatSustainBreaks = 0;
+            MisarticulatedHiHats = 0;
             OverhitsByAction.Clear();
             GhostsHit = 0;
             // Don't reset TotalGhosts
@@ -141,6 +148,7 @@ namespace YARG.Core.Engine.Drums
             writer.Write(AssistedPedalNotes);
             writer.Write(OptionalPedalAccuracyEnabled);
             writer.Write(HiHatSustainBreaks);
+            writer.Write(MisarticulatedHiHats);
         }
 
         public void RecordOverhit(int? action)

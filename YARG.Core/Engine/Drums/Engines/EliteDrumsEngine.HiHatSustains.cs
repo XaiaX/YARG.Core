@@ -23,21 +23,24 @@ namespace YARG.Core.Engine.Drums.Engines
         private sealed class HiHatScore
         {
             public double Start, End;
-            public int Awarded, Multiplier, BandBonus;
+            public int Budget, Awarded, Multiplier, BandBonus;
             public bool StarPower;
         }
         private readonly List<HiHatScore> _hiHatScores = new();
 
-        private bool StartHiHatSustainScore(EliteDrumNote note)
+        private bool StartHiHatSustainScore(EliteDrumNote note, int articulationDivisor, bool closedAsOpen)
         {
             if (EngineParameters.EliteHiHatSustains < 2 || !_hiHatGenerators.TryGetValue(note, out var sustain) ||
                 CurrentTime >= sustain.EndTime) return false;
-            AddScore(POINTS_PER_NOTE / 2);
-            EngineStats.NoteScore += POINTS_PER_NOTE / 2;
+            int head = POINTS_PER_NOTE / 2 / articulationDivisor;
+            AddScore(head);
+            EngineStats.NoteScore += head;
+            if (closedAsOpen) return true;
             _hiHatScores.Add(new HiHatScore {
                 Start = Math.Max(CurrentTime, sustain.StartTime), End = sustain.EndTime,
                 Multiplier = EngineStats.ScoreMultiplier, StarPower = EngineStats.IsStarPowerActive,
-                BandBonus = EngineStats.BandBonusMultiplier
+                BandBonus = EngineStats.BandBonusMultiplier,
+                Budget = POINTS_PER_NOTE / articulationDivisor - head
             });
             return true;
         }
@@ -47,7 +50,7 @@ namespace YARG.Core.Engine.Drums.Engines
             foreach (var score in _hiHatScores)
             {
                 double progress = complete ? 1 : Math.Clamp((time - score.Start) / (score.End - score.Start), 0, 1);
-                int earned = (int)Math.Floor(POINTS_PER_NOTE / 2 * progress);
+                int earned = (int)Math.Floor(score.Budget * progress);
                 int delta = earned - score.Awarded;
                 if (delta <= 0) continue;
                 AddScore(delta, score.Multiplier, score.StarPower, score.BandBonus);
@@ -57,6 +60,13 @@ namespace YARG.Core.Engine.Drums.Engines
         }
 
         public bool WasHiHatSustainBroken(EliteHiHatSustain sustain) => _brokenHiHatSustains.Contains(sustain);
+
+        private void ForfeitHiHatSustain(EliteDrumNote note)
+        {
+            if (_hiHatGenerators.TryGetValue(note, out var sustain) &&
+                !ReferenceEquals(ActiveHiHatSustain, sustain))
+                _brokenHiHatSustains.Add(sustain);
+        }
 
         private void InitializeHiHatSustains(InstrumentDifficulty<EliteDrumNote> chart, SyncTrack sync)
         {

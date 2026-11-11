@@ -197,7 +197,8 @@ namespace YARG.Core.Game
             }
 
             public DrumsEngineParameters Create(float[] starMultiplierThresholds, float[] soloBonusStarMultiplierThresholds,
-                DrumsEngineParameters.DrumMode mode, bool hiHatClosureSuppression = false)
+                DrumsEngineParameters.DrumMode mode, bool hiHatClosureSuppression = false,
+                bool lenientHiHatArticulation = false, bool alternateGhostScoring = false)
             {
                 var hitWindow = HitWindow.Create();
                 return new DrumsEngineParameters(
@@ -208,7 +209,9 @@ namespace YARG.Core.Game
                     mode,
                     NoStarPowerOverlap,
                     EnableLanes,
-                    hiHatClosureSuppression: hiHatClosureSuppression);
+                    hiHatClosureSuppression: hiHatClosureSuppression,
+                    lenientHiHatArticulation: lenientHiHatArticulation,
+                    alternateGhostScoring: alternateGhostScoring);
             }
         }
 
